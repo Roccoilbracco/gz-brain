@@ -59,17 +59,19 @@ struct ClaudeTerminal: NSViewRepresentable {
         term.nativeForegroundColor = NSColor(red: 0xd7/255, green: 0xe7/255, blue: 1, alpha: 1)
         term.font = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular)
 
-        // zsh -l -c "claude": PATH completo dell'utente (claude vive in ~/.local/bin),
-        // exec così chiudendo claude si chiude la shell
+        // claude vive in ~/.local/bin (fuori dal PATH delle shell non-interattive):
+        // lo risolvo per percorso assoluto, con fallback alla shell se non c'è
         let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let candidates = ["\(home)/.local/bin/claude", "/opt/homebrew/bin/claude", "/usr/local/bin/claude"]
+        let claude = candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+
         var env = Terminal.getEnvironmentVariables(termName: "xterm-256color")
         env.append("HOME=\(home)")
         env.append("LANG=it_IT.UTF-8")
-        term.startProcess(
-            executable: "/bin/zsh",
-            args: ["-l", "-c", "cd \(shellQuote(workingDirectory)) && exec claude"],
-            environment: env
-        )
+        env.append("PATH=\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
+
+        let cmd = "cd \(shellQuote(workingDirectory)) && exec \(claude.map(shellQuote) ?? "zsh -i")"
+        term.startProcess(executable: "/bin/zsh", args: ["-l", "-c", cmd], environment: env)
         return term
     }
 
