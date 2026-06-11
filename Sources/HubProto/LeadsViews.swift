@@ -116,29 +116,46 @@ struct LeadsTableView: View {
         } catch { leads = [] }
     }
 
+    // colonne a larghezza fissa (la prima prende lo spazio restante)
+    private let wComune: CGFloat = 200, wServizio: CGFloat = 150, wCategoria: CGFloat = 170, wStato: CGFloat = 150
+
     private var headerRow: some View {
-        HStack(spacing: 10) {
-            th("RAGIONE SOCIALE", flex: 2.2)
-            th("COMUNE (PROV)", flex: 1.2)
-            th("TIPO SERVIZIO", flex: 1)
-            th("CATEGORIA", flex: 1)
-            th("STATO", flex: 1)
+        HStack(spacing: 12) {
+            th("RAGIONE SOCIALE").frame(maxWidth: .infinity, alignment: .leading)
+            th("COMUNE (PROV)").frame(width: wComune, alignment: .leading)
+            th("TIPO SERVIZIO").frame(width: wServizio, alignment: .leading)
+            th("CATEGORIA").frame(width: wCategoria, alignment: .leading)
+            th("STATO").frame(width: wStato, alignment: .leading)
         }
-        .padding(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+        .padding(EdgeInsets(top: 11, leading: 16, bottom: 11, trailing: 16))
     }
 
-    private func th(_ t: String, flex: CGFloat) -> some View {
+    private func th(_ t: String) -> some View {
         Text(t).font(.system(size: 9, weight: .heavy)).tracking(1.3)
             .foregroundStyle(Holo.labelDim)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .layoutPriority(flex)
+            .lineLimit(1)
     }
 
     private func leadRow(_ lead: Lead) -> some View {
+        VStack(spacing: 0) {
+            Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
+            LeadRowButton(lead: lead, slug: model.project.slug,
+                          wComune: wComune, wServizio: wServizio, wCategoria: wCategoria, wStato: wStato)
+        }
+    }
+}
+
+private struct LeadRowButton: View {
+    let lead: Lead
+    let slug: String
+    let wComune: CGFloat, wServizio: CGFloat, wCategoria: CGFloat, wStato: CGFloat
+    @State private var hovering = false
+
+    var body: some View {
         Button {
-            AppState.shared.route = .lead(slug: model.project.slug, leadId: lead.id)
+            AppState.shared.route = .lead(slug: slug, leadId: lead.id)
         } label: {
-            HStack(spacing: 10) {
+            HStack(spacing: 12) {
                 HStack(spacing: 9) {
                     LeadAvatarView(name: lead.ragione_sociale, status: lead.status)
                     VStack(alignment: .leading, spacing: 1) {
@@ -151,25 +168,28 @@ struct LeadsTableView: View {
                         }
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading).layoutPriority(2.2)
-                td(lead.comune.map { "\($0)\(lead.provincia.map { " (\($0))" } ?? "")" } ?? "—", flex: 1.2)
-                td(lead.tipo_servizio ?? "—", flex: 1, bright: true)
-                td(lead.categoria ?? "—", flex: 1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                td(lead.comune.map { "\($0)\(lead.provincia.map { " (\($0))" } ?? "")" } ?? "—")
+                    .frame(width: wComune, alignment: .leading)
+                td(lead.tipo_servizio ?? "—", bright: true)
+                    .frame(width: wServizio, alignment: .leading)
+                td(lead.categoria?.replacingOccurrences(of: "_", with: " ") ?? "—")
+                    .frame(width: wCategoria, alignment: .leading)
                 LeadStatusBadgeView(status: lead.status)
-                    .frame(maxWidth: .infinity, alignment: .leading).layoutPriority(1)
+                    .frame(width: wStato, alignment: .leading)
             }
             .padding(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+            .background(hovering ? Color.white.opacity(0.04) : .clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { hovering = $0 }
     }
 
-    private func td(_ t: String, flex: CGFloat, bright: Bool = false) -> some View {
+    private func td(_ t: String, bright: Bool = false) -> some View {
         Text(t).font(.system(size: 11.5))
             .foregroundStyle(bright ? Holo.text : Color(red: 180/255, green: 205/255, blue: 245/255).opacity(0.65))
             .lineLimit(1)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .layoutPriority(flex)
     }
 }
 

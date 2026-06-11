@@ -18,6 +18,8 @@ private let PIPE_CARDS: [PipeCard] = [
 ]
 // Flusso a serpentina: 0→1→2→3→7→6→5→4
 private let FLOW_EDGES: [(Int, Int)] = [(0,1),(1,2),(2,3),(3,7),(7,6),(6,5),(5,4)]
+// varco ampio tra le card: il filamento del flusso vive lì
+private let PIPE_GAP: CGFloat = 30
 
 // ─── Model del dettaglio ───
 @MainActor
@@ -340,7 +342,7 @@ private struct PipelineBoard: View {
     var onMapJump: () -> Void
 
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: PIPE_GAP) {
             row(indices: [0, 1, 2, 3])
             row(indices: [4, 5, 6, 7])
         }
@@ -349,7 +351,7 @@ private struct PipelineBoard: View {
     }
 
     private func row(indices: [Int]) -> some View {
-        HStack(spacing: 14) {
+        HStack(spacing: PIPE_GAP) {
             ForEach(indices, id: \.self) { i in
                 pipeCard(PIPE_CARDS[i])
             }
@@ -367,9 +369,9 @@ private struct PipelineBoard: View {
             activeFilter = c.mapStatus
             onMapJump()
         } label: {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 1) {
                 Text("\(value(c))")
-                    .font(.system(size: 22, weight: .black))
+                    .font(.system(size: 20, weight: .black))
                     .foregroundStyle(Holo.hsl(217, 90, 72))
                     .shadow(color: Holo.hsl(217, 90, 60).opacity(0.6), radius: 6)
                 Text(c.label.uppercased())
@@ -378,14 +380,15 @@ private struct PipelineBoard: View {
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
+            .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
             .overlay(alignment: .topTrailing) {
                 Image(systemName: c.icon)
                     .font(.system(size: 13))
                     .foregroundStyle(Holo.hsl(217, 80, 65).opacity(0.55))
                     .padding(8)
             }
-            .background(Color(red: 8/255, green: 12/255, blue: 26/255).opacity(sel ? 0.95 : 0.8))
+            // sfondo OPACO: il filamento del flusso deve vedersi solo nei varchi tra le card
+            .background(sel ? Color(red: 14/255, green: 22/255, blue: 46/255) : Color(red: 8/255, green: 12/255, blue: 26/255))
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(sel ? Holo.hsl(217, 90, 65).opacity(0.9) : Holo.hsl(217, 70, 50).opacity(0.35),
@@ -398,9 +401,9 @@ private struct PipelineBoard: View {
 
 /// Filamenti del flusso a serpentina dietro le card, con raggio animato
 private struct FlowLines: View {
-    // centri delle 8 card nella griglia 4×2 (spacing 14)
+    // centri delle 8 card nella griglia 4×2 (spacing PIPE_GAP)
     private func flowPath(in size: CGSize) -> Path {
-        let cw = (size.width - 3 * 14) / 4, ch = (size.height - 14) / 2
+        let cw = (size.width - 3 * PIPE_GAP) / 4, ch = (size.height - PIPE_GAP) / 2
         func center(_ i: Int) -> CGPoint {
             let row = i / 4, col = i % 4
             return CGPoint(x: CGFloat(col) * (cw + 14) + cw / 2,
@@ -418,13 +421,14 @@ private struct FlowLines: View {
         GeometryReader { geo in
             let path = flowPath(in: geo.size)
             ZStack {
-                path.stroke(Color(red: 140/255, green: 180/255, blue: 250/255).opacity(0.28), lineWidth: 3)
+                path.stroke(Color(red: 140/255, green: 180/255, blue: 250/255).opacity(0.4), lineWidth: 3)
+                // raggio lento che percorre tutta la serpentina (~8s a giro)
                 TimelineView(.animation(minimumInterval: 1.0 / 30)) { tl in
                     let t = tl.date.timeIntervalSinceReferenceDate
-                    let phase = CGFloat(t.truncatingRemainder(dividingBy: 2.4) / 2.4)
-                    path.trim(from: max(0, phase - 0.04), to: phase)
-                        .stroke(Holo.hsl(217, 95, 75), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                        .shadow(color: Holo.hsl(217, 95, 65).opacity(0.9), radius: 5)
+                    let phase = CGFloat(t.truncatingRemainder(dividingBy: 8.0) / 8.0)
+                    path.trim(from: max(0, phase - 0.05), to: phase)
+                        .stroke(Holo.hsl(217, 95, 78), style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .shadow(color: Holo.hsl(217, 95, 65).opacity(0.95), radius: 6)
                 }
             }
         }
