@@ -4,7 +4,14 @@ import PackageDescription
 let package = Package(
     name: "HubProto",
     platforms: [.macOS(.v14)],
+    dependencies: [
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.2.0"),
+    ],
     targets: [
-        .executableTarget(name: "HubProto", path: "Sources/HubProto")
+        .executableTarget(
+            name: "HubProto",
+            dependencies: [.product(name: "SwiftTerm", package: "SwiftTerm")],
+            path: "Sources/HubProto"
+        )
     ]
 )

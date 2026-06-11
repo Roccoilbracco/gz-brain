@@ -19,9 +19,25 @@ enum Csb {
 
 struct SidebarView: View {
     let projects: [Project]
-    @State private var tab = "dash"
-    @State private var nav = "panoramica"
-    @State private var curProject: String? = nil
+    @ObservedObject private var state = AppState.shared
+
+    // progetto e tab correnti ricavati dalla route (come in Sidebar.tsx)
+    private var curSlug: String? {
+        if case .progetto(let slug, _) = state.route { return slug }
+        return nil
+    }
+    private var curTab: ProjectTab? {
+        switch state.route {
+        case .progetto(_, let tab): return tab
+        case .impostazioni: return nil
+        default: return .dash // una tab è sempre accesa: fuori dai progetti resta Dash
+        }
+    }
+
+    private func goTab(_ tab: ProjectTab) {
+        if let slug = curSlug { state.route = .progetto(slug: slug, tab: tab) }
+        else { state.route = .progetti }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -30,9 +46,9 @@ struct SidebarView: View {
 
             // tab segmentate Dash · Code · Altro
             HStack(spacing: 3) {
-                tabButton("dash", "Dash", icon: "square.grid.2x2")
-                tabButton("code", "Code", icon: "chevron.left.forwardslash.chevron.right")
-                tabButton("altro", "Altro", icon: "ellipsis")
+                tabButton(.dash, "Dash", icon: "square.grid.2x2")
+                tabButton(.code, "Code", icon: "chevron.left.forwardslash.chevron.right")
+                tabButton(.altro, "Altro", icon: "ellipsis")
             }
             .padding(3)
             .background(RoundedRectangle(cornerRadius: 11).fill(Csb.tabsBg))
@@ -40,9 +56,9 @@ struct SidebarView: View {
 
             // azioni
             VStack(spacing: 1) {
-                navItem("panoramica", "Panoramica", icon: "clock")
-                navItem("progetti", "Progetti", icon: "square.grid.2x2")
-                navItem("impostazioni", "Impostazioni", icon: "gearshape")
+                navItem(.panoramica, "Panoramica", icon: "clock")
+                navItem(.progetti, "Progetti", icon: "square.grid.2x2")
+                navItem(.impostazioni, "Impostazioni", icon: "gearshape")
             }
             .padding(.bottom, 14)
 
@@ -83,57 +99,61 @@ struct SidebarView: View {
         .shadow(color: .black.opacity(0.5), radius: 19, y: 14)
     }
 
-    private func tabButton(_ id: String, _ label: String, icon: String) -> some View {
-        Button { tab = id } label: {
+    private func tabButton(_ id: ProjectTab, _ label: String, icon: String) -> some View {
+        let on = curTab == id
+        return Button { goTab(id) } label: {
             HStack(spacing: 6) {
                 Image(systemName: icon).font(.system(size: 11, weight: .semibold))
                 Text(label).font(.system(size: 13, weight: .semibold))
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 7)
-            .foregroundStyle(tab == id ? Csb.itemFgOn : Color(hex: 0x9b988f))
+            .foregroundStyle(on ? Csb.itemFgOn : Color(hex: 0x9b988f))
             .background(
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(tab == id ? Csb.tabOn : .clear)
+                    .fill(on ? Csb.tabOn : .clear)
             )
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(tab == id ? Csb.tabOnBorder : .clear, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(on ? Csb.tabOnBorder : .clear, lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
 
-    private func navItem(_ id: String, _ label: String, icon: String) -> some View {
-        Button { nav = id; curProject = nil } label: {
+    private func navItem(_ route: Route, _ label: String, icon: String) -> some View {
+        let on = state.route == route
+        return Button { state.route = route } label: {
             HStack(spacing: 9) {
                 Image(systemName: icon).font(.system(size: 12)).opacity(0.85)
                 Text(label).font(.system(size: 13, weight: .medium))
                 Spacer(minLength: 0)
             }
             .padding(EdgeInsets(top: 6.5, leading: 10, bottom: 6.5, trailing: 10))
-            .foregroundStyle(nav == id && curProject == nil ? Csb.itemFgOn : Csb.itemFg)
-            .background(RoundedRectangle(cornerRadius: 8).fill(nav == id && curProject == nil ? Csb.itemOn : .clear))
+            .foregroundStyle(on ? Csb.itemFgOn : Csb.itemFg)
+            .background(RoundedRectangle(cornerRadius: 8).fill(on ? Csb.itemOn : .clear))
             .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
     }
 
     private func projectRow(_ p: Project) -> some View {
-        Button { curProject = p.slug } label: {
+        Button { state.route = .progetto(slug: p.slug, tab: .dash) } label: {
             HStack(spacing: 9) {
                 Circle().fill(Holo.hsl(p.hue, 75, 60)).frame(width: 7, height: 7)
                 Text(p.name)
                     .font(.system(size: 13, weight: .medium))
                     .lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: 0)
-                Text("CODE")
-                    .font(.system(size: 9, weight: .bold)).tracking(0.4)
-                    .foregroundStyle(curProject == p.slug ? Csb.avatar : Csb.tagFg)
-                    .padding(.horizontal, 7).padding(.vertical, 1.5)
-                    .overlay(Capsule().strokeBorder(
-                        curProject == p.slug ? Csb.avatar.opacity(0.45) : Csb.tagBorder, lineWidth: 1))
+                if p.local_path != nil {
+                    Text("CODE")
+                        .font(.system(size: 9, weight: .bold)).tracking(0.4)
+                        .foregroundStyle(curSlug == p.slug ? Csb.avatar : Csb.tagFg)
+                        .padding(.horizontal, 7).padding(.vertical, 1.5)
+                        .overlay(Capsule().strokeBorder(
+                            curSlug == p.slug ? Csb.avatar.opacity(0.45) : Csb.tagBorder, lineWidth: 1))
+                }
             }
             .padding(EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10))
-            .foregroundStyle(curProject == p.slug ? Color(hex: 0xf7f5ef) : Csb.itemFg)
-            .background(RoundedRectangle(cornerRadius: 8).fill(curProject == p.slug ? Csb.itemOn : .clear))
+            .foregroundStyle(curSlug == p.slug ? Color(hex: 0xf7f5ef) : Csb.itemFg)
+            .background(RoundedRectangle(cornerRadius: 8).fill(curSlug == p.slug ? Csb.itemOn : .clear))
             .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)

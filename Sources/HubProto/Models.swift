@@ -1,13 +1,19 @@
 import Foundation
 
-struct Project: Decodable, Identifiable {
+// ─── Entità Supabase (port di lib/projects.ts e lib/leads.ts) ───
+
+struct Project: Decodable, Identifiable, Equatable {
     let id: String
-    let slug: String
-    let name: String
-    let description: String?
-    let status: String
-    let hue: Double
-    let sort_order: Int?
+    var slug: String
+    var name: String
+    var description: String?
+    var status: String
+    var hue: Double
+    var notes: String?
+    var local_path: String?
+    var sort_order: Int?
+    var created_at: String?
+    var updated_at: String?
 }
 
 struct HubEvent: Decodable, Identifiable {
@@ -18,20 +24,144 @@ struct HubEvent: Decodable, Identifiable {
     let created_at: String
 }
 
+struct Lead: Decodable, Identifiable {
+    let id: String
+    let project_id: String
+    let ragione_sociale: String
+    let piva: String?
+    let id_arera: String?
+    let tipo_servizio: String?
+    let comune: String?
+    let provincia: String?
+    let indirizzo: String?
+    let dominio: String?
+    let sito_web: String?
+    let email_info: String?
+    let email_commerciale: String?
+    let telefoni: String?
+    let gruppo: String?
+    let natura_giuridica: String?
+    let settori: String?
+    let latitude: Double?
+    let longitude: Double?
+    let email: String?
+    var status: String
+    let created_at: String
+    let updated_at: String
+    let whatsapp: String?
+    let telefono: String?
+    let categoria: String?
+    let commodity: String?
+    let macroarea: String?
+
+    var siteURL: String? { sito_web ?? dominio.map { "https://\($0)" } }
+    var emailAddr: String? { email ?? email_info ?? email_commerciale }
+    var phoneNum: String? { telefono ?? whatsapp ?? telefoni }
+}
+
+struct LeadContact: Decodable, Identifiable {
+    let id: String
+    let lead_id: String
+    let full_name: String?
+    let role: String?
+    let linkedin_url: String?
+    let is_legal_rep: Bool?
+    let created_at: String
+}
+
+struct LeadNote: Decodable, Identifiable {
+    let id: String
+    let lead_id: String
+    let body: String
+    let created_at: String
+}
+
+struct LeadActivity: Decodable, Identifiable {
+    let id: String
+    let lead_id: String
+    let event_type: String
+    let from_value: String?
+    let to_value: String?
+    let created_at: String
+}
+
+let LEAD_STATUSES = [
+    "da_contattare", "call_fissata", "call_effettuata", "demo_fissata",
+    "demo_effettuata", "proposta_inviata", "negoziazione", "chiuso_vinto", "perso",
+]
+
+let PROJECT_STATUSES = ["live", "dev", "setup", "pausa"]
+
+let STATUS_LABELS: [String: String] = [
+    "da_contattare": "Da contattare", "call_fissata": "Call fissata",
+    "call_effettuata": "Call effettuata", "demo_fissata": "Demo fissata",
+    "demo_effettuata": "Demo effettuata", "proposta_inviata": "Proposta inviata",
+    "negoziazione": "Negoziazione", "chiuso_vinto": "Cliente", "perso": "Perso",
+]
+
+// Temperatura per status (hot = ambra, cold = blu) — come TEMP in ProgettoDettaglio.tsx
+let LEAD_TEMP: [String: (temp: Int, hot: Bool)] = [
+    "da_contattare": (24, false), "call_fissata": (40, false), "call_effettuata": (52, false),
+    "demo_fissata": (66, true), "demo_effettuata": (74, true), "proposta_inviata": (85, true),
+    "negoziazione": (90, true), "chiuso_vinto": (98, true),
+]
+
+// ─── Date helpers ───
+
+private let isoFrac: ISO8601DateFormatter = {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return f
+}()
+private let isoPlain = ISO8601DateFormatter()
+
+func parseISO(_ s: String) -> Date? {
+    // PostgREST emette timestamp con o senza frazioni, a volte senza timezone
+    isoFrac.date(from: s) ?? isoPlain.date(from: s)
+        ?? isoFrac.date(from: s + "Z") ?? isoPlain.date(from: s + "Z")
+}
+
+func formatDateIT(_ s: String, time: Bool = true) -> String {
+    guard let d = parseISO(s) else { return s }
+    let f = DateFormatter()
+    f.locale = Locale(identifier: "it_IT")
+    f.dateFormat = time ? "dd/MM/yy, HH:mm" : "dd/MM"
+    return f.string(from: d)
+}
+
 /// Conta eventi per giorno sugli ultimi `days` giorni. Indice 0 = giorno più vecchio.
 /// (port di bucketEventsByDay in lib/helpers.ts)
 func bucketEventsByDay(_ events: [HubEvent], days: Int, today: Date = Date()) -> [Int] {
     var buckets = [Int](repeating: 0, count: days)
-    var cal = Calendar.current
-    cal.timeZone = TimeZone.current
+    let cal = Calendar.current
     let end = cal.date(bySettingHour: 23, minute: 59, second: 59, of: today) ?? today
-    let iso = ISO8601DateFormatter()
-    iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    let isoPlain = ISO8601DateFormatter()
     for e in events {
-        guard let d = iso.date(from: e.created_at) ?? isoPlain.date(from: e.created_at) else { continue }
+        guard let d = parseISO(e.created_at) else { continue }
         let diff = Int(floor(end.timeIntervalSince(d) / 86_400))
         if diff >= 0 && diff < days { buckets[days - 1 - diff] += 1 }
     }
     return buckets
+}
+
+/// Bucket tipo servizio → Dual/Elettrico/Gas (port di groupTipoServizio)
+func groupTipoServizio(_ counts: [String: Int]) -> (dual: Int, elet: Int, gas: Int, total: Int) {
+    var dual = 0, elet = 0, gas = 0
+    for (k, v) in counts {
+        let kl = k.lowercased()
+        if kl.contains("dual") { dual += v }
+        else if kl.contains("elett") || (kl.contains("ele") && !kl.contains("gas")) { elet += v }
+        else { gas += v }
+    }
+    return (dual, elet, gas, dual + elet + gas)
+}
+
+func validateProject(name: String, slug: String, status: String, hue: Double) -> [String] {
+    var errs: [String] = []
+    if name.trimmingCharacters(in: .whitespaces).isEmpty { errs.append("Il nome è obbligatorio") }
+    if slug.range(of: "^[a-z0-9]+(-[a-z0-9]+)*$", options: .regularExpression) == nil {
+        errs.append("Slug non valido (kebab-case)")
+    }
+    if !PROJECT_STATUSES.contains(status) { errs.append("Stato sconosciuto") }
+    if hue < 0 || hue > 360 { errs.append("Hue fuori range 0-360") }
+    return errs
 }

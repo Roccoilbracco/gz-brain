@@ -103,6 +103,7 @@ struct SkyBars: View {
 struct ProjectCardView: View {
     let project: Project
     let events: [HubEvent]
+    @State private var hovering = false
 
     var body: some View {
         let buckets = bucketEventsByDay(events.filter { $0.project_id == project.id }, days: 14)
@@ -129,8 +130,10 @@ struct ProjectCardView: View {
                            startPoint: .topLeading, endPoint: .bottomTrailing))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12)
-            .strokeBorder(Holo.hsl(project.hue, 85, 62).opacity(0.45), lineWidth: 1))
-        .shadow(color: Holo.hsl(project.hue, 85, 48).opacity(0.14), radius: 11)
+            .strokeBorder(Holo.hsl(project.hue, 85, 62).opacity(hovering ? 0.8 : 0.45), lineWidth: 1))
+        .shadow(color: Holo.hsl(project.hue, 85, 48).opacity(hovering ? 0.3 : 0.14), radius: 11)
+        .onHover { hovering = $0 }
+        .onTapGesture { AppState.shared.route = .progetto(slug: project.slug, tab: .dash) }
     }
 }
 
@@ -182,12 +185,9 @@ final class PanoramicaModel: ObservableObject {
 
     func load() async {
         do {
-            let sb = try SupabaseClient.fromHubConfig()
-            async let p: [Project] = sb.fetch("projects?select=*&order=sort_order.asc")
-            let since = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-14 * 86_400))
-            let sinceEnc = since.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? since
-            async let e: [HubEvent] = sb.fetch("hub_events?select=*&created_at=gte.\(sinceEnc)&order=created_at.desc&limit=500")
-            async let c: Int = sb.count("leads?select=id")
+            async let p = HubAPI.listProjects()
+            async let e = HubAPI.listRecentEvents()
+            async let c = HubAPI.leadsTotal()
             (projects, events, leadsTotal) = try await (p, e, c)
         } catch {
             self.error = error.localizedDescription
