@@ -395,7 +395,17 @@ private struct PipelineBoard: View {
                               lineWidth: sel ? 1.5 : 1))
             .shadow(color: sel ? Holo.hsl(217, 90, 55).opacity(0.4) : .clear, radius: 9)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PipeCardButtonStyle())
+    }
+}
+
+/// Niente fade di opacità alla pressione (il default .plain rende la card
+/// semi-trasparente e scopre il filamento del flusso dietro): solo un micro-scale.
+private struct PipeCardButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 
@@ -406,8 +416,8 @@ private struct FlowLines: View {
         let cw = (size.width - 3 * PIPE_GAP) / 4, ch = (size.height - PIPE_GAP) / 2
         func center(_ i: Int) -> CGPoint {
             let row = i / 4, col = i % 4
-            return CGPoint(x: CGFloat(col) * (cw + 14) + cw / 2,
-                           y: CGFloat(row) * (ch + 14) + ch / 2)
+            return CGPoint(x: CGFloat(col) * (cw + PIPE_GAP) + cw / 2,
+                           y: CGFloat(row) * (ch + PIPE_GAP) + ch / 2)
         }
         return Path { p in
             for (a, b) in FLOW_EDGES {

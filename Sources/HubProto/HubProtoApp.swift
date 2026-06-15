@@ -40,7 +40,9 @@ struct ContentView: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             // sfondo holo: radial + griglia + vignette
-            RadialGradient(colors: [Color(hex: 0x0b142e), Color(hex: 0x060a18), Color(hex: 0x02040a)],
+            // grafite freddo desaturato, stessa famiglia del menu (#10141d): il blu
+            // resta solo su card/barre/accenti, i due lati diventano un unico ambiente
+            RadialGradient(colors: [Color(hex: 0x151b27), Color(hex: 0x0d111b), Color(hex: 0x070910)],
                            center: UnitPoint(x: 0.5, y: 0.35), startRadius: 0, endRadius: 900)
                 .ignoresSafeArea()
             GridLines().ignoresSafeArea()
@@ -52,7 +54,8 @@ struct ContentView: View {
                 if !state.navClosed {
                     SidebarView(projects: model.projects)
                         .frame(width: 304 - 18)
-                        .padding(EdgeInsets(top: 10, leading: 12, bottom: 14, trailing: 6))
+                        // il pannello parte SOTTO i semafori (44px liberi in alto)
+                        .padding(EdgeInsets(top: 44, leading: 12, bottom: 14, trailing: 6))
                         .transition(.move(edge: .leading).combined(with: .opacity))
                 }
                 MainRouter(model: model)

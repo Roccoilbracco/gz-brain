@@ -1,20 +1,21 @@
 import SwiftUI
 
-// ─── Sidebar stile Claude desktop (replica Sidebar.tsx + classi .csb di holo.css) ───
+// ─── Sidebar: grafite freddo neutro (punta di blu) per dialogare col blu della
+//     dashboard senza essere blu. Accenti caldi tenuti: avatar arancio + pallini progetti. ───
 enum Csb {
-    static let panel = Color(hex: 0x262522)
-    static let panelBorder = Color(hex: 0x3a3935)
-    static let tabsBg = Color(hex: 0x1d1c19)
-    static let tabOn = Color(hex: 0x3a3934)
-    static let tabOnBorder = Color(hex: 0x4a4943)
-    static let itemFg = Color(hex: 0xd6d3ca)
-    static let itemFgOn = Color(hex: 0xf4f2ec)
-    static let itemOn = Color(hex: 0x34332e)
-    static let secFg = Color(hex: 0x807d74)
-    static let tagFg = Color(hex: 0x8a877d)
-    static let tagBorder = Color(hex: 0x3a3930)
-    static let footBorder = Color(hex: 0x2b2a25)
-    static let avatar = Color(hex: 0xd97757)
+    static let panel = Color(hex: 0x10141d)        // grafite freddo, quasi nero
+    static let panelBorder = Color(hex: 0x232b3b)  // bordo cool sottile
+    static let tabsBg = Color(hex: 0x161b26)
+    static let tabOn = Color(hex: 0x222c40)         // elevazione blu-tinta
+    static let tabOnBorder = Color(hex: 0x33405c)
+    static let itemFg = Color(hex: 0xaeb6c6)        // grigio freddo chiaro
+    static let itemFgOn = Color(hex: 0xeaf0fb)
+    static let itemOn = Color(hex: 0x1c2436)        // selezione blu-tinta desaturata
+    static let secFg = Color(hex: 0x6b7384)
+    static let tagFg = Color(hex: 0x7c8496)
+    static let tagBorder = Color(hex: 0x2a3344)
+    static let footBorder = Color(hex: 0x1e2536)
+    static let avatar = Color(hex: 0xd97757)        // accento caldo: pop arancio
 }
 
 struct SidebarView: View {
@@ -41,8 +42,8 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // riga di testa: spazio per semafori + quarto pallino (gestiti fuori)
-            Color.clear.frame(height: 28).padding(.bottom, 10)
+            // il pannello ora parte sotto i semafori: solo un filo di respiro in alto
+            Color.clear.frame(height: 4)
 
             // tab segmentate Dash · Code · Altro
             HStack(spacing: 3) {
@@ -123,6 +124,7 @@ struct SidebarView: View {
         return Button { state.route = route } label: {
             HStack(spacing: 9) {
                 Image(systemName: icon).font(.system(size: 12)).opacity(0.85)
+                    .frame(width: 16, alignment: .center)
                 Text(label).font(.system(size: 13, weight: .medium))
                 Spacer(minLength: 0)
             }
@@ -138,6 +140,7 @@ struct SidebarView: View {
         Button { state.route = .progetto(slug: p.slug, tab: .dash) } label: {
             HStack(spacing: 9) {
                 Circle().fill(Holo.hsl(p.hue, 75, 60)).frame(width: 7, height: 7)
+                    .frame(width: 16, alignment: .center)
                 Text(p.name)
                     .font(.system(size: 13, weight: .medium))
                     .lineLimit(1).truncationMode(.tail)
