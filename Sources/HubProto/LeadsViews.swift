@@ -72,6 +72,7 @@ func openExternal(_ urlString: String) {
 struct LeadsTableView: View {
     @ObservedObject var model: DettaglioModel
     let activeFilter: String?
+    var search: String = ""
 
     @State private var leads: [Lead] = []
     @State private var loading = false
@@ -92,7 +93,12 @@ struct LeadsTableView: View {
                             .foregroundStyle(Holo.labelDim)
                             .frame(maxWidth: .infinity).padding(24)
                     } else {
-                        ForEach(leads) { lead in leadRow(lead) }
+                        ForEach(Array(leads.enumerated()), id: \.element.id) { i, lead in
+                            leadRow(lead)
+                            if i < leads.count - 1 {
+                                Divider().overlay(Color.white.opacity(0.06))
+                            }
+                        }
                     }
                 }
                 .padding(.vertical, 4)
@@ -103,15 +109,20 @@ struct LeadsTableView: View {
                 Button("Succ →") { page += 1 }.disabled(leads.count < pageSize)
             }
         }
-        .task(id: "\(activeFilter ?? "all")-\(page)") { await load() }
+        .task(id: "\(activeFilter ?? "all")-\(page)-\(search)") { await load() }
         .onChange(of: activeFilter) { page = 0 }
+        .onChange(of: search) { page = 0 }
     }
 
     private func load() async {
+        // debounce: se l'id del task cambia (es. altro tasto premuto) questo viene cancellato
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        if Task.isCancelled { return }
         loading = true
         defer { loading = false }
         do {
-            leads = try await HubAPI.listLeads(projectId: model.project.id, status: activeFilter,
+            leads = try await HubAPI.listLeads(projectId: model.project.id, search: search,
+                                               status: activeFilter,
                                                limit: pageSize, offset: page * pageSize)
         } catch { leads = [] }
     }
@@ -197,6 +208,7 @@ private struct LeadRowButton: View {
 struct LeadsCardGridView: View {
     @ObservedObject var model: DettaglioModel
     let activeFilter: String?
+    var search: String = ""
 
     @State private var leads: [Lead] = []
     @State private var loading = false
@@ -233,14 +245,17 @@ struct LeadsCardGridView: View {
                 .font(.system(size: 8.5)).tracking(1)
                 .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.35))
         }
-        .task(id: activeFilter ?? "all") { await load() }
+        .task(id: "\(activeFilter ?? "all")-\(search)") { await load() }
     }
 
     private func load() async {
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        if Task.isCancelled { return }
         loading = true
         defer { loading = false }
         do {
-            leads = try await HubAPI.listLeads(projectId: model.project.id, status: activeFilter, limit: cardLimit)
+            leads = try await HubAPI.listLeads(projectId: model.project.id, search: search,
+                                               status: activeFilter, limit: cardLimit)
         } catch { leads = [] }
     }
 }

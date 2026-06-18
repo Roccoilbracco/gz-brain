@@ -153,10 +153,10 @@ struct LeadPageView: View {
                         .foregroundStyle(Holo.labelDim)
                     let track = LEAD_STATUSES.filter { $0 != "perso" }
                     let curIdx = track.firstIndex(of: lead.status) ?? -1
-                    HStack(spacing: 4) {
+                    HStack(spacing: 0) {
                         ForEach(Array(track.enumerated()), id: \.element) { idx, s in
-                            stadioButton(s, hue: stageHue(s),
-                                         on: idx == curIdx, done: curIdx >= 0 && idx < curIdx)
+                            stageCell(s, idx: idx, curIdx: curIdx, count: track.count)
+                                .frame(maxWidth: .infinity)
                         }
                     }
                     .opacity(updatingStatus ? 0.5 : 1)
@@ -183,18 +183,39 @@ struct LeadPageView: View {
         }
     }
 
-    private func stadioButton(_ s: String, hue: Double, on: Bool, done: Bool) -> some View {
-        Button { Task { await changeStatus(s) } } label: {
-            VStack(spacing: 3) {
-                Circle()
-                    .fill(on || done ? Holo.hsl(hue, 90, 62) : Color.white.opacity(0.12))
-                    .frame(width: on ? 11 : 8, height: on ? 11 : 8)
-                    .shadow(color: on ? Holo.hsl(hue, 90, 60).opacity(0.9) : .clear, radius: 5)
+    /// Tappa di pipeline connessa: binario riempito fino allo stadio attuale,
+    /// tappa corrente col suo colore + alone, completate piene, future vuote.
+    private func stageCell(_ s: String, idx: Int, curIdx: Int, count: Int) -> some View {
+        let done = curIdx >= 0 && idx < curIdx
+        let on = idx == curIdx
+        let hue = stageHue(s)
+        let track = Holo.hsl(217, 85, 60)
+        let dim = Color.white.opacity(0.13)
+        return Button { Task { await changeStatus(s) } } label: {
+            VStack(spacing: 5) {
+                ZStack {
+                    // binario dietro: metà sinistra e destra, riempite se superate
+                    HStack(spacing: 0) {
+                        Rectangle().fill(curIdx >= idx ? track.opacity(0.85) : dim)
+                            .frame(height: 2).opacity(idx == 0 ? 0 : 1)
+                        Rectangle().fill(curIdx > idx ? track.opacity(0.85) : dim)
+                            .frame(height: 2).opacity(idx == count - 1 ? 0 : 1)
+                    }
+                    Circle()
+                        .fill(on ? Holo.hsl(hue, 90, 62)
+                              : done ? track
+                              : Color(red: 12/255, green: 19/255, blue: 40/255))
+                        .frame(width: on ? 13 : 9, height: on ? 13 : 9)
+                        .overlay(Circle().strokeBorder(
+                            on ? Holo.hsl(hue, 90, 72) : (done ? .clear : dim), lineWidth: 1))
+                        .shadow(color: on ? Holo.hsl(hue, 90, 60).opacity(0.9) : .clear, radius: 6)
+                }
+                .frame(height: 14)
                 Text(SHORT_LABELS[s] ?? s)
                     .font(.system(size: 8.5, weight: on ? .heavy : .medium))
-                    .foregroundStyle(on ? Holo.hsl(hue, 90, 75) : done ? Holo.text.opacity(0.7) : Holo.labelDim)
+                    .foregroundStyle(on ? Holo.hsl(hue, 90, 76) : done ? Holo.text.opacity(0.7) : Holo.labelDim)
+                    .lineLimit(1)
             }
-            .padding(.horizontal, 5)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

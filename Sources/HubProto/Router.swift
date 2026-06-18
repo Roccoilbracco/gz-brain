@@ -11,6 +11,8 @@ struct MainRouter: View {
             PanoramicaView(model: model)
         case .progetti:
             ProgettiView(model: model)
+        case .clienti:
+            ClientiView(model: model)
         case .impostazioni:
             ImpostazioniView()
         case .progetto(let slug, let tab):
@@ -23,6 +25,9 @@ struct MainRouter: View {
         case .lead(let slug, let leadId):
             LeadPageView(slug: slug, leadId: leadId)
                 .id(leadId)
+        case .cliente(let id):
+            ClienteDetailView(clienteId: id)
+                .id(id)
         }
     }
 }

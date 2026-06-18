@@ -30,7 +30,7 @@ struct SidebarView: View {
     private var curTab: ProjectTab? {
         switch state.route {
         case .progetto(_, let tab): return tab
-        case .impostazioni: return nil
+        case .impostazioni, .clienti: return nil
         default: return .dash // una tab è sempre accesa: fuori dai progetti resta Dash
         }
     }
@@ -59,22 +59,10 @@ struct SidebarView: View {
             VStack(spacing: 1) {
                 navItem(.panoramica, "Panoramica", icon: "clock")
                 navItem(.progetti, "Progetti", icon: "square.grid.2x2")
+                navItem(.clienti, "Clienti", icon: "person.2")
                 navItem(.impostazioni, "Impostazioni", icon: "gearshape")
             }
             .padding(.bottom, 14)
-
-            Text("Progetti")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Csb.secFg)
-                .padding(EdgeInsets(top: 4, leading: 10, bottom: 5, trailing: 10))
-
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 1) {
-                    ForEach(projects) { p in
-                        projectRow(p)
-                    }
-                }
-            }
 
             Spacer(minLength: 0)
 
@@ -131,32 +119,6 @@ struct SidebarView: View {
             .padding(EdgeInsets(top: 6.5, leading: 10, bottom: 6.5, trailing: 10))
             .foregroundStyle(on ? Csb.itemFgOn : Csb.itemFg)
             .background(RoundedRectangle(cornerRadius: 8).fill(on ? Csb.itemOn : .clear))
-            .contentShape(RoundedRectangle(cornerRadius: 8))
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func projectRow(_ p: Project) -> some View {
-        Button { state.route = .progetto(slug: p.slug, tab: .dash) } label: {
-            HStack(spacing: 9) {
-                Circle().fill(Holo.hsl(p.hue, 75, 60)).frame(width: 7, height: 7)
-                    .frame(width: 16, alignment: .center)
-                Text(p.name)
-                    .font(.system(size: 13, weight: .medium))
-                    .lineLimit(1).truncationMode(.tail)
-                Spacer(minLength: 0)
-                if p.local_path != nil {
-                    Text("CODE")
-                        .font(.system(size: 9, weight: .bold)).tracking(0.4)
-                        .foregroundStyle(curSlug == p.slug ? Csb.avatar : Csb.tagFg)
-                        .padding(.horizontal, 7).padding(.vertical, 1.5)
-                        .overlay(Capsule().strokeBorder(
-                            curSlug == p.slug ? Csb.avatar.opacity(0.45) : Csb.tagBorder, lineWidth: 1))
-                }
-            }
-            .padding(EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10))
-            .foregroundStyle(curSlug == p.slug ? Color(hex: 0xf7f5ef) : Csb.itemFg)
-            .background(RoundedRectangle(cornerRadius: 8).fill(curSlug == p.slug ? Csb.itemOn : .clear))
             .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)

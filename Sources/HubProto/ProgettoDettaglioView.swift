@@ -165,6 +165,7 @@ private struct EnergizzoLayout: View {
     @ObservedObject var model: DettaglioModel
     @State private var activeView = "tab"        // tab | card | map
     @State private var activeFilter: String? = nil
+    @State private var searchText = ""
 
     var body: some View {
         let svc = groupTipoServizio(model.tipoServizioCounts)
@@ -203,19 +204,43 @@ private struct EnergizzoLayout: View {
                 .padding(14)
             }
 
-            // Tabs vista: Tabella · Card · Mappa
+            // Tabs vista: Tabella · Card · Mappa + ricerca
             HStack(spacing: 6) {
                 viewTab("tab", "▦ Tabella")
                 viewTab("card", "⊞ Card")
                 viewTab("map", "⊙ Mappa")
+                searchField
+                Spacer(minLength: 0)
             }
 
             switch activeView {
-            case "tab": LeadsTableView(model: model, activeFilter: activeFilter)
-            case "card": LeadsCardGridView(model: model, activeFilter: activeFilter)
+            case "tab": LeadsTableView(model: model, activeFilter: activeFilter, search: searchText)
+            case "card": LeadsCardGridView(model: model, activeFilter: activeFilter, search: searchText)
             default: HoloMapView(model: model)
             }
         }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.6))
+            TextField("Cerca ragione sociale…", text: $searchText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(Holo.text)
+                .frame(width: 190)
+            if !searchText.isEmpty {
+                Button { searchText = "" } label: {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 11))
+                        .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.5))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 7)
+        .background(Capsule().fill(Color(red: 13/255, green: 21/255, blue: 44/255).opacity(0.75)))
+        .overlay(Capsule().strokeBorder(Color(red: 125/255, green: 175/255, blue: 1).opacity(0.25), lineWidth: 1))
     }
 
     private func viewTab(_ id: String, _ label: String) -> some View {
@@ -282,41 +307,38 @@ private struct ServicePanel: View {
     }
 }
 
-/// Scie che salgono (replica .spark di holo.css) — TimelineView + Canvas
+/// Equalizer ordinato: barre equidistanti mosse da un'onda morbida che viaggia,
+/// colorate in 3 bande proporzionali al mix (verde Dual · ambra Elettrico · blu Gas).
 private struct SparkField: View {
     let dual: Int, elet: Int, gas: Int, total: Int
 
-    private struct Spark { let hue: Double; let x: CGFloat; let speed: Double; let phase: Double; let h: CGFloat }
-    private var sparks: [Spark] {
-        guard total > 0 else { return [] }
-        var rng = SeededRandom(seed: 42)
-        let defs: [(Double, Int)] = [
-            (152, max(2, Int((Double(dual) / Double(total) * 28).rounded()))),
-            (38, max(1, Int((Double(elet) / Double(total) * 28).rounded()))),
-            (217, max(1, Int((Double(gas) / Double(total) * 28).rounded()))),
-        ]
-        return defs.flatMap { (hue, n) in
-            (0..<n).map { _ in
-                Spark(hue: hue, x: CGFloat(3 + rng.next() * 94) / 100,
-                      speed: 1.6 + rng.next() * 2.2, phase: rng.next() * 3.5,
-                      h: CGFloat(8 + rng.next() * 14))
-            }
-        }
+    private let n = 44
+
+    // proporzioni → larghezza delle bande colore (fallback equo se vuoto)
+    private func hue(at f: CGFloat) -> Double {
+        let d = total > 0 ? CGFloat(dual) / CGFloat(total) : 0.34
+        let e = total > 0 ? CGFloat(elet) / CGFloat(total) : 0.33
+        if f < d { return 152 }        // Dual = verde
+        if f < d + e { return 38 }     // Elettrico = ambra
+        return 217                     // Gas = blu
     }
 
     var body: some View {
-        let items = sparks
         TimelineView(.animation(minimumInterval: 1.0 / 30)) { tl in
             Canvas { ctx, size in
                 let t = tl.date.timeIntervalSinceReferenceDate
-                for s in items {
-                    // progresso 0→1 ciclico: parte dal basso e sale
-                    let p = ((t / s.speed) + s.phase).truncatingRemainder(dividingBy: 1)
-                    let y = size.height - CGFloat(p) * (size.height + s.h)
-                    let rect = CGRect(x: s.x * size.width, y: y, width: 1.5, height: s.h)
-                    let color = Color(hue: s.hue / 360, saturation: 0.9, brightness: 0.95)
-                        .opacity(0.85 * (1 - p * 0.6))
-                    ctx.fill(Path(roundedRect: rect, cornerRadius: 1), with: .color(color))
+                let slot = size.width / CGFloat(n)
+                let bw: CGFloat = 2.5
+                for i in 0..<n {
+                    let f = CGFloat(i) / CGFloat(n - 1)
+                    // onda sinusoidale che scorre: ordinata, discreta
+                    let wave = 0.5 + 0.5 * sin(t * 1.3 + Double(i) * 0.45)
+                    let h = 5 + CGFloat(wave) * (size.height - 7)
+                    let x = slot * CGFloat(i) + (slot - bw) / 2
+                    let color = Color(hue: hue(at: f) / 360, saturation: 0.82, brightness: 0.96)
+                        .opacity(0.28 + 0.55 * wave)
+                    ctx.fill(Path(roundedRect: CGRect(x: x, y: size.height - h, width: bw, height: h),
+                                  cornerRadius: 1.25), with: .color(color))
                 }
             }
         }
@@ -353,7 +375,7 @@ private struct PipelineBoard: View {
     private func row(indices: [Int]) -> some View {
         HStack(spacing: PIPE_GAP) {
             ForEach(indices, id: \.self) { i in
-                pipeCard(PIPE_CARDS[i])
+                pipeCard(PIPE_CARDS[i], index: i)
             }
         }
     }
@@ -363,7 +385,7 @@ private struct PipelineBoard: View {
         return statusCounts[s] ?? 0
     }
 
-    private func pipeCard(_ c: PipeCard) -> some View {
+    private func pipeCard(_ c: PipeCard, index i: Int) -> some View {
         let sel = c.mapStatus != nil && c.mapStatus == activeFilter
         return Button {
             activeFilter = c.mapStatus
@@ -382,10 +404,7 @@ private struct PipelineBoard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
             .overlay(alignment: .topTrailing) {
-                Image(systemName: c.icon)
-                    .font(.system(size: 13))
-                    .foregroundStyle(Holo.hsl(217, 80, 65).opacity(0.55))
-                    .padding(8)
+                FlowIcon(systemName: c.icon, node: i)
             }
             // sfondo OPACO: il filamento del flusso deve vedersi solo nei varchi tra le card
             .background(sel ? Color(red: 14/255, green: 22/255, blue: 46/255) : Color(red: 8/255, green: 12/255, blue: 26/255))
@@ -393,6 +412,7 @@ private struct PipelineBoard: View {
             .overlay(RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(sel ? Holo.hsl(217, 90, 65).opacity(0.9) : Holo.hsl(217, 70, 50).opacity(0.35),
                               lineWidth: sel ? 1.5 : 1))
+            .overlay(CardFlowBorder(node: i))   // cometa che fa il giro al passaggio del flusso
             .shadow(color: sel ? Holo.hsl(217, 90, 55).opacity(0.4) : .clear, radius: 9)
         }
         .buttonStyle(PipeCardButtonStyle())
@@ -406,6 +426,59 @@ private struct PipeCardButtonStyle: ButtonStyle {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.985 : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
+// ─── Flusso RILASSATO: un solo fascio morbido che scorre lento e poi riposa
+//     (ispirato ai "pulse beam / gradient tracing" di 21st.dev) ───
+private let FLOW_PERIOD = 15.0                       // ciclo completo, lento
+private let FLOW_TRAVEL = 0.72                        // frazione in viaggio; il resto è pausa
+private let FLOW_ORDER = [0, 1, 2, 3, 7, 6, 5, 4]    // ordine di percorrenza (serpentina)
+
+/// Posizione 0→1 della testa del fascio con easing dolce; nil durante la pausa.
+private func flowHead(at t: Double) -> Double? {
+    let c = (t / FLOW_PERIOD).truncatingRemainder(dividingBy: 1)
+    guard c < FLOW_TRAVEL else { return nil }
+    let u = c / FLOW_TRAVEL
+    return u < 0.5 ? 2 * u * u : 1 - pow(-2 * u + 2, 2) / 2   // easeInOut
+}
+
+/// Quanto un nodo è illuminato dal fascio (0→1), con dolce dissolvenza.
+private func flowGlow(node: Int, at t: Double) -> Double {
+    guard let head = flowHead(at: t),
+          let idx = FLOW_ORDER.firstIndex(of: node) else { return 0 }
+    let pos = Double(idx) / Double(FLOW_ORDER.count - 1)
+    return max(0, 1 - abs(head - pos) / 0.13)
+}
+
+/// Bordo della card che si illumina dolcemente al passaggio del fascio (niente cometa veloce).
+private struct CardFlowBorder: View {
+    let node: Int
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { tl in
+            let g = flowGlow(node: node, at: tl.date.timeIntervalSinceReferenceDate)
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(Holo.hsl(217, 92, 72).opacity(0.85 * g), lineWidth: 1.5)
+                .shadow(color: Holo.hsl(217, 95, 66).opacity(0.6 * g), radius: 9 * g)
+        }
+    }
+}
+
+/// Icona di un nodo che si illumina e cresce DOLCEMENTE al passaggio del fascio.
+private struct FlowIcon: View {
+    let systemName: String
+    let node: Int
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { tl in
+            let g = flowGlow(node: node, at: tl.date.timeIntervalSinceReferenceDate)
+            Image(systemName: systemName)
+                .font(.system(size: 13))
+                .foregroundStyle(Holo.hsl(217, 85, 60 + 28 * g))
+                .opacity(0.55 + 0.45 * g)
+                .scaleEffect(1 + 0.12 * g)
+                .shadow(color: Holo.hsl(217, 95, 70).opacity(0.7 * g), radius: 7 * g)
+                .padding(8)
+        }
     }
 }
 
@@ -430,15 +503,20 @@ private struct FlowLines: View {
     var body: some View {
         GeometryReader { geo in
             let path = flowPath(in: geo.size)
-            ZStack {
-                path.stroke(Color(red: 140/255, green: 180/255, blue: 250/255).opacity(0.4), lineWidth: 3)
-                // raggio lento che percorre tutta la serpentina (~8s a giro)
-                TimelineView(.animation(minimumInterval: 1.0 / 30)) { tl in
-                    let t = tl.date.timeIntervalSinceReferenceDate
-                    let phase = CGFloat(t.truncatingRemainder(dividingBy: 8.0) / 8.0)
-                    path.trim(from: max(0, phase - 0.05), to: phase)
-                        .stroke(Holo.hsl(217, 95, 78), style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                        .shadow(color: Holo.hsl(217, 95, 65).opacity(0.95), radius: 6)
+            TimelineView(.animation(minimumInterval: 1.0 / 30)) { tl in
+                let head = flowHead(at: tl.date.timeIntervalSinceReferenceDate)
+                ZStack {
+                    // binario di base, tenue e statico
+                    path.stroke(Color(red: 140/255, green: 180/255, blue: 250/255).opacity(0.26),
+                                lineWidth: 2)
+                    // un solo fascio morbido con coda lunga sfumata, che scorre lento
+                    if let head {
+                        let h = CGFloat(head)
+                        path.trim(from: max(0, h - 0.16), to: h)
+                            .stroke(Holo.hsl(217, 92, 74).opacity(0.8),
+                                    style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                            .shadow(color: Holo.hsl(217, 95, 66).opacity(0.55), radius: 5)
+                    }
                 }
             }
         }

@@ -26,9 +26,11 @@ final class AppState: ObservableObject {
 enum Route: Equatable {
     case panoramica
     case progetti
+    case clienti
     case impostazioni
     case progetto(slug: String, tab: ProjectTab)
     case lead(slug: String, leadId: String)
+    case cliente(id: String)
 }
 
 enum ProjectTab: String { case dash, code, altro }

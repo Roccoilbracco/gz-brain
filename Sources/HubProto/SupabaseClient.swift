@@ -59,6 +59,16 @@ struct SupabaseClient {
         _ = try await run(request(pathAndQuery, method: method, prefer: prefer, body: body))
     }
 
+    /// INSERT che restituisce la riga creata (Prefer: return=representation).
+    func insertReturning<T: Decodable>(_ table: String, body: [String: Any?]) async throws -> T {
+        let (data, _) = try await run(request(table, method: "POST", prefer: "return=representation", body: body))
+        let rows = try JSONDecoder().decode([T].self, from: data)
+        guard let first = rows.first else {
+            throw NSError(domain: "HubProto", code: 4, userInfo: [NSLocalizedDescriptionKey: "INSERT senza riga di ritorno"])
+        }
+        return first
+    }
+
     /// Count via header Content-Range con Prefer: count=exact (come restCount in db.ts)
     func count(_ pathAndQuery: String) async throws -> Int {
         var req = try request(pathAndQuery, prefer: "count=exact")
@@ -134,6 +144,40 @@ enum HubAPI {
         let othersOffset = max(0, offset - clienti.count)
         let others = try await bucket("status=neq.chiuso_vinto", remaining, othersOffset)
         return fromClienti + others
+    }
+
+    // ── Clienti & Commesse ──
+
+    /// Clienti con le loro commesse annidate (PostgREST embedding via FK).
+    static func listClienti(search: String? = nil) async throws -> [Cliente] {
+        var q = "clienti?select=*,commesse(id,nome,tipo,stato)&order=ragione_sociale.asc&limit=2000"
+        if let search, !search.isEmpty { q += "&ragione_sociale=ilike.*\(enc(search))*" }
+        return try await sb.fetch(q)
+    }
+
+    static func getCliente(id: String) async throws -> Cliente? {
+        let rows: [Cliente] = try await sb.fetch("clienti?select=*,commesse(*)&id=eq.\(enc(id))")
+        return rows.first
+    }
+
+    /// Crea un cliente manuale; ritorna la riga creata (per collegarci subito una commessa).
+    @discardableResult
+    static func createCliente(_ fields: [String: Any?]) async throws -> Cliente {
+        var body = fields
+        body["source"] = "manuale"
+        return try await sb.insertReturning("clienti", body: body)
+    }
+
+    static func deleteCliente(id: String) async throws {
+        try await sb.mutate("clienti?id=eq.\(enc(id))", method: "DELETE")
+    }
+
+    static func createCommessa(_ fields: [String: Any?]) async throws {
+        try await sb.mutate("commesse", method: "POST", body: fields)
+    }
+
+    static func deleteCommessa(id: String) async throws {
+        try await sb.mutate("commesse?id=eq.\(enc(id))", method: "DELETE")
     }
 
     static func leadStatusCounts(projectId: String) async throws -> [String: Int] {
