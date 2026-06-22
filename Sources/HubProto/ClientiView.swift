@@ -7,6 +7,7 @@ struct Cliente: Decodable, Identifiable {
     let piva: String?
     let comune: String?
     let provincia: String?
+    let cap: String?
     let indirizzo: String?
     let email: String?
     let telefono: String?
@@ -15,6 +16,28 @@ struct Cliente: Decodable, Identifiable {
     let lead_id: String?
     let created_at: String?
     var commesse: [Commessa]?
+}
+
+/// Indirizzo completo formattato per fattura/scheda: "Via X - CAP Comune (Prov)".
+/// Pulisce i dati sporchi: se l'indirizzo contiene già il comune (import Energizzo
+/// tipo "Via X - Roma ( Roma )"), taglia dal comune in poi per non duplicarlo.
+func clienteIndirizzoCompleto(_ c: Cliente) -> String {
+    formatIndirizzo(indirizzo: c.indirizzo, cap: c.cap, comune: c.comune, provincia: c.provincia)
+}
+func formatIndirizzo(indirizzo: String?, cap: String?, comune: String?, provincia: String?) -> String {
+    var via = (indirizzo ?? "").trimmingCharacters(in: .whitespaces)
+    if let com = comune, !com.isEmpty, let r = via.range(of: com) {
+        via = String(via[..<r.lowerBound])
+    }
+    via = via.trimmingCharacters(in: CharacterSet(charactersIn: " -–·(),"))
+
+    var loc = ""
+    if let cap = cap, !cap.isEmpty { loc += cap + " " }
+    if let com = comune, !com.isEmpty { loc += com }
+    if let prov = provincia, !prov.isEmpty { loc += " (\(prov))" }
+    loc = loc.trimmingCharacters(in: .whitespaces)
+
+    return [via, loc].filter { !$0.isEmpty }.joined(separator: " - ")
 }
 
 struct Commessa: Decodable, Identifiable {
@@ -50,18 +73,11 @@ struct ClientiView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                HStack(spacing: 12) {
-                    Text("CLIENTI").font(.system(size: 19, weight: .heavy)).tracking(5)
-                        .foregroundStyle(Holo.titleText)
-                        .shadow(color: Color(red: 110/255, green: 180/255, blue: 1).opacity(0.7), radius: 9)
-                    Text(loading ? "…" : "\(clienti.count)")
-                        .font(.system(size: 12, weight: .bold)).foregroundStyle(Holo.subDim)
+                HStack(spacing: 10) {
                     Spacer()
                     searchField
                     addButton
                 }
-                Text("Lead Energizzo diventati clienti (automatico) + clienti inseriti a mano. Ogni cliente può avere più progetti.")
-                    .font(.system(size: 12)).foregroundStyle(Holo.subDim)
 
                 if let errorMsg {
                     GlassCard { Text("Errore: \(errorMsg)").foregroundStyle(Color(hex: 0xffb3ad)).padding(20) }
@@ -71,23 +87,30 @@ struct ClientiView: View {
                     Text(search.isEmpty ? "Nessun cliente ancora." : "Nessun cliente trovato.")
                         .font(.system(size: 13)).foregroundStyle(Holo.labelDim).padding(.top, 8)
                 } else {
-                    GlassCard {
+                    // tabella a larghezza fissa: se l'area è stretta (2° pannello aperto)
+                    // scorre in orizzontale invece di collassare la colonna nome
+                    ScrollView(.horizontal, showsIndicators: false) {
                         VStack(spacing: 0) {
-                            header
-                            Divider().overlay(Color.white.opacity(0.1))
-                            ForEach(Array(clienti.enumerated()), id: \.element.id) { i, c in
-                                row(c)
-                                if i < clienti.count - 1 {
-                                    Divider().overlay(Color.white.opacity(0.06))
+                            header.background(Color(hex: 0x171c28))
+                            VStack(spacing: 0) {
+                                ForEach(Array(clienti.enumerated()), id: \.element.id) { i, c in
+                                    row(c)
+                                    if i < clienti.count - 1 {
+                                        Divider().overlay(Color.white.opacity(0.05))
+                                    }
                                 }
                             }
+                            .padding(.vertical, 2)
                         }
-                        .padding(.vertical, 4)
+                        .frame(width: tableWidth, alignment: .leading)
+                        .background(RoundedRectangle(cornerRadius: 14).fill(Color(hex: 0x10141d)))
+                        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color(hex: 0x232b3b), lineWidth: 1))
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
                     }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(EdgeInsets(top: 40, leading: 30, bottom: 34, trailing: 30))
+            .padding(EdgeInsets(top: 54, leading: 30, bottom: 34, trailing: 30))
         }
         .task(id: search) { await load() }
         .sheet(isPresented: $showAdd) {
@@ -128,14 +151,18 @@ struct ClientiView: View {
         .overlay(Capsule().strokeBorder(Color(red: 125/255, green: 175/255, blue: 1).opacity(0.25), lineWidth: 1))
     }
 
+    // larghezza totale tabella = colonne + spacing(12×5) + padding orizzontale(14×2)
+    private var tableWidth: CGFloat { 240 + 90 + 150 + 130 + 120 + 180 + 60 + 28 }
     private var header: some View {
-        HStack(spacing: 14) {
-            col("RAGIONE SOCIALE", width: nil)
-            col("ORIGINE", width: 100)
-            col("PROGETTI", width: 230)
-            col("COMUNE (PROV)", width: 150)
+        HStack(spacing: 12) {
+            col("RAGIONE SOCIALE", width: 240)
+            col("ORIGINE", width: 90)
+            col("PROGETTI", width: 150)
+            col("COMUNE (PROV)", width: 130)
+            col("TELEFONO", width: 120)
+            col("EMAIL", width: 180)
         }
-        .padding(.horizontal, 14).padding(.vertical, 8)
+        .padding(.horizontal, 14).padding(.vertical, 10)
     }
     private func col(_ t: String, width: CGFloat?) -> some View {
         Text(t).font(.system(size: 9.5, weight: .heavy)).tracking(1)
@@ -146,7 +173,7 @@ struct ClientiView: View {
 
     private func row(_ c: Cliente) -> some View {
         Button { AppState.shared.route = .cliente(id: c.id) } label: {
-            HStack(spacing: 14) {
+            HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(c.ragione_sociale).font(.system(size: 13, weight: .semibold)).foregroundStyle(Holo.text)
                         .lineLimit(1)
@@ -154,11 +181,15 @@ struct ClientiView: View {
                         Text(piva).font(.system(size: 10)).foregroundStyle(Holo.labelDim)
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                origineBadge(c.source).frame(width: 100, alignment: .leading)
-                commesseTags(c.commesse ?? []).frame(width: 230, alignment: .leading)
+                .frame(width: 240, alignment: .leading)
+                origineBadge(c.source).frame(width: 90, alignment: .leading)
+                commesseTags(c.commesse ?? []).frame(width: 150, alignment: .leading)
                 Text(luogo(c)).font(.system(size: 11)).foregroundStyle(Holo.subDim)
-                    .lineLimit(1).frame(width: 150, alignment: .leading)
+                    .lineLimit(1).frame(width: 130, alignment: .leading)
+                Text(c.telefono ?? "—").font(.system(size: 11)).foregroundStyle(Holo.subDim)
+                    .lineLimit(1).frame(width: 120, alignment: .leading)
+                Text(c.email ?? "—").font(.system(size: 11)).foregroundStyle(Holo.subDim)
+                    .lineLimit(1).truncationMode(.middle).frame(width: 180, alignment: .leading)
             }
             .padding(.horizontal, 14).padding(.vertical, 9)
             .contentShape(Rectangle())

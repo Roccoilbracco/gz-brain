@@ -79,15 +79,20 @@ struct ProgettoDettaglioView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 backLink
-                if let err = model.error {
-                    GlassCard { Text("Errore: \(err)").foregroundStyle(Color(hex: 0xffb3ad)).padding(20) }
-                }
-                if !model.loaded {
-                    Text("Caricamento…").font(.system(size: 13)).foregroundStyle(Holo.subDim)
-                } else if model.totalLeads == 0 {
-                    simpleLayout
+                if model.project.slug == "easyact" {
+                    // dash dedicata EasyAct (legge il suo Supabase dal .env.local)
+                    EasyActLayout(project: model.project)
                 } else {
-                    EnergizzoLayout(model: model)
+                    if let err = model.error {
+                        GlassCard { Text("Errore: \(err)").foregroundStyle(Color(hex: 0xffb3ad)).padding(20) }
+                    }
+                    if !model.loaded {
+                        Text("Caricamento…").font(.system(size: 13)).foregroundStyle(Holo.subDim)
+                    } else if model.totalLeads == 0 {
+                        simpleLayout
+                    } else {
+                        EnergizzoLayout(model: model)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

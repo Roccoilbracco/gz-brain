@@ -31,6 +31,8 @@ struct ClienteFormView: View {
 
     @State private var ragioneSociale = ""
     @State private var piva = ""
+    @State private var indirizzo = ""
+    @State private var cap = ""
     @State private var comune = ""
     @State private var provincia = ""
     @State private var email = ""
@@ -53,7 +55,9 @@ struct ClienteFormView: View {
                     HoloField(label: "Telefono", text: $telefono)
                 }
                 HoloField(label: "Email", text: $email)
+                HoloField(label: "Indirizzo", text: $indirizzo, placeholder: "Es. Via Properzio 5")
                 HStack(spacing: 12) {
+                    HoloField(label: "CAP", text: $cap, placeholder: "00193").frame(width: 110)
                     HoloField(label: "Comune", text: $comune)
                     HoloField(label: "Provincia", text: $provincia).frame(width: 110)
                 }
@@ -104,7 +108,8 @@ struct ClienteFormView: View {
         Task {
             do {
                 let cliente = try await HubAPI.createCliente([
-                    "ragione_sociale": rs, "piva": nz(piva), "comune": nz(comune),
+                    "ragione_sociale": rs, "piva": nz(piva), "indirizzo": nz(indirizzo),
+                    "cap": nz(cap), "comune": nz(comune),
                     "provincia": nz(provincia), "email": nz(email), "telefono": nz(telefono),
                     "note": nz(note),
                 ])
@@ -128,6 +133,7 @@ struct ClienteDetailView: View {
     @State private var loading = true
     @State private var errorMsg: String?
     @State private var showAddCommessa = false
+    @State private var showEdit = false
     @State private var confirmDelete = false
 
     var body: some View {
@@ -144,6 +150,7 @@ struct ClienteDetailView: View {
                     Text("Caricamento…").font(.system(size: 13)).foregroundStyle(Holo.subDim)
                 } else if let c = cliente {
                     anagrafica(c)
+                    ClienteFattureSection(clienteId: clienteId)
                     commesseSection(c)
                 }
             }
@@ -155,53 +162,104 @@ struct ClienteDetailView: View {
         .sheet(isPresented: $showAddCommessa) {
             CommessaFormView(clienteId: clienteId) { Task { await load() } }
         }
+        .sheet(isPresented: $showEdit) {
+            if let c = cliente { ClienteEditFormView(cliente: c) { Task { await load() } } }
+        }
     }
 
     private func anagrafica(_ c: Cliente) -> some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(c.ragione_sociale).font(.system(size: 22, weight: .heavy))
-                            .foregroundStyle(Holo.titleText)
-                        if let piva = c.piva, !piva.isEmpty {
-                            Text(piva).font(.system(size: 12)).foregroundStyle(Holo.labelDim)
-                        }
+        let energizzo = c.source == "energizzo"
+        let hue: Double = energizzo ? 152 : 217
+        let initials = c.ragione_sociale.split(separator: " ").prefix(2)
+            .compactMap { $0.first }.map(String.init).joined().uppercased()
+        return VStack(alignment: .leading, spacing: 0) {
+            // ── testata: monogramma · nome/P.IVA · badge ──
+            HStack(spacing: 14) {
+                Text(initials.isEmpty ? "—" : initials)
+                    .font(.system(size: 16, weight: .heavy)).foregroundStyle(.white)
+                    .frame(width: 46, height: 46)
+                    .background(RoundedRectangle(cornerRadius: 12)
+                        .fill(LinearGradient(colors: [Holo.hsl(hue, 55, 42), Holo.hsl(hue, 60, 28)],
+                                             startPoint: .topLeading, endPoint: .bottomTrailing)))
+                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Holo.hsl(hue, 60, 55).opacity(0.45), lineWidth: 1))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(c.ragione_sociale).font(.system(size: 18, weight: .heavy))
+                        .foregroundStyle(Holo.titleText).lineLimit(1)
+                    if let piva = c.piva, !piva.isEmpty {
+                        Text("P.IVA \(piva)").font(.system(size: 11, weight: .medium)).foregroundStyle(Csb.tagFg)
                     }
-                    Spacer()
-                    Text(c.source == "energizzo" ? "DA ENERGIZZO" : "MANUALE")
-                        .font(.system(size: 8.5, weight: .heavy)).tracking(0.8)
-                        .foregroundStyle(c.source == "energizzo" ? Holo.hsl(152, 80, 72) : Holo.hsl(217, 70, 75))
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .overlay(Capsule().strokeBorder(
-                            (c.source == "energizzo" ? Holo.hsl(152, 80, 60) : Holo.hsl(217, 60, 60)).opacity(0.5), lineWidth: 1))
                 }
-                HStack(spacing: 22) {
-                    info("COMUNE", [c.comune, c.provincia].compactMap { $0 }.joined(separator: ", "))
-                    info("EMAIL", c.email ?? "—")
-                    info("TELEFONO", c.telefono ?? "—")
-                }
-                if let note = c.note, !note.isEmpty {
-                    info("NOTE", note)
-                }
+                Spacer(minLength: 12)
+                Text(energizzo ? "DA ENERGIZZO" : "MANUALE")
+                    .font(.system(size: 8.5, weight: .heavy)).tracking(0.8)
+                    .foregroundStyle(Holo.hsl(hue, 80, 73))
+                    .padding(.horizontal, 9).padding(.vertical, 4)
+                    .background(Capsule().fill(Holo.hsl(hue, 70, 45).opacity(0.16)))
+                    .overlay(Capsule().strokeBorder(Holo.hsl(hue, 80, 60).opacity(0.5), lineWidth: 1))
+            }
+            .padding(EdgeInsets(top: 16, leading: 18, bottom: 16, trailing: 18))
+
+            divider
+            // ── record campi: etichetta a sinistra · valore ──
+            defRow("INDIRIZZO", { let i = clienteIndirizzoCompleto(c); return i.isEmpty ? "—" : i }(), last: false)
+            divider
+            defRow("EMAIL", c.email ?? "—", last: false)
+            divider
+            defRow("TELEFONO", c.telefono ?? "—", last: c.note?.isEmpty ?? true)
+            if let note = c.note, !note.isEmpty {
+                divider
+                defRow("NOTE", note, last: true)
+            }
+
+            divider
+            // ── azioni ──
+            HStack(spacing: 12) {
+                Button { showEdit = true } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "pencil").font(.system(size: 10, weight: .bold))
+                        Text("Modifica dati").font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(Capsule().fill(LinearGradient(
+                        colors: [Color(red: 37/255, green: 99/255, blue: 235/255), Color(red: 79/255, green: 70/255, blue: 229/255)],
+                        startPoint: .leading, endPoint: .trailing)))
+                }.buttonStyle(.plain)
                 Button { confirmDelete = true } label: {
-                    Text("Elimina cliente").font(.system(size: 11))
-                        .foregroundStyle(Color(hex: 0xffb3ad))
+                    HStack(spacing: 5) {
+                        Image(systemName: "trash").font(.system(size: 10))
+                        Text("Elimina").font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundStyle(Color(hex: 0xff8f8a))
+                    .padding(.horizontal, 13).padding(.vertical, 8)
+                    .overlay(Capsule().strokeBorder(Color(hex: 0xff8f8a).opacity(0.3), lineWidth: 1))
                 }
                 .buttonStyle(.plain)
                 .confirmationDialog("Eliminare il cliente e tutti i suoi progetti?", isPresented: $confirmDelete, titleVisibility: .visible) {
                     Button("Elimina", role: .destructive) { delete() }
                     Button("Annulla", role: .cancel) {}
                 }
+                Spacer()
             }
-            .padding(20)
+            .padding(EdgeInsets(top: 13, leading: 18, bottom: 13, trailing: 18))
         }
+        .background(RoundedRectangle(cornerRadius: 16).fill(Csb.panel))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Csb.panelBorder, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
     }
-    private func info(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(label).font(.system(size: 9, weight: .heavy)).tracking(1).foregroundStyle(Holo.labelDim)
-            Text(value).font(.system(size: 12.5)).foregroundStyle(Holo.text)
+    private var divider: some View {
+        Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
+    }
+    private func defRow(_ label: String, _ value: String, last: Bool) -> some View {
+        HStack(alignment: .top, spacing: 18) {
+            Text(label).font(.system(size: 9, weight: .heavy)).tracking(1.2)
+                .foregroundStyle(Csb.secFg).frame(width: 110, alignment: .leading).padding(.top, 1)
+            Text(value).font(.system(size: 13)).foregroundStyle(Holo.text)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .padding(EdgeInsets(top: 11, leading: 18, bottom: 11, trailing: 18))
     }
 
     private func commesseSection(_ c: Cliente) -> some View {
@@ -284,6 +342,115 @@ struct ClienteDetailView: View {
         Task {
             try? await HubAPI.deleteCliente(id: clienteId)
             await MainActor.run { AppState.shared.route = .clienti }
+        }
+    }
+}
+
+// ─── Form: modifica dati cliente ───
+struct ClienteEditFormView: View {
+    let cliente: Cliente
+    var onSaved: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var ragioneSociale: String
+    @State private var piva: String
+    @State private var indirizzo: String
+    @State private var cap: String
+    @State private var comune: String
+    @State private var provincia: String
+    @State private var email: String
+    @State private var telefono: String
+    @State private var note: String
+    @State private var saving = false
+    @State private var errorMsg: String?
+
+    init(cliente: Cliente, onSaved: @escaping () -> Void) {
+        self.cliente = cliente
+        self.onSaved = onSaved
+        _ragioneSociale = State(initialValue: cliente.ragione_sociale)
+        _piva = State(initialValue: cliente.piva ?? "")
+        _indirizzo = State(initialValue: cliente.indirizzo ?? "")
+        _cap = State(initialValue: cliente.cap ?? "")
+        _comune = State(initialValue: cliente.comune ?? "")
+        _provincia = State(initialValue: cliente.provincia ?? "")
+        _email = State(initialValue: cliente.email ?? "")
+        _telefono = State(initialValue: cliente.telefono ?? "")
+        _note = State(initialValue: cliente.note ?? "")
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("MODIFICA CLIENTE").font(.system(size: 15, weight: .heavy)).tracking(2)
+                    .foregroundStyle(Holo.titleText)
+                Text("Anteprima indirizzo in fattura: \(previewIndirizzo)")
+                    .font(.system(size: 10.5)).foregroundStyle(Holo.hsl(152, 75, 70))
+
+                HoloField(label: "Ragione sociale *", text: $ragioneSociale)
+                HStack(spacing: 12) {
+                    HoloField(label: "P.IVA", text: $piva)
+                    HoloField(label: "Telefono", text: $telefono)
+                }
+                HoloField(label: "Email", text: $email)
+                HoloField(label: "Indirizzo", text: $indirizzo, placeholder: "Es. Via Properzio 5")
+                HStack(spacing: 12) {
+                    HoloField(label: "CAP", text: $cap, placeholder: "00193").frame(width: 110)
+                    HoloField(label: "Comune", text: $comune)
+                    HoloField(label: "Provincia", text: $provincia).frame(width: 110)
+                }
+                HoloField(label: "Note", text: $note)
+
+                if let errorMsg {
+                    Text(errorMsg).font(.system(size: 11)).foregroundStyle(Color(hex: 0xffb3ad))
+                }
+                HStack(spacing: 10) {
+                    Spacer()
+                    Button("Annulla") { dismiss() }.buttonStyle(.plain)
+                        .font(.system(size: 13)).foregroundStyle(Holo.subDim)
+                        .padding(.horizontal, 16).padding(.vertical, 9)
+                    Button { save() } label: {
+                        Text(saving ? "Salvataggio…" : "Salva modifiche")
+                            .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                            .padding(.horizontal, 18).padding(.vertical, 9)
+                            .background(Capsule().fill(LinearGradient(
+                                colors: [Color(red: 37/255, green: 99/255, blue: 235/255), Color(red: 79/255, green: 70/255, blue: 229/255)],
+                                startPoint: .leading, endPoint: .trailing)))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(saving || nz(ragioneSociale) == nil)
+                    .opacity(nz(ragioneSociale) == nil ? 0.5 : 1)
+                }
+            }
+            .padding(24)
+        }
+        .frame(width: 480, height: 640)
+        .background(LinearGradient(colors: [Color(red: 16/255, green: 24/255, blue: 48/255),
+                                            Color(red: 8/255, green: 12/255, blue: 26/255)],
+                                   startPoint: .top, endPoint: .bottom))
+        .preferredColorScheme(.dark)
+    }
+
+    // anteprima live dell'indirizzo che finirà in fattura
+    private var previewIndirizzo: String {
+        let s = formatIndirizzo(indirizzo: nz(indirizzo), cap: nz(cap),
+                                comune: nz(comune), provincia: nz(provincia))
+        return s.isEmpty ? "—" : s
+    }
+
+    private func save() {
+        guard let rs = nz(ragioneSociale) else { return }
+        saving = true; errorMsg = nil
+        Task {
+            do {
+                try await HubAPI.updateCliente(id: cliente.id, fields: [
+                    "ragione_sociale": rs, "piva": nz(piva), "indirizzo": nz(indirizzo),
+                    "cap": nz(cap), "comune": nz(comune), "provincia": nz(provincia),
+                    "email": nz(email), "telefono": nz(telefono), "note": nz(note),
+                ])
+                await MainActor.run { saving = false; onSaved(); dismiss() }
+            } catch {
+                await MainActor.run { saving = false; errorMsg = error.localizedDescription }
+            }
         }
     }
 }

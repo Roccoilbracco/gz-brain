@@ -21,66 +21,85 @@ enum Csb {
 struct SidebarView: View {
     let projects: [Project]
     @ObservedObject private var state = AppState.shared
+    @State private var ordered: [Project] = []
+
+    /// Sposta il progetto trascinato (slug) prima di quello di destinazione e salva l'ordine.
+    private func moveProject(_ slug: String, before targetSlug: String) {
+        guard slug != targetSlug else { return }
+        var arr = ordered
+        guard let from = arr.firstIndex(where: { $0.slug == slug }) else { return }
+        let item = arr.remove(at: from)
+        let insertAt = arr.firstIndex(where: { $0.slug == targetSlug }) ?? arr.count
+        arr.insert(item, at: insertAt)
+        ordered = arr
+        let ids = arr.map { $0.id }
+        Task { try? await HubAPI.reorderProjects(ids) }
+    }
 
     // progetto e tab correnti ricavati dalla route (come in Sidebar.tsx)
     private var curSlug: String? {
         if case .progetto(let slug, _) = state.route { return slug }
         return nil
     }
-    private var curTab: ProjectTab? {
-        switch state.route {
-        case .progetto(_, let tab): return tab
-        case .impostazioni, .clienti: return nil
-        default: return .dash // una tab è sempre accesa: fuori dai progetti resta Dash
-        }
+    // tab segmentate top-level: Dash · Code (modalità del click sui progetti) · Clienti
+    private var isClienti: Bool {
+        switch state.route { case .clienti, .cliente: return true; default: return false }
     }
-
-    private func goTab(_ tab: ProjectTab) {
-        if let slug = curSlug { state.route = .progetto(slug: slug, tab: tab) }
-        else { state.route = .progetti }
-    }
+    private var isImpostazioni: Bool { state.route == .impostazioni }
+    private var isDash: Bool { !isClienti && !isImpostazioni && state.sidebarMode == .dash }
+    private var isCode: Bool { !isClienti && !isImpostazioni && state.sidebarMode == .code }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // il pannello ora parte sotto i semafori: solo un filo di respiro in alto
             Color.clear.frame(height: 4)
 
-            // tab segmentate Dash · Code · Altro
+            // tab segmentate Dash · Code · Clienti
             HStack(spacing: 3) {
-                tabButton(.dash, "Dash", icon: "square.grid.2x2")
-                tabButton(.code, "Code", icon: "chevron.left.forwardslash.chevron.right")
-                tabButton(.altro, "Altro", icon: "ellipsis")
+                segButton("Dash", icon: "square.grid.2x2", on: isDash) {
+                    state.sidebarMode = .dash; state.route = .panoramica
+                }
+                segButton("Code", icon: "chevron.left.forwardslash.chevron.right", on: isCode) {
+                    state.sidebarMode = .code
+                    if let s = curSlug { state.route = .progetto(slug: s, tab: .code) }
+                    else { state.route = .codeGeneric }   // nessun progetto → terminale generico
+                }
+                segButton("Boss", icon: "person.2", on: isClienti) {
+                    if state.isClientiArea {
+                        // già in area Clienti → puro toggle del pannello (mantieni la sotto-sezione)
+                        state.clientiPanelOpen.toggle()
+                    } else {
+                        state.clientiTab = .clienti
+                        state.clientiPanelOpen = true
+                        state.route = .clienti
+                    }
+                }
             }
             .padding(3)
             .background(RoundedRectangle(cornerRadius: 11).fill(Csb.tabsBg))
-            .padding(.bottom, 12)
+            .padding(.bottom, 22)
 
-            // azioni
-            VStack(spacing: 1) {
-                navItem(.panoramica, "Panoramica", icon: "clock")
-                navItem(.progetti, "Progetti", icon: "square.grid.2x2")
-                navItem(.clienti, "Clienti", icon: "person.2")
-                navItem(.impostazioni, "Impostazioni", icon: "gearshape")
+            // lista progetti (uno sotto l'altro): click apre Dash o Code del progetto
+            // a seconda della modalità scelta in alto
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 5) {
+                    ForEach(ordered) { p in
+                        DraggableProjectRow(project: p) { dragged in
+                            moveProject(dragged, before: p.slug)
+                        }
+                    }
+                }
             }
-            .padding(.bottom, 14)
+            .onAppear { ordered = projects }
+            .onChange(of: projects) { _, new in ordered = new }
 
             Spacer(minLength: 0)
 
-            // footer
-            HStack(spacing: 10) {
-                Text("E")
-                    .font(.system(size: 12, weight: .heavy))
-                    .foregroundStyle(Color(hex: 0x1a1208))
-                    .frame(width: 26, height: 26)
-                    .background(Circle().fill(Csb.avatar))
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("emanuele").font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Color(hex: 0xe0ddd4))
-                    Text("UNVRS Labs").font(.system(size: 11)).foregroundStyle(Csb.tagFg)
-                }
-            }
-            .padding(EdgeInsets(top: 12, leading: 6, bottom: 0, trailing: 6))
-            .overlay(alignment: .top) { Rectangle().fill(Csb.footBorder).frame(height: 1) }
-            .padding(.top, 10)
+            // separatore sopra il profilo
+            Rectangle().fill(Csb.footBorder).frame(height: 1).padding(.bottom, 8)
+
+            // footer: profilo cliccabile → Impostazioni (con ingranaggio)
+            profileFooter
         }
         .padding(EdgeInsets(top: 10, leading: 10, bottom: 12, trailing: 10))
         .background(RoundedRectangle(cornerRadius: 14).fill(Csb.panel))
@@ -88,9 +107,33 @@ struct SidebarView: View {
         .shadow(color: .black.opacity(0.5), radius: 19, y: 14)
     }
 
-    private func tabButton(_ id: ProjectTab, _ label: String, icon: String) -> some View {
-        let on = curTab == id
-        return Button { goTab(id) } label: {
+    private var profileFooter: some View {
+        let on = state.route == .impostazioni
+        return Button { state.route = .impostazioni } label: {
+            HStack(spacing: 10) {
+                Text("E")
+                    .font(.system(size: 12, weight: .heavy))
+                    .foregroundStyle(Color(hex: 0x1a1208))
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(Csb.avatar))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("emanuele").font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(on ? Csb.itemFgOn : Color(hex: 0xe0ddd4))
+                    Text("UNVRS Labs").font(.system(size: 11)).foregroundStyle(Csb.tagFg)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "gearshape").font(.system(size: 13))
+                    .foregroundStyle(on ? Csb.itemFgOn : Csb.secFg)
+            }
+            .padding(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 10))
+            .background(RoundedRectangle(cornerRadius: 10).fill(on ? Csb.itemOn : .clear))
+            .contentShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func segButton(_ label: String, icon: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: icon).font(.system(size: 11, weight: .semibold))
                 Text(label).font(.system(size: 13, weight: .semibold))
@@ -98,29 +141,82 @@ struct SidebarView: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 7)
             .foregroundStyle(on ? Csb.itemFgOn : Color(hex: 0x9b988f))
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(on ? Csb.tabOn : .clear)
-            )
+            .background(RoundedRectangle(cornerRadius: 8).fill(on ? Csb.tabOn : .clear))
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(on ? Csb.tabOnBorder : .clear, lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
 
-    private func navItem(_ route: Route, _ label: String, icon: String) -> some View {
-        let on = state.route == route
-        return Button { state.route = route } label: {
-            HStack(spacing: 9) {
-                Image(systemName: icon).font(.system(size: 12)).opacity(0.85)
-                    .frame(width: 16, alignment: .center)
-                Text(label).font(.system(size: 13, weight: .medium))
-                Spacer(minLength: 0)
+}
+
+// ─── Riga progetto trascinabile (drag-and-drop per riordinare) ───
+private struct DraggableProjectRow: View {
+    let project: Project
+    let onDrop: (String) -> Void   // slug trascinato, rilasciato prima di questo progetto
+    @State private var targeted = false
+
+    var body: some View {
+        ProjectCard(project: project)
+            .overlay(alignment: .top) {
+                if targeted {
+                    Capsule().fill(Holo.hsl(210, 90, 65))
+                        .frame(height: 2.5).offset(y: -4)
+                        .shadow(color: Holo.hsl(210, 90, 60).opacity(0.8), radius: 4)
+                }
             }
-            .padding(EdgeInsets(top: 6.5, leading: 10, bottom: 6.5, trailing: 10))
-            .foregroundStyle(on ? Csb.itemFgOn : Csb.itemFg)
-            .background(RoundedRectangle(cornerRadius: 8).fill(on ? Csb.itemOn : .clear))
-            .contentShape(RoundedRectangle(cornerRadius: 8))
+            .draggable(project.slug) {
+                ProjectCard(project: project).frame(width: 240).opacity(0.92)
+            }
+            .dropDestination(for: String.self) { items, _ in
+                guard let s = items.first, s != project.slug else { return false }
+                onDrop(s); return true
+            } isTargeted: { targeted = $0 }
+    }
+}
+
+// ─── Mini-card progetto: compatta, accento colore + hover/attivo a "chip" ───
+private struct ProjectCard: View {
+    let project: Project
+    @ObservedObject private var state = AppState.shared
+    @State private var hover = false
+
+    private var active: Bool {
+        if case .progetto(let slug, _) = state.route { return slug == project.slug }
+        return false
+    }
+    private var hue: Double { project.hue }
+    private var hasCode: Bool { project.local_path != nil }
+
+    var body: some View {
+        Button {
+            state.route = .progetto(slug: project.slug, tab: state.sidebarMode)
+        } label: {
+            HStack(spacing: 10) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Holo.hsl(hue, 78, 60))
+                    .frame(width: 3, height: 20)
+                    .shadow(color: Holo.hsl(hue, 85, 55).opacity(active ? 0.8 : 0), radius: 4)
+                Text(project.name)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .lineLimit(1).truncationMode(.tail)
+                    .foregroundStyle(active ? Color(hex: 0xf4f2ec) : Csb.itemFg)
+                Spacer(minLength: 0)
+                if hasCode {
+                    Text("CODE")
+                        .font(.system(size: 9, weight: .bold)).tracking(0.4)
+                        .foregroundStyle(Csb.avatar)
+                        .padding(.horizontal, 7).padding(.vertical, 1.5)
+                        .overlay(Capsule().strokeBorder(Csb.avatar.opacity(0.45), lineWidth: 1))
+                }
+            }
+            .padding(.horizontal, 9).padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 9)
+                .fill(active ? Csb.itemOn : (hover ? Color.white.opacity(0.045) : Color.white.opacity(0.02))))
+            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(
+                active ? Holo.hsl(hue, 70, 55).opacity(0.45) : Color.white.opacity(0.05), lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: 9))
         }
         .buttonStyle(.plain)
+        .onHover { hover = $0 }
     }
 }

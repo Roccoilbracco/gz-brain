@@ -102,31 +102,36 @@ struct QuickDashView: View {
     }
 }
 
-// ─── Status item nella barra menu ───
+// ─── Status item nella barra menu: icona cervello → apre l'app ───
 @MainActor
 final class QuickDashController {
     private var statusItem: NSStatusItem?
-    private let popover = NSPopover()
-    private let model = QuickDashModel()
 
     func install() {
         guard statusItem == nil else { return }
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(systemSymbolName: "hexagon.fill", accessibilityDescription: "UNVRS Hub")
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.button?.title = "🧠"
+        item.button?.toolTip = "Mostra/nascondi Unvrs Brain"
         item.button?.target = self
         item.button?.action = #selector(toggle)
         statusItem = item
+    }
 
-        popover.contentViewController = NSHostingController(rootView: QuickDashView(model: model))
-        popover.behavior = .transient
+    private var mainWindow: NSWindow? {
+        NSApp.windows.first { $0.styleMask.contains(.titled) && $0.canBecomeMain }
     }
 
     @objc private func toggle() {
-        guard let button = statusItem?.button else { return }
-        if popover.isShown { popover.performClose(nil) }
-        else {
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            popover.contentViewController?.view.window?.makeKey()
+        // finestra visibile e app in primo piano → nascondi; altrimenti mostra/porta avanti
+        if let w = mainWindow, w.isVisible, NSApp.isActive {
+            w.orderOut(nil)
+        } else if let w = mainWindow {
+            NSApp.activate(ignoringOtherApps: true)
+            w.makeKeyAndOrderFront(nil)
+        } else {
+            // finestra chiusa (tasto rosso): riapri via SwiftUI
+            NSApp.activate(ignoringOtherApps: true)
+            NSApp.unhide(nil)
         }
     }
 }

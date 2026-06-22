@@ -1,11 +1,11 @@
 #!/bin/bash
-# Crea "UNVRS Hub Swift.app" dalla build release e la installa in /Applications.
+# Crea "Unvrs Brain.app" dalla build release e la installa in /Applications.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-APP_NAME="UNVRS Hub Swift"
+APP_NAME="Unvrs Brain"
 BUNDLE="build/$APP_NAME.app"
-ICON_SRC="${ICON_SRC:-$HOME/Developer/unvrs-hub/app/icon-source.png}"
+ICON_SRC="${ICON_SRC:-$(pwd)/AppIconSource.png}"
 
 swift build -c release
 
