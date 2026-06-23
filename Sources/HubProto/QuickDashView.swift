@@ -117,21 +117,27 @@ final class QuickDashController {
         statusItem = item
     }
 
-    private var mainWindow: NSWindow? {
-        NSApp.windows.first { $0.styleMask.contains(.titled) && $0.canBecomeMain }
+    // riferimento stabile alla finestra principale: una volta agganciato resta
+    // valido anche quando è nascosta (orderOut), così il toggle la ritrova sempre.
+    private weak var tracked: NSWindow?
+    private func appWindow() -> NSWindow? {
+        if let t = tracked { return t }
+        tracked = NSApp.windows.first { $0.styleMask.contains(.titled) && $0.canBecomeMain }
+        return tracked
     }
 
     @objc private func toggle() {
-        // finestra visibile e app in primo piano → nascondi; altrimenti mostra/porta avanti
-        if let w = mainWindow, w.isVisible, NSApp.isActive {
-            w.orderOut(nil)
-        } else if let w = mainWindow {
-            NSApp.activate(ignoringOtherApps: true)
-            w.makeKeyAndOrderFront(nil)
-        } else {
-            // finestra chiusa (tasto rosso): riapri via SwiftUI
+        guard let w = appWindow() else {
+            // nessuna finestra (chiusa col tasto rosso): prova a riaprire via SwiftUI
             NSApp.activate(ignoringOtherApps: true)
             NSApp.unhide(nil)
+            return
+        }
+        if w.isVisible {
+            w.orderOut(nil)
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+            w.makeKeyAndOrderFront(nil)
         }
     }
 }

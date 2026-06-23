@@ -48,6 +48,7 @@ struct ClienteFattureSection: View {
     @StateObject private var model: FattureModel
     @State private var showEditor = false
     @State private var toDelete: Fattura?
+    @State private var editing: Fattura?
     @State private var msg: String?
 
     init(clienteId: String) {
@@ -97,6 +98,9 @@ struct ClienteFattureSection: View {
         .sheet(isPresented: $showEditor) {
             FatturaEditorView(model: model, clienteId: clienteId) { Task { await model.load() } }
         }
+        .sheet(item: $editing) { f in
+            FatturaEditView(fattura: f, clienteNome: model.clienteNome(f.cliente_id)) { Task { await model.load() } }
+        }
         .confirmationDialog(
             toDelete.map { "Eliminare la fattura \($0.anno)\(String(format: "%03d", $0.numero))?" } ?? "",
             isPresented: Binding(get: { toDelete != nil }, set: { if !$0 { toDelete = nil } }),
@@ -121,9 +125,11 @@ struct ClienteFattureSection: View {
                     .buttonStyle(.plain).foregroundStyle(Holo.hsl(217, 80, 70)).help("Apri PDF")
                 Button { Task { await invia(f) } } label: { Image(systemName: "paperplane").font(.system(size: 12)) }
                     .buttonStyle(.plain).foregroundStyle(Holo.hsl(152, 80, 70)).help("Invia per email")
+                Button { editing = f } label: { Image(systemName: "pencil").font(.system(size: 12)) }
+                    .buttonStyle(.plain).foregroundStyle(Holo.hsl(48, 85, 68)).help("Modifica")
                 Button { toDelete = f } label: { Image(systemName: "trash").font(.system(size: 12)) }
                     .buttonStyle(.plain).foregroundStyle(Holo.hsl(2, 80, 68)).help("Elimina")
-            }.frame(width: 96, alignment: .trailing)
+            }.frame(width: 124, alignment: .trailing)
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
     }
@@ -165,6 +171,7 @@ struct FattureView: View {
     @State private var showEditor = false
     @State private var msg: String?
     @State private var toDelete: Fattura?
+    @State private var editing: Fattura?
     @State private var deleting = false
 
     init(clienteId: String? = nil) {
@@ -220,6 +227,9 @@ struct FattureView: View {
         .task { await model.load() }
         .sheet(isPresented: $showEditor) {
             FatturaEditorView(model: model, clienteId: clienteId) { Task { await model.load() } }
+        }
+        .sheet(item: $editing) { f in
+            FatturaEditView(fattura: f, clienteNome: model.clienteNome(f.cliente_id)) { Task { await model.load() } }
         }
         .confirmationDialog(
             toDelete.map { "Eliminare la fattura \($0.anno)\(String(format: "%03d", $0.numero))?" } ?? "",
@@ -301,7 +311,7 @@ struct FattureView: View {
         HStack(spacing: 12) {
             col("NUMERO", 110); col("DATA", 90)
             col("CLIENTE", nil)
-            col("IMPORTO", 100); col("STATO", 90); col("", 118)
+            col("IMPORTO", 100); col("STATO", 90); col("", 146)
         }.padding(.horizontal, 14).padding(.vertical, 8)
     }
     private func col(_ t: String, _ w: CGFloat?) -> some View {
@@ -324,10 +334,12 @@ struct FattureView: View {
                     .buttonStyle(.plain).foregroundStyle(Holo.hsl(217, 80, 70)).help("Apri PDF")
                 Button { Task { await invia(f) } } label: { Image(systemName: "paperplane").font(.system(size: 12)) }
                     .buttonStyle(.plain).foregroundStyle(Holo.hsl(152, 80, 70)).help("Invia per email")
+                Button { editing = f } label: { Image(systemName: "pencil").font(.system(size: 12)) }
+                    .buttonStyle(.plain).foregroundStyle(Holo.hsl(48, 85, 68)).help("Modifica")
                 Button { toDelete = f } label: { Image(systemName: "trash").font(.system(size: 12)) }
                     .buttonStyle(.plain).foregroundStyle(Holo.hsl(2, 80, 68)).help("Elimina fattura")
                     .disabled(deleting)
-            }.frame(width: 118, alignment: .trailing)
+            }.frame(width: 146, alignment: .trailing)
         }
         .padding(.horizontal, 14).padding(.vertical, 9)
     }
@@ -341,7 +353,10 @@ struct FattureView: View {
 
     private func tempPDF(_ f: Fattura) async -> URL? {
         guard let path = f.pdf_path, let data = try? await HubAPI.downloadFatturaPDF(path: path) else { return nil }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(f.anno)\(String(format: "%03d", f.numero)).pdf")
+        let ext = (path as NSString).pathExtension
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(f.anno)\(String(format: "%03d", f.numero))")
+            .appendingPathExtension(ext.isEmpty ? "pdf" : ext)
         try? data.write(to: url)
         return url
     }
@@ -364,5 +379,120 @@ struct FattureView: View {
         let num = "\(f.anno)\(String(format: "%03d", f.numero))"
         let subj = "Invoice \(num) — \(model.azienda?.ragione_sociale ?? "")"
         _ = InvoiceMailer.compose(to: to, subject: subj, body: "In allegato la fattura \(num).", attachment: url)
+    }
+}
+
+// ─── Form: modifica fattura (numero, data, stato, importi) ───
+struct FatturaEditView: View {
+    let fattura: Fattura
+    let clienteNome: String
+    var onSaved: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var numeroText: String
+    @State private var data: Date
+    @State private var stato: String
+    @State private var imponibile: String
+    @State private var iva: String
+    @State private var saving = false
+    @State private var err: String?
+
+    private let stati = ["emessa", "inviata", "pagata", "annullata"]
+
+    init(fattura: Fattura, clienteNome: String, onSaved: @escaping () -> Void) {
+        self.fattura = fattura; self.clienteNome = clienteNome; self.onSaved = onSaved
+        _numeroText = State(initialValue: String(fattura.numero))
+        _data = State(initialValue: parseYMD(fattura.data))
+        _stato = State(initialValue: fattura.stato)
+        _imponibile = State(initialValue: centsToInput(fattura.imponibile_cents))
+        _iva = State(initialValue: centsToInput(fattura.iva_cents))
+    }
+
+    private var totaleC: Int { (Money.parse(imponibile) ?? 0) + (Money.parse(iva) ?? 0) }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("MODIFICA FATTURA").font(.system(size: 15, weight: .heavy)).tracking(2).foregroundStyle(Holo.titleText)
+                Text("Cliente: \(clienteNome)").font(.system(size: 12)).foregroundStyle(Holo.subDim)
+
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("NUMERO").font(.system(size: 9.5, weight: .heavy)).tracking(1.5)
+                            .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.65))
+                        HStack(spacing: 4) {
+                            Text("\(fattura.anno) /").font(.system(size: 13)).foregroundStyle(Holo.subDim)
+                            TextField("", text: $numeroText).textFieldStyle(.plain)
+                                .font(.system(size: 13, weight: .semibold)).foregroundStyle(Color(hex: 0xe8f2ff))
+                        }
+                        .padding(.horizontal, 12).padding(.vertical, 9)
+                        .background(RoundedRectangle(cornerRadius: 9).fill(Color(red: 10/255, green: 16/255, blue: 34/255).opacity(0.8)))
+                        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color(red: 130/255, green: 180/255, blue: 1).opacity(0.35), lineWidth: 1))
+                    }
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("DATA").font(.system(size: 9.5, weight: .heavy)).tracking(1.5)
+                            .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.65))
+                        DatePicker("", selection: $data, displayedComponents: .date).labelsHidden().datePickerStyle(.field)
+                    }
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("STATO").font(.system(size: 9.5, weight: .heavy)).tracking(1.5)
+                            .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.65))
+                        Menu {
+                            ForEach(stati, id: \.self) { s in Button(s.capitalized) { stato = s } }
+                        } label: {
+                            HStack { Text(stato.capitalized).font(.system(size: 13)).foregroundStyle(Color(hex: 0xe8f2ff)); Spacer()
+                                Image(systemName: "chevron.down").font(.system(size: 9)).foregroundStyle(Holo.labelDim) }
+                            .padding(.horizontal, 12).padding(.vertical, 9)
+                            .background(RoundedRectangle(cornerRadius: 9).fill(Color(red: 10/255, green: 16/255, blue: 34/255).opacity(0.8)))
+                            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color(red: 130/255, green: 180/255, blue: 1).opacity(0.35), lineWidth: 1))
+                        }.menuStyle(.borderlessButton)
+                    }
+                }
+                HStack(spacing: 12) {
+                    HoloField(label: "Imponibile (€)", text: $imponibile, placeholder: "0,00")
+                    HoloField(label: "IVA (€)", text: $iva, placeholder: "0,00")
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("TOTALE").font(.system(size: 9.5, weight: .heavy)).tracking(1.5).foregroundStyle(Holo.labelDim)
+                        Text(Money.eur(totaleC)).font(.system(size: 15, weight: .heavy)).foregroundStyle(Holo.titleText)
+                            .padding(.vertical, 9)
+                    }
+                }
+
+                if let err { Text(err).font(.system(size: 11)).foregroundStyle(Color(hex: 0xffb3ad)) }
+                HStack(spacing: 10) {
+                    Spacer()
+                    Button("Annulla") { dismiss() }.buttonStyle(.plain).font(.system(size: 13))
+                        .foregroundStyle(Holo.subDim).padding(.horizontal, 16).padding(.vertical, 9)
+                    Button { save() } label: {
+                        Text(saving ? "Salvo…" : "Salva")
+                            .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                            .padding(.horizontal, 18).padding(.vertical, 9)
+                            .background(Capsule().fill(LinearGradient(
+                                colors: [Color(red: 37/255, green: 99/255, blue: 235/255), Color(red: 79/255, green: 70/255, blue: 229/255)],
+                                startPoint: .leading, endPoint: .trailing)))
+                    }.buttonStyle(.plain).disabled(saving)
+                }
+            }
+            .padding(24)
+        }
+        .frame(width: 560, height: 360)
+        .background(LinearGradient(colors: [Color(red: 16/255, green: 24/255, blue: 48/255), Color(red: 8/255, green: 12/255, blue: 26/255)],
+                                   startPoint: .top, endPoint: .bottom))
+        .preferredColorScheme(.dark)
+    }
+
+    private func save() {
+        saving = true; err = nil
+        let imp = Money.parse(imponibile) ?? 0, ivaC = Money.parse(iva) ?? 0
+        Task {
+            do {
+                try await HubAPI.updateFattura(id: fattura.id, fields: [
+                    "numero": Int(numeroText) ?? fattura.numero,
+                    "data": eaDate(data, "yyyy-MM-dd"), "stato": stato,
+                    "imponibile_cents": imp, "iva_cents": ivaC, "totale_cents": imp + ivaC,
+                ])
+                await MainActor.run { saving = false; onSaved(); dismiss() }
+            } catch { await MainActor.run { saving = false; err = error.localizedDescription } }
+        }
     }
 }

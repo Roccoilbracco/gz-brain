@@ -32,7 +32,7 @@ final class AppState: ObservableObject {
     }
 }
 
-enum ClientiTab: String, CaseIterable { case clienti, fatture, spese, export }
+enum ClientiTab: String, CaseIterable { case clienti, fatture, spese, banca, export }
 
 enum Route: Equatable {
     case panoramica

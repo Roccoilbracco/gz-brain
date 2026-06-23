@@ -187,28 +187,19 @@ struct InvoiceDocumentView: View {
         }
     }
 
-    // ── Footer: card banca (bordo verde) | firma corsivo ──
+    // ── Footer: dati banca su una sola riga, centrati ──
     private var footer: some View {
-        HStack(alignment: .bottom) {
-            VStack(alignment: .leading, spacing: 2) {
-                (Text("Bank account ").font(.system(size: 9.5)).foregroundStyle(gray)
-                 + Text(doc.azienda.ragione_sociale ?? "").font(.system(size: 9.5, weight: .bold)).foregroundStyle(dark))
-                (Text("IBAN ").font(.system(size: 9.5)).foregroundStyle(gray)
-                 + Text(doc.azienda.iban ?? "").font(.system(size: 9.5, weight: .bold)).foregroundStyle(dark)
-                 + Text("  ·  BIC ").font(.system(size: 9.5)).foregroundStyle(gray)
-                 + Text(doc.azienda.bic ?? "—").font(.system(size: 9.5, weight: .bold)).foregroundStyle(dark))
-            }
-            .padding(.horizontal, 16).padding(.vertical, 12)
-            .background(RoundedRectangle(cornerRadius: 11).fill(.white))
-            .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(cardBd, lineWidth: 1))
-            .overlay(HStack { RoundedRectangle(cornerRadius: 2).fill(acc).frame(width: 3); Spacer() })
-            .clipShape(RoundedRectangle(cornerRadius: 11))
-            .fixedSize(horizontal: false, vertical: true)
-            Spacer()
-            Text(doc.azienda.firmatario ?? "")
-                .font(.custom("SnellRoundhand-Bold", size: 28))
-                .foregroundStyle(dark)
-                .padding(.trailing, 6)
+        VStack(spacing: 8) {
+            Rectangle().fill(cardBd).frame(height: 1)
+            (Text("Bank account ").font(.system(size: 9.5)).foregroundStyle(gray)
+             + Text(doc.azienda.ragione_sociale ?? "").font(.system(size: 9.5, weight: .bold)).foregroundStyle(dark)
+             + Text("   ·   IBAN ").font(.system(size: 9.5)).foregroundStyle(gray)
+             + Text(doc.azienda.iban ?? "").font(.system(size: 9.5, weight: .bold)).foregroundStyle(dark)
+             + Text("   ·   BIC ").font(.system(size: 9.5)).foregroundStyle(gray)
+             + Text(doc.azienda.bic ?? "—").font(.system(size: 9.5, weight: .bold)).foregroundStyle(dark))
+                .lineLimit(1).minimumScaleFactor(0.7)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, alignment: .center)
         }
     }
 

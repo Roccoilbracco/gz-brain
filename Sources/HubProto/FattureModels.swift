@@ -77,6 +77,20 @@ struct Spesa: Decodable, Identifiable {
     let file_path: String?
 }
 
+struct Estratto: Decodable, Identifiable {
+    let id: String
+    let anno: Int
+    let mese: Int
+    let banca: String?
+    let file_path: String?
+}
+
+struct MovMatch: Decodable {
+    let tx_id: String
+    let kind: String      // "spesa" | "fattura" | "ignora"
+    let ref_id: String?
+}
+
 // ─── Denaro: unica fonte di verità (cents ↔ stringa EUR), niente Double ───
 enum Money {
     /// cents → "€ 1.234,56" (formato europeo)

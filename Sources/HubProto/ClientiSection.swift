@@ -10,6 +10,7 @@ struct ClientiSubnavView: View {
             item("Clienti", "person.2", .clienti)
             item("Fatture", "doc.text", .fatture)
             item("Spese", "tray.and.arrow.down", .spese)
+            item("Banca", "building.columns", .banca)
             item("Export", "square.and.arrow.up", .export)
             Spacer(minLength: 0)
         }
@@ -51,41 +52,9 @@ struct ClientiSectionView: View {
         case .clienti: ClientiView(model: model)
         case .fatture: FattureView()
         case .spese:   SpeseView()
+        case .banca:   BancaView()
         case .export:  ExportView()
         }
     }
 }
 
-// ─── Placeholder Spese / Export (in arrivo) ───
-struct SpeseView: View {
-    var body: some View {
-        sectionPlaceholder(icon: "tray.and.arrow.down", title: "Spese",
-                           sub: "Carica qui le fatture di spesa (PDF/immagini) da girare al commercialista. In arrivo.")
-    }
-}
-struct ExportView: View {
-    var body: some View {
-        sectionPlaceholder(icon: "square.and.arrow.up", title: "Export commercialista",
-                           sub: "Esporta tutto (fatture PDF + registro CSV + spese) in un unico ZIP. In arrivo.")
-    }
-}
-
-private func sectionPlaceholder(icon: String, title: String, sub: String) -> some View {
-    ScrollView {
-        VStack {
-            GlassCard {
-                VStack(spacing: 14) {
-                    Image(systemName: icon).font(.system(size: 38))
-                        .foregroundStyle(Holo.hsl(217, 75, 65).opacity(0.85))
-                        .shadow(color: Holo.hsl(217, 85, 60).opacity(0.5), radius: 10)
-                    Text(title).font(.system(size: 17, weight: .bold)).foregroundStyle(Holo.titleText)
-                    Text(sub).font(.system(size: 12.5)).foregroundStyle(Holo.subDim)
-                        .multilineTextAlignment(.center).frame(maxWidth: 380)
-                }
-                .frame(maxWidth: .infinity, minHeight: 340).padding(40)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(EdgeInsets(top: 40, leading: 30, bottom: 34, trailing: 30))
-    }
-}
