@@ -13,10 +13,16 @@ struct ProgettoCodeView: View {
     @State private var bump = 0   // forza il refresh del terminale persistente
 
     private var isGeneric: Bool { project == nil }
+    private var isRemote: Bool { (project?.ssh_host?.isEmpty == false) }
+    private var sshHost: String? { project?.ssh_host }
     private var title: String { project?.name.uppercased() ?? "TERMINALE" }
     private var termKey: String { project?.id ?? "__generic__" }
-    private var termDir: String { project?.local_path ?? FileManager.default.homeDirectoryForCurrentUser.path }
-    private var showTerminal: Bool { isGeneric || (mode == .code && project?.local_path != nil) }
+    // Per i progetti remoti `dir` è il path REMOTO (vuoto = home remota); altrimenti il repo locale.
+    private var termDir: String {
+        if isRemote { return project?.ssh_path ?? "" }
+        return project?.local_path ?? FileManager.default.homeDirectoryForCurrentUser.path
+    }
+    private var showTerminal: Bool { isGeneric || isRemote || (mode == .code && project?.local_path != nil) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -28,22 +34,24 @@ struct ProgettoCodeView: View {
                 if let p = project { StatusBadge(status: p.status) }
                 Spacer()
                 if showTerminal {
-                    Button {
-                        TerminalStore.shared.reset(key: termKey, dir: termDir); bump += 1
-                    } label: {
-                        Image(systemName: "arrow.clockwise.circle").font(.system(size: 15))
-                            .foregroundStyle(Holo.subDim)
-                    }.buttonStyle(.plain).help("Nuova sessione (chiude e riapre il terminale)")
+                    IconButton(icon: "arrow.clockwise", help: "Nuova sessione (chiude e riapre il terminale)") {
+                        TerminalStore.shared.reset(key: termKey, dir: termDir, sshHost: sshHost); bump += 1
+                    }
                 }
-                if isGeneric {
-                    badgeLabel("CODE", color: Csb.avatar)
+                if isGeneric || isRemote {
+                    StatusChip(text: isRemote ? "Code · SSH" : "Code")
                 } else {
-                    modeBadge("CODE", color: Csb.avatar, on: mode == .code) { mode = .code }
-                    modeBadge("PREVIEW", color: Holo.hsl(200, 85, 62), on: mode == .preview) { mode = .preview }
+                    HStack(spacing: 3) {
+                        modeTab("Code", icon: "chevron.left.forwardslash.chevron.right", on: mode == .code) { mode = .code }
+                        modeTab("Preview", icon: "eye", on: mode == .preview) { mode = .preview }
+                    }
+                    .padding(3)
+                    .background(RoundedRectangle(cornerRadius: 11).fill(Color(hex: 0x1b2230)))
+                    .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(Csb.panelBorder, lineWidth: 1))
                 }
             }
 
-            if let project, project.local_path == nil, !isGeneric {
+            if let project, project.local_path == nil, !isGeneric, !isRemote {
                 GlassCard {
                     Text("Questo progetto non ha un repo locale collegato — manca local_path. Chiedi al Direttore di collegarlo.")
                         .font(.system(size: 12.5)).lineSpacing(5)
@@ -52,7 +60,7 @@ struct ProgettoCodeView: View {
                 }
                 Spacer()
             } else if showTerminal {
-                PersistentTerminal(key: termKey, dir: termDir, bump: bump)
+                PersistentTerminal(key: termKey, dir: termDir, sshHost: sshHost, bump: bump)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .overlay(RoundedRectangle(cornerRadius: 12)
                         .strokeBorder(Color(red: 130/255, green: 180/255, blue: 1).opacity(0.32), lineWidth: 1))
@@ -68,21 +76,17 @@ struct ProgettoCodeView: View {
         .padding(EdgeInsets(top: 40, leading: 30, bottom: 14, trailing: 30))
     }
 
-    private func badgeLabel(_ label: String, color: SwiftUI.Color) -> some View {
-        Text(label).font(.system(size: 9.5, weight: .heavy)).tracking(1.5)
-            .foregroundStyle(color)
-            .padding(.horizontal, 11).padding(.vertical, 3.5)
-            .overlay(Capsule().strokeBorder(color.opacity(0.5), lineWidth: 1))
-    }
-
-    private func modeBadge(_ label: String, color: SwiftUI.Color, on: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(label)
-                .font(.system(size: 9.5, weight: .heavy)).tracking(1.5)
-                .foregroundStyle(on ? Color(hex: 0x0b0f16) : color)
-                .padding(.horizontal, 11).padding(.vertical, 3.5)
-                .background(Capsule().fill(on ? color : Color.clear))
-                .overlay(Capsule().strokeBorder(color.opacity(on ? 0 : 0.5), lineWidth: 1))
+    // tab stile menu (come i tab della scheda cliente)
+    private func modeTab(_ label: String, icon: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button { withAnimation(.easeOut(duration: 0.15)) { action() } } label: {
+            HStack(spacing: 6) {
+                Image(systemName: icon).font(.system(size: 10, weight: .semibold))
+                Text(label).font(.system(size: 12, weight: .semibold))
+            }
+            .padding(.horizontal, 13).padding(.vertical, 6)
+            .foregroundStyle(on ? Csb.itemFgOn : Color(hex: 0xa6adbd))
+            .background(RoundedRectangle(cornerRadius: 8).fill(on ? Color(hex: 0x2c3850) : .clear))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(on ? Color(hex: 0x4a5a7a) : .clear, lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
@@ -188,22 +192,22 @@ final class TerminalStore {
     static let shared = TerminalStore()
     private var terms: [String: LocalProcessTerminalView] = [:]
 
-    func terminal(key: String, dir: String) -> LocalProcessTerminalView {
+    func terminal(key: String, dir: String, sshHost: String? = nil) -> LocalProcessTerminalView {
         if let t = terms[key] { return t }
-        let t = Self.makeClaude(dir: dir)
+        let t = Self.makeClaude(dir: dir, sshHost: sshHost)
         terms[key] = t
         return t
     }
 
     /// Chiude la sessione e ne riapre una fresca (solo su richiesta esplicita dell'utente).
-    func reset(key: String, dir: String) {
+    func reset(key: String, dir: String, sshHost: String? = nil) {
         terms[key]?.terminate()
         terms[key]?.removeFromSuperview()
         terms[key] = nil
-        _ = terminal(key: key, dir: dir)
+        _ = terminal(key: key, dir: dir, sshHost: sshHost)
     }
 
-    private static func makeClaude(dir: String) -> LocalProcessTerminalView {
+    private static func makeClaude(dir: String, sshHost: String? = nil) -> LocalProcessTerminalView {
         let term = LocalProcessTerminalView(frame: .zero)
         term.nativeBackgroundColor = NSColor(red: 8/255, green: 11/255, blue: 22/255, alpha: 1)
         term.nativeForegroundColor = NSColor(red: 0xd7/255, green: 0xe7/255, blue: 1, alpha: 1)
@@ -215,7 +219,17 @@ final class TerminalStore {
         env.append("HOME=\(home)"); env.append("LANG=it_IT.UTF-8")
         env.append("PATH=\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
         func q(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
-        let cmd = "cd \(q(dir)) && exec \(claude.map(q) ?? "zsh -i")"
+        let cmd: String
+        if let host = sshHost, !host.isEmpty {
+            // ── Progetto REMOTO: SSH dentro la macchina e avvia claude lì.
+            //    PATH esteso a mano così claude (~/.local/bin) viene trovato senza dipendere dai rc remoti.
+            //    $HOME/$PATH restano letterali (q li single-quota) → espansi dalla shell REMOTA. ──
+            let cdPart = dir.isEmpty ? "" : "cd \"\(dir)\" && "
+            let remote = "export PATH=\"$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH\"; \(cdPart)exec claude"
+            cmd = "exec ssh -t \(q(host)) \(q(remote))"
+        } else {
+            cmd = "cd \(q(dir)) && exec \(claude.map(q) ?? "zsh -i")"
+        }
         term.startProcess(executable: "/bin/zsh", args: ["-l", "-c", cmd], environment: env)
         return term
     }
@@ -226,6 +240,7 @@ final class TerminalStore {
 struct PersistentTerminal: NSViewRepresentable {
     let key: String
     let dir: String
+    var sshHost: String? = nil
     var bump: Int = 0
 
     func makeNSView(context: Context) -> NSView {
@@ -234,7 +249,7 @@ struct PersistentTerminal: NSViewRepresentable {
 
     func updateNSView(_ container: NSView, context: Context) {
         MainActor.assumeIsolated {
-            let term = TerminalStore.shared.terminal(key: key, dir: dir)
+            let term = TerminalStore.shared.terminal(key: key, dir: dir, sshHost: sshHost)
             if term.superview !== container {
                 term.removeFromSuperview()
                 container.subviews.forEach { $0.removeFromSuperview() }
