@@ -74,10 +74,22 @@ struct SkyBars: View {
         let empty = values.allSatisfy { $0 == 0 }
         Group {
             if empty {
-                Text("NESSUNA ATTIVITÀ")
-                    .font(.system(size: 9)).tracking(1.5)
-                    .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.4))
-                    .frame(maxWidth: .infinity, maxHeight: height)
+                // nessun dato reale → barre decorative (onda morbida) solo per effetto scenico
+                HStack(alignment: .bottom, spacing: 3) {
+                    ForEach(0..<14, id: \.self) { i in
+                        let v = 0.30 + 0.42 * (0.5 + 0.5 * sin(Double(i) * 0.7))
+                        UnevenRoundedRectangle(topLeadingRadius: 2, topTrailingRadius: 2)
+                            .fill(LinearGradient(
+                                colors: [Holo.hsl(hue, 80, 62), Holo.hsl(hue, 75, 42)],
+                                startPoint: .top, endPoint: .bottom))
+                            .frame(height: 3 + CGFloat(v) * (height - 6))
+                            .opacity(pulse ? 0.5 : 0.26)
+                            .scaleEffect(y: pulse ? 1 : 0.6, anchor: .bottom)
+                            .animation(.easeInOut(duration: 2.4).repeatForever().delay(Double(i) * -0.13), value: pulse)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: height, alignment: .bottom)
             } else {
                 HStack(alignment: .bottom, spacing: 3) {
                     ForEach(Array(values.enumerated()), id: \.offset) { i, v in
@@ -259,6 +271,30 @@ struct PanoramicaView: View {
             guard let d = iso.date(from: e.created_at) ?? isoPlain.date(from: e.created_at) else { return false }
             return cal.isDateInToday(d)
         }.count
+    }
+}
+
+// Sfondo: griglia fitta di puntini tondi, statici e discreti.
+struct DataGridHeroBackground: View {
+    var tint = Color(red: 86/255, green: 134/255, blue: 244/255)
+    var step: CGFloat = 26
+    var dot: CGFloat = 2
+    var body: some View {
+        Canvas { ctx, size in
+            let color = tint.opacity(0.10)
+            var y: CGFloat = step / 2
+            while y <= size.height {
+                var x: CGFloat = step / 2
+                while x <= size.width {
+                    let r = CGRect(x: x - dot / 2, y: y - dot / 2, width: dot, height: dot)
+                    ctx.fill(Path(ellipseIn: r), with: .color(color))
+                    x += step
+                }
+                y += step
+            }
+        }
+        .mask(RadialGradient(colors: [.black, .black.opacity(0.5), .clear],
+                             center: UnitPoint(x: 0.5, y: 0.40), startRadius: 120, endRadius: 880))
     }
 }
 

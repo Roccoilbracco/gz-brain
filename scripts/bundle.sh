@@ -13,6 +13,11 @@ rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
 cp .build/release/HubProto "$BUNDLE/Contents/MacOS/$APP_NAME"
 
+# script proxy per la Preview locale (Code → Preview): va nelle Resources del bundle
+if [ -f scripts/preview-proxy.mjs ]; then
+  cp scripts/preview-proxy.mjs "$BUNDLE/Contents/Resources/"
+fi
+
 # icona da icon-source.png (stessa della versione Tauri)
 if [ -f "$ICON_SRC" ]; then
   ICONSET=$(mktemp -d)/AppIcon.iconset

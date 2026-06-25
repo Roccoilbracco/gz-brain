@@ -59,36 +59,25 @@ struct ClienteFattureSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("FATTURE").font(.system(size: 13, weight: .heavy)).tracking(1.5)
-                    .foregroundStyle(Holo.hsl(152, 80, 74))
-                Text("\(model.fatture.count)").font(.system(size: 11, weight: .bold)).foregroundStyle(Holo.subDim)
                 Spacer()
-                Button { showEditor = true } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "plus").font(.system(size: 10, weight: .bold))
-                        Text("Nuova fattura").font(.system(size: 11, weight: .semibold))
-                    }
-                    .foregroundStyle(Color(hex: 0xeaf0fb))
-                    .padding(.horizontal, 12).padding(.vertical, 6)
-                    .background(Capsule().fill(Color(red: 40/255, green: 70/255, blue: 140/255).opacity(0.5)))
-                    .overlay(Capsule().strokeBorder(Holo.hsl(217, 85, 62).opacity(0.5), lineWidth: 1))
-                }.buttonStyle(.plain).disabled(model.azienda?.ragione_sociale == nil)
+                MenuPillButton(label: "Nuova fattura", icon: "plus",
+                               disabled: model.azienda?.ragione_sociale == nil) { showEditor = true }
             }
             if let m = msg { Text(m).font(.system(size: 11)).foregroundStyle(Holo.subDim) }
 
             if model.loading {
                 Text("Caricamento…").font(.system(size: 12)).foregroundStyle(Holo.subDim).padding(.vertical, 6)
             } else if model.fatture.isEmpty {
-                Text("Nessuna fattura per questo cliente. Creane una con “+ Nuova fattura”.")
-                    .font(.system(size: 12)).foregroundStyle(Holo.labelDim).padding(.vertical, 6)
+                EmptyStateCard(icon: "doc.text", text: "Nessuna fattura per questo cliente.\nCreane una con “+ Nuova fattura”.")
             } else {
                 VStack(spacing: 0) {
+                    gridHeader
+                    Divider().overlay(Color.white.opacity(0.08))
                     ForEach(Array(model.fatture.enumerated()), id: \.element.id) { i, f in
                         row(f)
                         if i < model.fatture.count - 1 { Divider().overlay(Color.white.opacity(0.06)) }
                     }
                 }
-                .padding(.vertical, 2)
                 .background(RoundedRectangle(cornerRadius: 14).fill(Csb.panel))
                 .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Csb.panelBorder, lineWidth: 1))
                 .clipShape(RoundedRectangle(cornerRadius: 14))
@@ -111,38 +100,56 @@ struct ClienteFattureSection: View {
         }
     }
 
+    private var gridHeader: some View {
+        HStack(spacing: 18) {
+            gcol("NUMERO", .leading)
+            gcol("DATA", .leading)
+            gcol("IMPONIBILE", .trailing)
+            gcol("IVA", .trailing)
+            gcol("TOTALE", .trailing)
+            Text("STATO").frame(width: 96, alignment: .center)
+            Color.clear.frame(width: 124, height: 1)
+        }
+        .font(.system(size: 9, weight: .heavy)).tracking(1)
+        .foregroundStyle(Csb.secFg)
+        .padding(.horizontal, 18).padding(.vertical, 10)
+    }
+    private func gcol(_ t: String, _ a: Alignment) -> some View {
+        Text(t).font(.system(size: 9, weight: .heavy)).tracking(1)
+            .foregroundStyle(Csb.secFg).frame(maxWidth: .infinity, alignment: a)
+    }
+
     private func row(_ f: Fattura) -> some View {
-        HStack(spacing: 12) {
-            Text("\(f.anno)\(String(format: "%03d", f.numero))").font(.system(size: 12.5, weight: .semibold))
-                .foregroundStyle(Holo.text).frame(width: 96, alignment: .leading)
-            Text(dataIT(f.data)).font(.system(size: 11)).foregroundStyle(Holo.subDim)
-                .frame(width: 90, alignment: .leading)
-            Text(Money.eur(f.totale_cents)).font(.system(size: 12, weight: .semibold)).foregroundStyle(Holo.text)
+        HStack(spacing: 18) {
+            Text("\(f.anno)\(String(format: "%03d", f.numero))").font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Holo.text).frame(maxWidth: .infinity, alignment: .leading)
+            Text(dataIT(f.data)).font(.system(size: 12)).foregroundStyle(Holo.subDim)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            statoBadge(f.stato).frame(width: 84, alignment: .leading)
-            HStack(spacing: 10) {
-                Button { Task { await apri(f) } } label: { Image(systemName: "doc.richtext").font(.system(size: 12)) }
-                    .buttonStyle(.plain).foregroundStyle(Holo.hsl(217, 80, 70)).help("Apri PDF")
-                Button { Task { await invia(f) } } label: { Image(systemName: "paperplane").font(.system(size: 12)) }
-                    .buttonStyle(.plain).foregroundStyle(Holo.hsl(152, 80, 70)).help("Invia per email")
-                Button { editing = f } label: { Image(systemName: "pencil").font(.system(size: 12)) }
-                    .buttonStyle(.plain).foregroundStyle(Holo.hsl(48, 85, 68)).help("Modifica")
-                Button { toDelete = f } label: { Image(systemName: "trash").font(.system(size: 12)) }
-                    .buttonStyle(.plain).foregroundStyle(Holo.hsl(2, 80, 68)).help("Elimina")
+            Text(Money.eur(f.imponibile_cents)).font(.system(size: 12)).foregroundStyle(Holo.subDim)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            Text(Money.eur(f.iva_cents)).font(.system(size: 12)).foregroundStyle(Holo.subDim)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            Text(Money.eur(f.totale_cents)).font(.system(size: 13, weight: .semibold)).foregroundStyle(Holo.text)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            StatusChip(text: f.stato, hue: statoHue(f.stato)).frame(width: 96, alignment: .center)
+            HStack(spacing: 4) {
+                IconButton(icon: "arrow.up.right.square", help: "Apri PDF") { Task { await apri(f) } }
+                IconButton(icon: "paperplane", help: "Invia per email") { Task { await invia(f) } }
+                IconButton(icon: "pencil", help: "Modifica") { editing = f }
+                IconButton(icon: "trash", help: "Elimina", danger: true) { toDelete = f }
             }.frame(width: 124, alignment: .trailing)
         }
-        .padding(.horizontal, 16).padding(.vertical, 10)
+        .padding(.horizontal, 18).padding(.vertical, 11)
     }
-    private func statoBadge(_ s: String) -> some View {
-        let hue: Double = s == "pagata" ? 152 : s == "inviata" ? 217 : s == "emessa" ? 38 : 0
-        return Text(s.uppercased()).font(.system(size: 8.5, weight: .heavy)).tracking(0.5)
-            .foregroundStyle(Holo.hsl(hue, 85, 75))
-            .padding(.horizontal, 8).padding(.vertical, 3)
-            .overlay(Capsule().strokeBorder(Holo.hsl(hue, 80, 60).opacity(0.5), lineWidth: 1))
+    private func statoHue(_ s: String) -> Double {
+        s == "pagata" ? 152 : s == "inviata" ? 217 : s == "emessa" ? 38 : 0
     }
     private func tempPDF(_ f: Fattura) async -> URL? {
         guard let path = f.pdf_path, let data = try? await HubAPI.downloadFatturaPDF(path: path) else { return nil }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(f.anno)\(String(format: "%03d", f.numero)).pdf")
+        let ext = (path as NSString).pathExtension
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(f.anno)\(String(format: "%03d", f.numero))")
+            .appendingPathExtension(ext.isEmpty ? "pdf" : ext)
         try? data.write(to: url); return url
     }
     private func apri(_ f: Fattura) async {
@@ -257,20 +264,12 @@ struct FattureView: View {
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 7)
-        .background(Capsule().fill(Color(red: 13/255, green: 21/255, blue: 44/255).opacity(0.75)))
-        .overlay(Capsule().strokeBorder(Color(red: 125/255, green: 175/255, blue: 1).opacity(0.25), lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color(red: 13/255, green: 21/255, blue: 44/255).opacity(0.75)))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color(red: 125/255, green: 175/255, blue: 1).opacity(0.25), lineWidth: 1))
     }
     private var addButton: some View {
-        Button { showEditor = true } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "plus").font(.system(size: 11, weight: .bold))
-                Text("Nuova fattura").font(.system(size: 12, weight: .semibold))
-            }
-            .foregroundStyle(Color(hex: 0xeaf0fb))
-            .padding(.horizontal, 14).padding(.vertical, 8)
-            .background(Capsule().fill(Color(red: 40/255, green: 70/255, blue: 140/255).opacity(0.55)))
-            .overlay(Capsule().strokeBorder(Holo.hsl(217, 85, 62).opacity(0.6), lineWidth: 1))
-        }.buttonStyle(.plain).disabled(model.azienda?.ragione_sociale == nil)
+        MenuPillButton(label: "Nuova fattura", icon: "plus",
+                       disabled: model.azienda?.ragione_sociale == nil) { showEditor = true }
     }
 
     private var emptyPlaceholder: some View {
@@ -287,19 +286,9 @@ struct FattureView: View {
                     .font(.system(size: 12.5)).foregroundStyle(Holo.subDim)
                     .multilineTextAlignment(.center).frame(maxWidth: 360)
                 if search.isEmpty {
-                    Button { showEditor = true } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "plus").font(.system(size: 11, weight: .bold))
-                            Text("Nuova fattura").font(.system(size: 12.5, weight: .semibold))
-                        }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 18).padding(.vertical, 10)
-                        .background(Capsule().fill(LinearGradient(
-                            colors: [Color(red: 37/255, green: 99/255, blue: 235/255), Color(red: 79/255, green: 70/255, blue: 229/255)],
-                            startPoint: .leading, endPoint: .trailing)))
-                    }
-                    .buttonStyle(.plain).disabled(model.azienda?.ragione_sociale == nil)
-                    .opacity(model.azienda?.ragione_sociale == nil ? 0.5 : 1).padding(.top, 4)
+                    MenuPillButton(label: "Nuova fattura", icon: "plus",
+                                   disabled: model.azienda?.ragione_sociale == nil) { showEditor = true }
+                        .padding(.top, 4)
                 }
             }
             .frame(maxWidth: .infinity, minHeight: 340)
@@ -328,27 +317,19 @@ struct FattureView: View {
                 .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
             Text(Money.eur(f.totale_cents)).font(.system(size: 12, weight: .semibold)).foregroundStyle(Holo.subDim)
                 .frame(width: 100, alignment: .leading)
-            statoBadge(f.stato).frame(width: 90, alignment: .leading)
-            HStack(spacing: 10) {
-                Button { Task { await apri(f) } } label: { Image(systemName: "doc.richtext").font(.system(size: 12)) }
-                    .buttonStyle(.plain).foregroundStyle(Holo.hsl(217, 80, 70)).help("Apri PDF")
-                Button { Task { await invia(f) } } label: { Image(systemName: "paperplane").font(.system(size: 12)) }
-                    .buttonStyle(.plain).foregroundStyle(Holo.hsl(152, 80, 70)).help("Invia per email")
-                Button { editing = f } label: { Image(systemName: "pencil").font(.system(size: 12)) }
-                    .buttonStyle(.plain).foregroundStyle(Holo.hsl(48, 85, 68)).help("Modifica")
-                Button { toDelete = f } label: { Image(systemName: "trash").font(.system(size: 12)) }
-                    .buttonStyle(.plain).foregroundStyle(Holo.hsl(2, 80, 68)).help("Elimina fattura")
+            StatusChip(text: f.stato, hue: statoHue(f.stato)).frame(width: 90, alignment: .leading)
+            HStack(spacing: 4) {
+                IconButton(icon: "doc.richtext", help: "Apri PDF") { Task { await apri(f) } }
+                IconButton(icon: "paperplane", help: "Invia per email") { Task { await invia(f) } }
+                IconButton(icon: "pencil", help: "Modifica") { editing = f }
+                IconButton(icon: "trash", help: "Elimina fattura", danger: true) { toDelete = f }
                     .disabled(deleting)
             }.frame(width: 146, alignment: .trailing)
         }
         .padding(.horizontal, 14).padding(.vertical, 9)
     }
-    private func statoBadge(_ s: String) -> some View {
-        let hue: Double = s == "pagata" ? 152 : s == "inviata" ? 217 : s == "emessa" ? 38 : 0
-        return Text(s.uppercased()).font(.system(size: 8.5, weight: .heavy)).tracking(0.5)
-            .foregroundStyle(Holo.hsl(hue, 85, 75))
-            .padding(.horizontal, 8).padding(.vertical, 3)
-            .overlay(Capsule().strokeBorder(Holo.hsl(hue, 80, 60).opacity(0.5), lineWidth: 1))
+    private func statoHue(_ s: String) -> Double {
+        s == "pagata" ? 152 : s == "inviata" ? 217 : s == "emessa" ? 38 : 0
     }
 
     private func tempPDF(_ f: Fattura) async -> URL? {
@@ -467,7 +448,7 @@ struct FatturaEditView: View {
                         Text(saving ? "Salvo…" : "Salva")
                             .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
                             .padding(.horizontal, 18).padding(.vertical, 9)
-                            .background(Capsule().fill(LinearGradient(
+                            .background(RoundedRectangle(cornerRadius: 9).fill(LinearGradient(
                                 colors: [Color(red: 37/255, green: 99/255, blue: 235/255), Color(red: 79/255, green: 70/255, blue: 229/255)],
                                 startPoint: .leading, endPoint: .trailing)))
                     }.buttonStyle(.plain).disabled(saving)

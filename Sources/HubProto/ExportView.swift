@@ -88,7 +88,6 @@ struct ExportView: View {
                 }
                 if let m = msg { Text(m).font(.system(size: 11.5)).foregroundStyle(Holo.hsl(152, 75, 72)) }
             }
-            .frame(maxWidth: 760, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(EdgeInsets(top: 40, leading: 30, bottom: 34, trailing: 30))
         }
@@ -160,12 +159,7 @@ struct ExportView: View {
             HStack {
                 cardLabel("FILE EXTRA (OPZIONALE)")
                 Spacer()
-                Button { pickBank() } label: {
-                    HStack(spacing: 5) { Image(systemName: "plus").font(.system(size: 10, weight: .bold)); Text("Allega").font(.system(size: 11, weight: .semibold)) }
-                        .foregroundStyle(Color(hex: 0xeaf0fb)).padding(.horizontal, 12).padding(.vertical, 6)
-                        .background(Capsule().fill(Color(red: 40/255, green: 70/255, blue: 140/255).opacity(0.5)))
-                        .overlay(Capsule().strokeBorder(Holo.hsl(217, 85, 62).opacity(0.5), lineWidth: 1))
-                }.buttonStyle(.plain)
+                MenuPillButton(label: "Allega", icon: "plus") { pickBank() }
             }
             if bankFiles.isEmpty {
                 Text("Gli estratti conto archiviati dei mesi scelti sono già inclusi in automatico. Qui allega solo file extra (es. un documento aggiuntivo per il commercialista).")
@@ -193,19 +187,11 @@ struct ExportView: View {
                 stat("\(filteredFatture.count)", "FATTURE", Money.eur(totFatture), Holo.hsl(217, 85, 70))
                 stat("\(filteredSpese.count)", "SPESE", Money.eur(totSpese), Holo.hsl(38, 85, 68))
                 Spacer()
-                Button { startExport() } label: {
-                    HStack(spacing: 7) {
-                        Image(systemName: exporting ? "hourglass" : "square.and.arrow.up").font(.system(size: 12, weight: .bold))
-                        Text(exporting ? "Creo ZIP…" : "Esporta ZIP").font(.system(size: 13, weight: .semibold))
-                    }
-                    .foregroundStyle(.white).padding(.horizontal, 20).padding(.vertical, 11)
-                    .background(Capsule().fill(LinearGradient(
-                        colors: [Color(red: 37/255, green: 99/255, blue: 235/255), Color(red: 79/255, green: 70/255, blue: 229/255)],
-                        startPoint: .leading, endPoint: .trailing)))
+                MenuPillButton(label: exporting ? "Creo ZIP…" : "Esporta ZIP",
+                               icon: exporting ? "hourglass" : "square.and.arrow.up",
+                               disabled: exporting || selected.isEmpty || (filteredFatture.isEmpty && filteredSpese.isEmpty)) {
+                    startExport()
                 }
-                .buttonStyle(.plain)
-                .disabled(exporting || selected.isEmpty || (filteredFatture.isEmpty && filteredSpese.isEmpty))
-                .opacity((selected.isEmpty || (filteredFatture.isEmpty && filteredSpese.isEmpty)) ? 0.5 : 1)
             }
         }
     }
@@ -231,7 +217,7 @@ struct ExportView: View {
         Button(action: action) {
             Text(t).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Holo.subDim)
                 .padding(.horizontal, 10).padding(.vertical, 5)
-                .overlay(Capsule().strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
         }.buttonStyle(.plain)
     }
 

@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 
 /// Mini client PostgREST — legge la stessa config.json di UNVRS Hub (Tauri).
 /// Contesto nativo (no browser/webview): ok usare la secret key.
@@ -200,6 +201,31 @@ enum HubAPI {
     static func getCliente(id: String) async throws -> Cliente? {
         let rows: [Cliente] = try await sb.fetch("clienti?select=*,commesse(*)&id=eq.\(enc(id))")
         return rows.first
+    }
+
+    // ── Documenti cliente (bucket 'clienti') ──
+    static func listClienteDocumenti(_ clienteId: String) async throws -> [ClienteDocumento] {
+        try await sb.fetch("cliente_documenti?select=*&cliente_id=eq.\(enc(clienteId))&order=created_at.asc")
+    }
+    /// Legge un file locale, lo carica nel bucket e registra la riga in cliente_documenti.
+    static func addClienteDocumento(clienteId: String, fileURL: URL) async throws {
+        let bytes = try Data(contentsOf: fileURL)
+        let ext = fileURL.pathExtension.isEmpty ? "pdf" : fileURL.pathExtension
+        let ct = UTType(filenameExtension: ext)?.preferredMIMEType ?? "application/octet-stream"
+        let safe = fileURL.deletingPathExtension().lastPathComponent
+            .replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: " ", with: "_")
+        let name = "\(clienteId)/\(UUID().uuidString.prefix(8))-\(safe).\(ext)"
+        let path = try await sb.uploadFile(bucket: "clienti", path: name, data: bytes, contentType: ct)
+        try await sb.mutate("cliente_documenti", method: "POST", body: [
+            "cliente_id": clienteId, "nome": fileURL.lastPathComponent, "path": path,
+        ])
+    }
+    static func deleteClienteDocumento(id: String, path: String?) async throws {
+        try await sb.mutate("cliente_documenti?id=eq.\(enc(id))", method: "DELETE")
+        if let p = path { try? await sb.deleteFile(bucket: "clienti", path: p) }
+    }
+    static func downloadClienteFile(path: String) async throws -> Data {
+        try await sb.downloadFile(bucket: "clienti", path: path)
     }
 
     /// Crea un cliente manuale; ritorna la riga creata (per collegarci subito una commessa).

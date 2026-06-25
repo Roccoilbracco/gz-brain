@@ -59,7 +59,7 @@ struct ContentView: View {
             RadialGradient(colors: [Color(hex: 0x151b27), Color(hex: 0x0d111b), Color(hex: 0x070910)],
                            center: UnitPoint(x: 0.5, y: 0.35), startRadius: 0, endRadius: 900)
                 .ignoresSafeArea()
-            GridLines().ignoresSafeArea()
+            DataGridHeroBackground().ignoresSafeArea()
             RadialGradient(colors: [.clear, .black.opacity(0.5)],
                            center: .center, startRadius: 420, endRadius: 980)
                 .ignoresSafeArea()

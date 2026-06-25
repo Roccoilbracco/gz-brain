@@ -164,7 +164,7 @@ struct RiconciliazioneView: View {
                     Button { Task { await azzera() } } label: {
                         Text("Azzera abbinamenti").font(.system(size: 10.5)).foregroundStyle(Holo.subDim)
                             .padding(.horizontal, 10).padding(.vertical, 4)
-                            .overlay(Capsule().strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+                            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
                     }.buttonStyle(.plain).padding(.leading, 10)
                 }
                 Spacer()
@@ -303,9 +303,9 @@ struct RiconciliazioneView: View {
             Button("Ignora (non è una fattura/spesa)") { setMatch(m.txId, kind: "ignora", refId: nil) }
         } label: {
             HStack(spacing: 4) { Text("Abbina").font(.system(size: 10.5, weight: .semibold)); Image(systemName: "chevron.down").font(.system(size: 8)) }
-                .foregroundStyle(Color(hex: 0xeaf0fb)).padding(.horizontal, 10).padding(.vertical, 5)
-                .background(Capsule().fill(Color(red: 40/255, green: 70/255, blue: 140/255).opacity(0.5)))
-                .overlay(Capsule().strokeBorder(Holo.hsl(217, 85, 62).opacity(0.5), lineWidth: 1))
+                .foregroundStyle(Csb.itemFgOn).padding(.horizontal, 11).padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: 9).fill(Csb.tabOn))
+                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Csb.tabOnBorder, lineWidth: 1))
         }
         .menuStyle(.borderlessButton).fixedSize()
     }

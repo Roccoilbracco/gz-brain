@@ -121,14 +121,11 @@ struct SpeseView: View {
             Text(s.iva_cents == 0 ? "—" : Money.eur(s.iva_cents)).font(.system(size: 11)).foregroundStyle(Holo.subDim)
                 .frame(width: 80, alignment: .leading)
             categoriaBadge(s.categoria).frame(width: 110, alignment: .leading)
-            HStack(spacing: 10) {
-                Button { Task { await apri(s) } } label: { Image(systemName: "paperclip").font(.system(size: 12)) }
-                    .buttonStyle(.plain).foregroundStyle(Holo.hsl(217, 80, 70)).help("Apri allegato")
+            HStack(spacing: 4) {
+                IconButton(icon: "paperclip", help: "Apri allegato") { Task { await apri(s) } }
                     .disabled(s.file_path == nil).opacity(s.file_path == nil ? 0.3 : 1)
-                Button { editing = s } label: { Image(systemName: "pencil").font(.system(size: 12)) }
-                    .buttonStyle(.plain).foregroundStyle(Holo.hsl(48, 85, 68)).help("Modifica")
-                Button { toDelete = s } label: { Image(systemName: "trash").font(.system(size: 12)) }
-                    .buttonStyle(.plain).foregroundStyle(Holo.hsl(2, 80, 68)).help("Elimina")
+                IconButton(icon: "pencil", help: "Modifica") { editing = s }
+                IconButton(icon: "trash", help: "Elimina", danger: true) { toDelete = s }
             }.frame(width: 92, alignment: .trailing)
         }
         .padding(.horizontal, 14).padding(.vertical, 9)
@@ -136,10 +133,7 @@ struct SpeseView: View {
     private func categoriaBadge(_ c: String?) -> some View {
         Group {
             if let c, !c.isEmpty {
-                Text(c.uppercased()).font(.system(size: 8.5, weight: .heavy)).tracking(0.5)
-                    .foregroundStyle(Holo.hsl(38, 85, 75))
-                    .padding(.horizontal, 8).padding(.vertical, 3)
-                    .overlay(Capsule().strokeBorder(Holo.hsl(38, 80, 60).opacity(0.5), lineWidth: 1))
+                StatusChip(text: c, hue: 38)
             } else { Text("—").font(.system(size: 11)).foregroundStyle(Holo.labelDim) }
         }
     }
@@ -158,20 +152,11 @@ struct SpeseView: View {
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 7)
-        .background(Capsule().fill(Color(red: 13/255, green: 21/255, blue: 44/255).opacity(0.75)))
-        .overlay(Capsule().strokeBorder(Color(red: 125/255, green: 175/255, blue: 1).opacity(0.25), lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color(red: 13/255, green: 21/255, blue: 44/255).opacity(0.75)))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color(red: 125/255, green: 175/255, blue: 1).opacity(0.25), lineWidth: 1))
     }
     private var addButton: some View {
-        Button { showForm = true } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "tray.and.arrow.down.fill").font(.system(size: 11, weight: .bold))
-                Text("Carica spesa").font(.system(size: 12, weight: .semibold))
-            }
-            .foregroundStyle(Color(hex: 0xeaf0fb))
-            .padding(.horizontal, 14).padding(.vertical, 8)
-            .background(Capsule().fill(Color(red: 40/255, green: 70/255, blue: 140/255).opacity(0.55)))
-            .overlay(Capsule().strokeBorder(Holo.hsl(217, 85, 62).opacity(0.6), lineWidth: 1))
-        }.buttonStyle(.plain)
+        MenuPillButton(label: "Carica spesa", icon: "tray.and.arrow.down.fill") { showForm = true }
     }
 
     private var emptyPlaceholder: some View {
@@ -187,16 +172,8 @@ struct SpeseView: View {
                     .font(.system(size: 12.5)).foregroundStyle(Holo.subDim)
                     .multilineTextAlignment(.center).frame(maxWidth: 380)
                 if search.isEmpty {
-                    Button { showForm = true } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "tray.and.arrow.down.fill").font(.system(size: 11, weight: .bold))
-                            Text("Carica spesa").font(.system(size: 12.5, weight: .semibold))
-                        }
-                        .foregroundStyle(.white).padding(.horizontal, 18).padding(.vertical, 10)
-                        .background(Capsule().fill(LinearGradient(
-                            colors: [Color(red: 37/255, green: 99/255, blue: 235/255), Color(red: 79/255, green: 70/255, blue: 229/255)],
-                            startPoint: .leading, endPoint: .trailing)))
-                    }.buttonStyle(.plain).padding(.top, 4)
+                    MenuPillButton(label: "Carica spesa", icon: "tray.and.arrow.down.fill") { showForm = true }
+                        .padding(.top, 4)
                 }
             }
             .frame(maxWidth: .infinity, minHeight: 340).padding(40)
@@ -301,7 +278,7 @@ struct SpesaEditView: View {
                         Text(saving ? "Salvo…" : "Salva")
                             .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
                             .padding(.horizontal, 18).padding(.vertical, 9)
-                            .background(Capsule().fill(LinearGradient(
+                            .background(RoundedRectangle(cornerRadius: 9).fill(LinearGradient(
                                 colors: [Color(red: 37/255, green: 99/255, blue: 235/255), Color(red: 79/255, green: 70/255, blue: 229/255)],
                                 startPoint: .leading, endPoint: .trailing)))
                     }.buttonStyle(.plain).disabled(saving || fornitore.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -396,7 +373,7 @@ struct SpesaFormView: View {
                         Text(saving ? "Carico…" : "Salva spesa")
                             .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
                             .padding(.horizontal, 18).padding(.vertical, 9)
-                            .background(Capsule().fill(LinearGradient(
+                            .background(RoundedRectangle(cornerRadius: 9).fill(LinearGradient(
                                 colors: [Color(red: 37/255, green: 99/255, blue: 235/255), Color(red: 79/255, green: 70/255, blue: 229/255)],
                                 startPoint: .leading, endPoint: .trailing)))
                     }

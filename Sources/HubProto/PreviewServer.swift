@@ -81,7 +81,12 @@ enum PreviewServer {
             let bundled = res + "/preview-proxy.mjs"
             if FileManager.default.fileExists(atPath: bundled) { return bundled }
         }
-        return NSHomeDirectory() + "/Developer/unvrs-hub-swift/scripts/preview-proxy.mjs"
+        // fallback: sorgente nel repo (cartella attuale del progetto)
+        let candidates = [
+            NSHomeDirectory() + "/Developer/unvrs-brain/scripts/preview-proxy.mjs",
+            NSHomeDirectory() + "/Developer/unvrs-hub-swift/scripts/preview-proxy.mjs",
+        ]
+        return candidates.first { FileManager.default.fileExists(atPath: $0) } ?? candidates[0]
     }
 
     private static func firstExisting(_ paths: [String]) -> String? {

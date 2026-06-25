@@ -56,7 +56,7 @@ struct AziendaSettingsCard: View {
                             Text(saving ? "Salvataggio…" : "Salva dati")
                                 .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
                                 .padding(.horizontal, 18).padding(.vertical, 9)
-                                .background(Capsule().fill(LinearGradient(
+                                .background(RoundedRectangle(cornerRadius: 9).fill(LinearGradient(
                                     colors: [Color(red: 37/255, green: 99/255, blue: 235/255), Color(red: 79/255, green: 70/255, blue: 229/255)],
                                     startPoint: .leading, endPoint: .trailing)))
                         }
@@ -67,7 +67,7 @@ struct AziendaSettingsCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(EdgeInsets(top: 18, leading: 20, bottom: 16, trailing: 20))
         }
-        .frame(maxWidth: 700)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .task { await load() }
     }
 
@@ -81,7 +81,7 @@ struct AziendaSettingsCard: View {
                     .font(.system(size: 12, weight: .medium)).foregroundStyle(Holo.text)
             }
             .padding(.horizontal, 12).padding(.vertical, 7)
-            .overlay(Capsule().strokeBorder(Color(red: 125/255, green: 175/255, blue: 1).opacity(0.3), lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color(red: 125/255, green: 175/255, blue: 1).opacity(0.3), lineWidth: 1))
         }
         .buttonStyle(.plain)
     }

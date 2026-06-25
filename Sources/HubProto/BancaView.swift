@@ -63,7 +63,6 @@ struct BancaView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 14))
                 }
             }
-            .frame(maxWidth: 820, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(EdgeInsets(top: 40, leading: 30, bottom: 34, trailing: 30))
         }
@@ -99,27 +98,17 @@ struct BancaView: View {
                 }
                 .foregroundStyle(isCSV ? Color(hex: 0xeaf0fb) : Holo.labelDim)
                 .padding(.horizontal, 12).padding(.vertical, 6)
-                .background(Capsule().fill(Color(red: 40/255, green: 70/255, blue: 140/255).opacity(isCSV ? 0.5 : 0.2)))
-                .overlay(Capsule().strokeBorder(Holo.hsl(217, 85, 62).opacity(isCSV ? 0.5 : 0.2), lineWidth: 1))
+                .background(RoundedRectangle(cornerRadius: 9).fill(Color(red: 40/255, green: 70/255, blue: 140/255).opacity(isCSV ? 0.5 : 0.2)))
+                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Holo.hsl(217, 85, 62).opacity(isCSV ? 0.5 : 0.2), lineWidth: 1))
             }.buttonStyle(.plain).help(isCSV ? "Confronta coi movimenti" : "Riconciliazione disponibile solo per CSV")
-            Button { Task { await apri(e) } } label: { Image(systemName: "paperclip").font(.system(size: 12)) }
-                .buttonStyle(.plain).foregroundStyle(Holo.hsl(217, 80, 70)).help("Apri file")
-            Button { toDelete = e } label: { Image(systemName: "trash").font(.system(size: 12)) }
-                .buttonStyle(.plain).foregroundStyle(Holo.hsl(2, 80, 68)).help("Elimina")
+            IconButton(icon: "paperclip", help: "Apri file") { Task { await apri(e) } }
+            IconButton(icon: "trash", help: "Elimina", danger: true) { toDelete = e }
         }
         .padding(.horizontal, 16).padding(.vertical, 11)
     }
 
     private var addButton: some View {
-        Button { showForm = true } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "building.columns.fill").font(.system(size: 11, weight: .bold))
-                Text("Carica estratto").font(.system(size: 12, weight: .semibold))
-            }
-            .foregroundStyle(Color(hex: 0xeaf0fb)).padding(.horizontal, 14).padding(.vertical, 8)
-            .background(Capsule().fill(Color(red: 40/255, green: 70/255, blue: 140/255).opacity(0.55)))
-            .overlay(Capsule().strokeBorder(Holo.hsl(217, 85, 62).opacity(0.6), lineWidth: 1))
-        }.buttonStyle(.plain)
+        MenuPillButton(label: "Carica estratto", icon: "building.columns.fill") { showForm = true }
     }
     private var emptyPlaceholder: some View {
         GlassCard {
@@ -129,11 +118,8 @@ struct BancaView: View {
                 Text("Nessun estratto conto").font(.system(size: 17, weight: .bold)).foregroundStyle(Holo.titleText)
                 Text("Carica l'estratto conto della banca (meglio in CSV) per ogni mese: l'app lo confronta con fatture e spese e ti dice cosa manca.")
                     .font(.system(size: 12.5)).foregroundStyle(Holo.subDim).multilineTextAlignment(.center).frame(maxWidth: 400)
-                Button { showForm = true } label: {
-                    HStack(spacing: 6) { Image(systemName: "building.columns.fill").font(.system(size: 11, weight: .bold)); Text("Carica estratto").font(.system(size: 12.5, weight: .semibold)) }
-                        .foregroundStyle(.white).padding(.horizontal, 18).padding(.vertical, 10)
-                        .background(Capsule().fill(LinearGradient(colors: [Color(red: 37/255, green: 99/255, blue: 235/255), Color(red: 79/255, green: 70/255, blue: 229/255)], startPoint: .leading, endPoint: .trailing)))
-                }.buttonStyle(.plain).padding(.top, 4)
+                MenuPillButton(label: "Carica estratto", icon: "building.columns.fill") { showForm = true }
+                    .padding(.top, 4)
             }
             .frame(maxWidth: .infinity, minHeight: 320).padding(40)
         }
@@ -196,7 +182,7 @@ struct EstrattoFormView: View {
                     Button { save() } label: {
                         Text(saving ? "Carico…" : "Salva")
                             .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white).padding(.horizontal, 18).padding(.vertical, 9)
-                            .background(Capsule().fill(LinearGradient(colors: [Color(red: 37/255, green: 99/255, blue: 235/255), Color(red: 79/255, green: 70/255, blue: 229/255)], startPoint: .leading, endPoint: .trailing)))
+                            .background(RoundedRectangle(cornerRadius: 9).fill(LinearGradient(colors: [Color(red: 37/255, green: 99/255, blue: 235/255), Color(red: 79/255, green: 70/255, blue: 229/255)], startPoint: .leading, endPoint: .trailing)))
                     }.buttonStyle(.plain).disabled(saving || fileURL == nil).opacity(fileURL == nil ? 0.5 : 1)
                 }
             }.padding(24)
