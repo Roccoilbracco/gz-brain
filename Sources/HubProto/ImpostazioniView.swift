@@ -65,6 +65,8 @@ struct ImpostazioniView: View {
                     .padding(EdgeInsets(top: 18, leading: 20, bottom: 16, trailing: 20))
                 }
                 .frame(maxWidth: 700)
+
+                AziendaSettingsCard()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(EdgeInsets(top: 40, leading: 30, bottom: 34, trailing: 30))

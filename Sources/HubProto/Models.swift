@@ -11,6 +11,8 @@ struct Project: Decodable, Identifiable, Equatable {
     var hue: Double
     var notes: String?
     var local_path: String?
+    var ssh_host: String?
+    var ssh_path: String?
     var sort_order: Int?
     var created_at: String?
     var updated_at: String?

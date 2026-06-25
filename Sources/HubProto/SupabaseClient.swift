@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 
 /// Mini client PostgREST — legge la stessa config.json di UNVRS Hub (Tauri).
 /// Contesto nativo (no browser/webview): ok usare la secret key.
@@ -69,6 +70,39 @@ struct SupabaseClient {
         return first
     }
 
+    // ── Storage (/storage/v1/object) ──
+    @discardableResult
+    func uploadFile(bucket: String, path: String, data: Data, contentType: String) async throws -> String {
+        let url = baseURL.appendingPathComponent("storage/v1/object/\(bucket)/\(path)")
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue(secretKey, forHTTPHeaderField: "apikey")
+        req.setValue("Bearer \(secretKey)", forHTTPHeaderField: "Authorization")
+        req.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        req.setValue("true", forHTTPHeaderField: "x-upsert")
+        req.httpBody = data
+        _ = try await run(req)
+        return path
+    }
+
+    func downloadFile(bucket: String, path: String) async throws -> Data {
+        let url = baseURL.appendingPathComponent("storage/v1/object/\(bucket)/\(path)")
+        var req = URLRequest(url: url)
+        req.setValue(secretKey, forHTTPHeaderField: "apikey")
+        req.setValue("Bearer \(secretKey)", forHTTPHeaderField: "Authorization")
+        let (data, _) = try await run(req)
+        return data
+    }
+
+    func deleteFile(bucket: String, path: String) async throws {
+        let url = baseURL.appendingPathComponent("storage/v1/object/\(bucket)/\(path)")
+        var req = URLRequest(url: url)
+        req.httpMethod = "DELETE"
+        req.setValue(secretKey, forHTTPHeaderField: "apikey")
+        req.setValue("Bearer \(secretKey)", forHTTPHeaderField: "Authorization")
+        _ = try await run(req)
+    }
+
     /// Count via header Content-Range con Prefer: count=exact (come restCount in db.ts)
     func count(_ pathAndQuery: String) async throws -> Int {
         var req = try request(pathAndQuery, prefer: "count=exact")
@@ -105,6 +139,15 @@ enum HubAPI {
     static func getProject(slug: String) async throws -> Project? {
         let rows: [Project] = try await sb.fetch("projects?select=*&slug=eq.\(enc(slug))")
         return rows.first
+    }
+
+    /// Riordina i progetti: scrive sort_order = posizione nell'array.
+    static func reorderProjects(_ ids: [String]) async throws {
+        let now = isoNow()
+        for (i, id) in ids.enumerated() {
+            try await sb.mutate("projects?id=eq.\(enc(id))", method: "PATCH",
+                                 body: ["sort_order": i, "updated_at": now])
+        }
     }
 
     static func listRecentEvents(days: Int = 14) async throws -> [HubEvent] {
@@ -160,6 +203,31 @@ enum HubAPI {
         return rows.first
     }
 
+    // ── Documenti cliente (bucket 'clienti') ──
+    static func listClienteDocumenti(_ clienteId: String) async throws -> [ClienteDocumento] {
+        try await sb.fetch("cliente_documenti?select=*&cliente_id=eq.\(enc(clienteId))&order=created_at.asc")
+    }
+    /// Legge un file locale, lo carica nel bucket e registra la riga in cliente_documenti.
+    static func addClienteDocumento(clienteId: String, fileURL: URL) async throws {
+        let bytes = try Data(contentsOf: fileURL)
+        let ext = fileURL.pathExtension.isEmpty ? "pdf" : fileURL.pathExtension
+        let ct = UTType(filenameExtension: ext)?.preferredMIMEType ?? "application/octet-stream"
+        let safe = fileURL.deletingPathExtension().lastPathComponent
+            .replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: " ", with: "_")
+        let name = "\(clienteId)/\(UUID().uuidString.prefix(8))-\(safe).\(ext)"
+        let path = try await sb.uploadFile(bucket: "clienti", path: name, data: bytes, contentType: ct)
+        try await sb.mutate("cliente_documenti", method: "POST", body: [
+            "cliente_id": clienteId, "nome": fileURL.lastPathComponent, "path": path,
+        ])
+    }
+    static func deleteClienteDocumento(id: String, path: String?) async throws {
+        try await sb.mutate("cliente_documenti?id=eq.\(enc(id))", method: "DELETE")
+        if let p = path { try? await sb.deleteFile(bucket: "clienti", path: p) }
+    }
+    static func downloadClienteFile(path: String) async throws -> Data {
+        try await sb.downloadFile(bucket: "clienti", path: path)
+    }
+
     /// Crea un cliente manuale; ritorna la riga creata (per collegarci subito una commessa).
     @discardableResult
     static func createCliente(_ fields: [String: Any?]) async throws -> Cliente {
@@ -172,12 +240,138 @@ enum HubAPI {
         try await sb.mutate("clienti?id=eq.\(enc(id))", method: "DELETE")
     }
 
+    /// Aggiorna i dati anagrafici di un cliente (PATCH).
+    static func updateCliente(id: String, fields: [String: Any?]) async throws {
+        var body = fields
+        body["updated_at"] = isoNow()
+        try await sb.mutate("clienti?id=eq.\(enc(id))", method: "PATCH", body: body)
+    }
+
     static func createCommessa(_ fields: [String: Any?]) async throws {
         try await sb.mutate("commesse", method: "POST", body: fields)
     }
 
+    // ── Fatturazione: impostazioni azienda ──
+    static func getAzienda() async throws -> AziendaSettings? {
+        let rows: [AziendaSettings] = try await sb.fetch("azienda_settings?select=*&id=eq.1")
+        return rows.first
+    }
+    static func saveAzienda(_ fields: [String: Any?]) async throws {
+        var body = fields
+        body["id"] = 1
+        body["updated_at"] = isoNow()
+        try await sb.mutate("azienda_settings", method: "POST", body: body,
+                            prefer: "resolution=merge-duplicates,return=minimal")
+    }
+    /// Carica logo/firma nel bucket 'azienda', ritorna il path.
+    static func uploadAziendaAsset(_ data: Data, name: String, contentType: String) async throws -> String {
+        try await sb.uploadFile(bucket: "azienda", path: name, data: data, contentType: contentType)
+    }
+    static func downloadAzienda(_ path: String) async throws -> Data {
+        try await sb.downloadFile(bucket: "azienda", path: path)
+    }
+
+    // ── Fatture ──
+    static func nextNumero(anno: Int) async throws -> Int {
+        struct R: Decodable { let numero: Int }
+        let rows: [R] = try await sb.fetch("fatture?select=numero&anno=eq.\(anno)&order=numero.desc&limit=1")
+        let next = (rows.first?.numero ?? 0) + 1
+        // nel 2026 le fatture 1–6 sono state emesse altrove: si riparte dalla 7
+        return anno == 2026 ? Swift.max(next, 7) : next
+    }
+    static func listFatture(clienteId: String? = nil) async throws -> [Fattura] {
+        var q = "fatture?select=*&order=anno.desc,numero.desc&limit=2000"
+        if let c = clienteId { q += "&cliente_id=eq.\(enc(c))" }
+        return try await sb.fetch(q)
+    }
+    static func getFatturaRighe(_ id: String) async throws -> [FatturaRiga] {
+        try await sb.fetch("fattura_righe?select=*&fattura_id=eq.\(enc(id))&order=ordine.asc")
+    }
+    static func updateFattura(id: String, fields: [String: Any?]) async throws {
+        var body = fields; body["updated_at"] = isoNow()
+        try await sb.mutate("fatture?id=eq.\(enc(id))", method: "PATCH", body: body)
+    }
+    static func updateSpesa(id: String, fields: [String: Any?]) async throws {
+        try await sb.mutate("spese?id=eq.\(enc(id))", method: "PATCH", body: fields)
+    }
+    @discardableResult
+    static func createFattura(_ fields: [String: Any?], righe: [[String: Any?]]) async throws -> Fattura {
+        let f: Fattura = try await sb.insertReturning("fatture", body: fields)
+        for var r in righe { r["fattura_id"] = f.id; try await sb.mutate("fattura_righe", method: "POST", body: r) }
+        return f
+    }
+    static func setFatturaPdfPath(id: String, path: String) async throws {
+        try await sb.mutate("fatture?id=eq.\(enc(id))", method: "PATCH", body: ["pdf_path": path, "updated_at": isoNow()])
+    }
+    static func updateFatturaStato(id: String, stato: String) async throws {
+        try await sb.mutate("fatture?id=eq.\(enc(id))", method: "PATCH", body: ["stato": stato, "updated_at": isoNow()])
+    }
+    static func uploadFatturaPDF(_ data: Data, anno: Int, numero: Int) async throws -> String {
+        try await sb.uploadFile(bucket: "fatture", path: "\(anno)/\(numero).pdf", data: data, contentType: "application/pdf")
+    }
+    static func downloadFatturaPDF(path: String) async throws -> Data {
+        try await sb.downloadFile(bucket: "fatture", path: path)
+    }
+    /// Elimina la fattura e le sue righe (e tenta di rimuovere il PDF dallo storage).
+    static func deleteFattura(id: String, pdfPath: String?) async throws {
+        try await sb.mutate("fattura_righe?fattura_id=eq.\(enc(id))", method: "DELETE")
+        try await sb.mutate("fatture?id=eq.\(enc(id))", method: "DELETE")
+        if let p = pdfPath { try? await sb.deleteFile(bucket: "fatture", path: p) }
+    }
+
     static func deleteCommessa(id: String) async throws {
         try await sb.mutate("commesse?id=eq.\(enc(id))", method: "DELETE")
+    }
+
+    // ── Spese (fatture passive ricevute/pagate) ──
+    static func listSpese() async throws -> [Spesa] {
+        try await sb.fetch("spese?select=*&order=data.desc.nullslast,created_at.desc&limit=2000")
+    }
+    @discardableResult
+    static func createSpesa(_ fields: [String: Any?]) async throws -> Spesa {
+        try await sb.insertReturning("spese", body: fields)
+    }
+    static func deleteSpesa(id: String, filePath: String?) async throws {
+        try await sb.mutate("spese?id=eq.\(enc(id))", method: "DELETE")
+        if let p = filePath { try? await sb.deleteFile(bucket: "spese", path: p) }
+    }
+    static func uploadSpesaFile(_ data: Data, name: String, contentType: String) async throws -> String {
+        try await sb.uploadFile(bucket: "spese", path: name, data: data, contentType: contentType)
+    }
+    static func downloadSpesaFile(path: String) async throws -> Data {
+        try await sb.downloadFile(bucket: "spese", path: path)
+    }
+
+    // ── Estratti conto (banca) ──
+    static func listEstratti() async throws -> [Estratto] {
+        try await sb.fetch("estratti_conto?select=*&order=anno.desc,mese.desc&limit=1000")
+    }
+    @discardableResult
+    static func createEstratto(_ fields: [String: Any?]) async throws -> Estratto {
+        try await sb.insertReturning("estratti_conto", body: fields)
+    }
+    static func deleteEstratto(id: String, filePath: String?) async throws {
+        try await sb.mutate("estratti_conto?id=eq.\(enc(id))", method: "DELETE")
+        if let p = filePath { try? await sb.deleteFile(bucket: "estratti", path: p) }
+    }
+    static func uploadEstrattoFile(_ data: Data, name: String, contentType: String) async throws -> String {
+        try await sb.uploadFile(bucket: "estratti", path: name, data: data, contentType: contentType)
+    }
+    static func downloadEstrattoFile(path: String) async throws -> Data {
+        try await sb.downloadFile(bucket: "estratti", path: path)
+    }
+
+    // ── Abbinamenti manuali movimento↔spesa/fattura ──
+    static func listMatches() async throws -> [MovMatch] {
+        try await sb.fetch("mov_match?select=*&limit=5000")
+    }
+    static func upsertMatch(txId: String, kind: String, refId: String?) async throws {
+        try await sb.mutate("mov_match", method: "POST",
+                            body: ["tx_id": txId, "kind": kind, "ref_id": refId],
+                            prefer: "resolution=merge-duplicates,return=minimal")
+    }
+    static func deleteMatch(txId: String) async throws {
+        try await sb.mutate("mov_match?tx_id=eq.\(enc(txId))", method: "DELETE")
     }
 
     static func leadStatusCounts(projectId: String) async throws -> [String: Int] {

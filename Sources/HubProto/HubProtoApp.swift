@@ -21,7 +21,18 @@ final class AppState: ObservableObject {
     @Published var navClosed = false
     @Published var lightsHover = false
     @Published var route: Route = .panoramica
+    /// Modalità del menu: cliccando un progetto si apre la sua Dash o il suo Code (terminale Claude).
+    @Published var sidebarMode: ProjectTab = .dash
+    /// Sotto-sezione di Clienti (pannello laterale secondario).
+    @Published var clientiTab: ClientiTab = .clienti
+    @Published var clientiPanelOpen = true
+
+    var isClientiArea: Bool {
+        switch route { case .clienti, .cliente: return true; default: return false }
+    }
 }
+
+enum ClientiTab: String, CaseIterable { case clienti, fatture, spese, banca, export }
 
 enum Route: Equatable {
     case panoramica
@@ -31,6 +42,7 @@ enum Route: Equatable {
     case progetto(slug: String, tab: ProjectTab)
     case lead(slug: String, leadId: String)
     case cliente(id: String)
+    case codeGeneric            // terminale Claude generico, senza progetto
 }
 
 enum ProjectTab: String { case dash, code, altro }
@@ -47,7 +59,7 @@ struct ContentView: View {
             RadialGradient(colors: [Color(hex: 0x151b27), Color(hex: 0x0d111b), Color(hex: 0x070910)],
                            center: UnitPoint(x: 0.5, y: 0.35), startRadius: 0, endRadius: 900)
                 .ignoresSafeArea()
-            GridLines().ignoresSafeArea()
+            DataGridHeroBackground().ignoresSafeArea()
             RadialGradient(colors: [.clear, .black.opacity(0.5)],
                            center: .center, startRadius: 420, endRadius: 980)
                 .ignoresSafeArea()
@@ -59,11 +71,22 @@ struct ContentView: View {
                         // il pannello parte SOTTO i semafori (44px liberi in alto)
                         .padding(EdgeInsets(top: 44, leading: 12, bottom: 14, trailing: 6))
                         .transition(.move(edge: .leading).combined(with: .opacity))
+                        .zIndex(2)   // sopra: il sotto-pannello scorre DIETRO
+                }
+                if state.clientiPanelOpen && state.isClientiArea && !state.navClosed {
+                    ClientiSubnavView()
+                        .frame(width: 188)
+                        .padding(EdgeInsets(top: 44, leading: 0, bottom: 14, trailing: 6))
+                        .transition(.move(edge: .leading))
+                        .zIndex(1)
                 }
                 MainRouter(model: model)
                     .padding(.top, state.navClosed ? 38 : 0)
+                    .zIndex(0)
             }
             .animation(.easeInOut(duration: 0.32), value: state.navClosed)
+            .animation(.easeInOut(duration: 0.28), value: state.isClientiArea)
+            .animation(.easeInOut(duration: 0.28), value: state.clientiPanelOpen)
         }
         .ignoresSafeArea(.container, edges: .top)
         .preferredColorScheme(.dark)
@@ -120,6 +143,14 @@ final class LightsHoverTracker: NSView {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var installedWindows = Set<Int>()
     private let quickDash = QuickDashController()
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if !hasVisibleWindows,
+           let w = sender.windows.first(where: { $0.styleMask.contains(.titled) }) {
+            w.makeKeyAndOrderFront(nil)
+        }
+        return true
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)

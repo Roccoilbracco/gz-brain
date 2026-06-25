@@ -12,7 +12,7 @@ struct MainRouter: View {
         case .progetti:
             ProgettiView(model: model)
         case .clienti:
-            ClientiView(model: model)
+            ClientiSectionView(model: model)
         case .impostazioni:
             ImpostazioniView()
         case .progetto(let slug, let tab):
@@ -28,6 +28,8 @@ struct MainRouter: View {
         case .cliente(let id):
             ClienteDetailView(clienteId: id)
                 .id(id)
+        case .codeGeneric:
+            ProgettoCodeView(project: nil)
         }
     }
 }

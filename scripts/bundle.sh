@@ -1,17 +1,22 @@
 #!/bin/bash
-# Crea "UNVRS Hub Swift.app" dalla build release e la installa in /Applications.
+# Crea "Unvrs Brain.app" dalla build release e la installa in /Applications.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-APP_NAME="UNVRS Hub Swift"
+APP_NAME="Unvrs Brain"
 BUNDLE="build/$APP_NAME.app"
-ICON_SRC="${ICON_SRC:-$HOME/Developer/unvrs-hub/app/icon-source.png}"
+ICON_SRC="${ICON_SRC:-$(pwd)/AppIconSource.png}"
 
 swift build -c release
 
 rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
 cp .build/release/HubProto "$BUNDLE/Contents/MacOS/$APP_NAME"
+
+# script proxy per la Preview locale (Code → Preview): va nelle Resources del bundle
+if [ -f scripts/preview-proxy.mjs ]; then
+  cp scripts/preview-proxy.mjs "$BUNDLE/Contents/Resources/"
+fi
 
 # icona da icon-source.png (stessa della versione Tauri)
 if [ -f "$ICON_SRC" ]; then
