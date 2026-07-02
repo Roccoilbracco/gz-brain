@@ -136,22 +136,7 @@ struct ClientiView: View {
     }
 
     private var searchField: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.6))
-            TextField("Cerca cliente…", text: $search)
-                .textFieldStyle(.plain).font(.system(size: 12)).foregroundStyle(Holo.text)
-                .frame(width: 170)
-            if !search.isEmpty {
-                Button { search = "" } label: {
-                    Image(systemName: "xmark.circle.fill").font(.system(size: 11))
-                        .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.5))
-                }.buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 12).padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color(red: 13/255, green: 21/255, blue: 44/255).opacity(0.75)))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color(red: 125/255, green: 175/255, blue: 1).opacity(0.25), lineWidth: 1))
+        HoloSearchField(placeholder: "Cerca cliente…", text: $search)
     }
 
     // larghezza minima tabella (EMAIL ha min 180) = colonne + spacing(12×5) + padding orizzontale(14×2)

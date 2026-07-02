@@ -55,7 +55,12 @@ final class EasyActModel: ObservableObject {
 
     private func client() -> SupabaseClient? {
         guard let base = project.local_path else { return nil }
-        for p in [base + "/apps/web/.env.local", base + "/.env.local"] {
+        // la service-role viene letta da un .env.local su disco: solo da progetti sotto
+        // ~/Developer — un local_path arbitrario dal DB non deve far caricare chiavi altrui
+        let dev = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Developer").path
+        let normalized = (base as NSString).standardizingPath
+        guard normalized.hasPrefix(dev + "/") else { return nil }
+        for p in [normalized + "/apps/web/.env.local", normalized + "/.env.local"] {
             let env = loadEnv(p)
             if let urlStr = env["NEXT_PUBLIC_SUPABASE_URL"],
                let key = env["SUPABASE_SERVICE_ROLE_KEY"],
@@ -92,7 +97,7 @@ final class EasyActModel: ObservableObject {
     var daAssoc: Int { orgs.filter { $0.referred_by_partner_id != nil }.count }
     var assocAttive: Int { partners.filter { $0.active == true }.count }
     /// Registrazioni clienti per giorno, ultimi 14 giorni (per le colonne animate).
-    var activityBuckets: [Int] { eaBucketByDay(orgs.map { $0.created_at }, days: 14) }
+    var activityBuckets: [Int] { bucketISODatesByDay(orgs.map { $0.created_at }, days: 14) }
 
     func partnerName(_ id: String?) -> String? {
         guard let id else { return nil }
@@ -262,7 +267,7 @@ struct EasyActLayout: View {
             Text("\(model.clientiCount(partner: p)) clienti").font(.system(size: 11)).foregroundStyle(Holo.subDim)
                 .frame(width: 90, alignment: .leading)
             if let share = p.share_cents {
-                Text("\(share / 100)%").font(.system(size: 11, weight: .semibold)).foregroundStyle(Holo.subDim)
+                Text(String(format: "%g%%", Double(share) / 100)).font(.system(size: 11, weight: .semibold)).foregroundStyle(Holo.subDim)
                     .frame(width: 60, alignment: .leading)
             }
             if p.stripe_onboarded == true {
@@ -282,21 +287,7 @@ struct EasyActLayout: View {
     }
 
     private var searchField: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.6))
-            TextField("Cerca cliente…", text: $search)
-                .textFieldStyle(.plain).font(.system(size: 12)).foregroundStyle(Holo.text).frame(width: 180)
-            if !search.isEmpty {
-                Button { search = "" } label: {
-                    Image(systemName: "xmark.circle.fill").font(.system(size: 11))
-                        .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.5))
-                }.buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 12).padding(.vertical, 7)
-        .background(Capsule().fill(Color(red: 13/255, green: 21/255, blue: 44/255).opacity(0.75)))
-        .overlay(Capsule().strokeBorder(Color(red: 125/255, green: 175/255, blue: 1).opacity(0.25), lineWidth: 1))
+        HoloSearchField(placeholder: "Cerca cliente…", text: $search, width: 180, radius: 999)
     }
 }
 
@@ -317,20 +308,7 @@ struct EAAccentCard<Content: View>: View {
     }
 }
 
-/// Bucket di date ISO per giorno (ultimi N giorni), come bucketEventsByDay.
-func eaBucketByDay(_ isoDates: [String?], days: Int, today: Date = Date()) -> [Int] {
-    var buckets = [Int](repeating: 0, count: days)
-    let cal = Calendar.current
-    let end = cal.date(bySettingHour: 23, minute: 59, second: 59, of: today) ?? today
-    for s in isoDates {
-        guard let s, let d = parseISO(s) else { continue }
-        let diff = Int(floor(end.timeIntervalSince(d) / 86_400))
-        if diff >= 0 && diff < days { buckets[days - 1 - diff] += 1 }
-    }
-    return buckets
-}
-
-// ─── Pannello stat EasyAct: Clienti · Diretti · Da associazioni (stile ServicePanel) ───
+// ─── Pannello stat EasyAct: Clienti · Diretti · Da associazioni (StatCap + WaveEqualizer condivisi) ───
 private struct EAStatPanel: View {
     @ObservedObject var model: EasyActModel
 
@@ -340,66 +318,19 @@ private struct EAStatPanel: View {
         EAAccentCard(hue: model.project.hue) {
             VStack(spacing: 10) {
                 HStack(spacing: 14) {
-                    cap("Clienti", n: model.totale, pct: 100, hue: model.project.hue)
-                    cap("Diretti", n: model.diretti, pct: pct(model.diretti), hue: 217)
-                    cap("Da assoc.", n: model.daAssoc, pct: pct(model.daAssoc), hue: 38)
+                    StatCap(label: "Clienti", n: model.totale, pct: 100, hue: model.project.hue)
+                    StatCap(label: "Diretti", n: model.diretti, pct: pct(model.diretti), hue: 217)
+                    StatCap(label: "Da assoc.", n: model.daAssoc, pct: pct(model.daAssoc), hue: 38)
                 }
-                EASparkField(direttiFrac: model.totale > 0 ? CGFloat(model.diretti) / CGFloat(model.totale) : 0.5)
-                    .frame(height: 36)
+                // bande proporzionali: blu = diretti · ambra = da associazioni
+                WaveEqualizer(hueAt: { f in
+                    let frac = model.totale > 0 ? CGFloat(model.diretti) / CGFloat(model.totale) : 0.5
+                    return f < frac ? 217 : 38
+                }, n: 40)
+                .frame(height: 36)
             }
             .padding(EdgeInsets(top: 14, leading: 16, bottom: 10, trailing: 16))
         }
         .frame(maxWidth: .infinity)
-    }
-
-    private func cap(_ label: String, n: Int, pct: Int, hue: Double) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label.uppercased()).font(.system(size: 9, weight: .heavy)).tracking(1.5)
-                .foregroundStyle(Holo.labelDim)
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text("\(n)").font(.system(size: 22, weight: .black)).foregroundStyle(Holo.hsl(hue, 90, 68))
-                    .shadow(color: Holo.hsl(hue, 90, 60).opacity(0.55), radius: 6)
-                Text("\(pct)%").font(.system(size: 10, weight: .semibold)).foregroundStyle(Holo.subDim)
-            }
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.white.opacity(0.07))
-                    Capsule().fill(Holo.hsl(hue, 90, 60))
-                        .frame(width: geo.size.width * CGFloat(pct) / 100)
-                        .shadow(color: Holo.hsl(hue, 90, 60).opacity(0.8), radius: 4)
-                }
-            }
-            .frame(height: 3)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-/// Equalizer rilassato: bande proporzionali (blu = diretti · ambra = da associazioni).
-private struct EASparkField: View {
-    let direttiFrac: CGFloat
-    private let n = 40
-
-    private func hue(at f: CGFloat) -> Double { f < direttiFrac ? 217 : 38 }
-
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30)) { tl in
-            Canvas { ctx, size in
-                let t = tl.date.timeIntervalSinceReferenceDate
-                let slot = size.width / CGFloat(n)
-                let bw: CGFloat = 2.5
-                for i in 0..<n {
-                    let f = CGFloat(i) / CGFloat(n - 1)
-                    let wave = 0.5 + 0.5 * sin(t * 1.3 + Double(i) * 0.45)
-                    let h = 5 + CGFloat(wave) * (size.height - 7)
-                    let x = slot * CGFloat(i) + (slot - bw) / 2
-                    let color = Color(hue: hue(at: f) / 360, saturation: 0.82, brightness: 0.96)
-                        .opacity(0.28 + 0.55 * wave)
-                    ctx.fill(Path(roundedRect: CGRect(x: x, y: size.height - h, width: bw, height: h),
-                                  cornerRadius: 1.25), with: .color(color))
-                }
-            }
-        }
-        .clipped()
     }
 }

@@ -264,11 +264,8 @@ struct PanoramicaView: View {
 
     private var todayCount: Int {
         let cal = Calendar.current
-        let iso = ISO8601DateFormatter()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let isoPlain = ISO8601DateFormatter()
         return model.events.filter { e in
-            guard let d = iso.date(from: e.created_at) ?? isoPlain.date(from: e.created_at) else { return false }
+            guard let d = parseISO(e.created_at) else { return false }
             return cal.isDateInToday(d)
         }.count
     }
@@ -298,26 +295,3 @@ struct DataGridHeroBackground: View {
     }
 }
 
-/// Griglia 64px con mask radiale (replica body::before di holo.css)
-struct GridLines: View {
-    var body: some View {
-        Canvas { ctx, size in
-            let step: CGFloat = 64
-            let color = Color(red: 70/255, green: 120/255, blue: 230/255).opacity(0.055)
-            var x: CGFloat = 0
-            while x <= size.width {
-                ctx.fill(Path(CGRect(x: x, y: 0, width: 1, height: size.height)), with: .color(color))
-                x += step
-            }
-            var y: CGFloat = 0
-            while y <= size.height {
-                ctx.fill(Path(CGRect(x: 0, y: y, width: size.width, height: 1)), with: .color(color))
-                y += step
-            }
-        }
-        .mask(
-            RadialGradient(colors: [.black, .clear],
-                           center: UnitPoint(x: 0.55, y: 0.4), startRadius: 250, endRadius: 800)
-        )
-    }
-}

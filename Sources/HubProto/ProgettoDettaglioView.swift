@@ -66,7 +66,6 @@ struct ProgettoDettaglioView: View {
             switch tab {
             case .dash: dashBody
             case .code: ProgettoCodeView(project: model.project)
-            case .altro: altroBody
             }
         }
         .task(id: model.project.id) { await model.load() }
@@ -142,27 +141,6 @@ struct ProgettoDettaglioView: View {
         }
     }
 
-    private var altroBody: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                backLink
-                GlassCard {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Altro · \(model.project.slug)")
-                            .font(.system(size: 11, weight: .heavy)).tracking(1.5)
-                            .foregroundStyle(Holo.labelDim)
-                        Text("Sezione in arrivo — qui decideremo cosa metterci (note, deploy, documenti, eventi…).")
-                            .font(.system(size: 12.5)).lineSpacing(5)
-                            .foregroundStyle(Color(red: 200/255, green: 222/255, blue: 255/255).opacity(0.7))
-                    }
-                    .padding(EdgeInsets(top: 18, leading: 20, bottom: 18, trailing: 20))
-                }
-                .frame(maxWidth: 560)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(EdgeInsets(top: 40, leading: 30, bottom: 34, trailing: 30))
-        }
-    }
 }
 
 // ─── Layout Energizzo completo (progetto con leads) ───
@@ -227,25 +205,7 @@ private struct EnergizzoLayout: View {
     }
 
     private var searchField: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.6))
-            TextField("Cerca ragione sociale…", text: $searchText)
-                .textFieldStyle(.plain)
-                .font(.system(size: 12))
-                .foregroundStyle(Holo.text)
-                .frame(width: 190)
-            if !searchText.isEmpty {
-                Button { searchText = "" } label: {
-                    Image(systemName: "xmark.circle.fill").font(.system(size: 11))
-                        .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.5))
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 12).padding(.vertical, 7)
-        .background(Capsule().fill(Color(red: 13/255, green: 21/255, blue: 44/255).opacity(0.75)))
-        .overlay(Capsule().strokeBorder(Color(red: 125/255, green: 175/255, blue: 1).opacity(0.25), lineWidth: 1))
+        HoloSearchField(placeholder: "Cerca ragione sociale…", text: $searchText, width: 190, radius: 999)
     }
 
     private func viewTab(_ id: String, _ label: String) -> some View {
@@ -272,19 +232,34 @@ private struct ServicePanel: View {
         GlassCard {
             VStack(spacing: 10) {
                 HStack(spacing: 14) {
-                    cap("Dual", n: dual, hue: 152, bolt: true, flame: true)
-                    cap("Elettrico", n: elet, hue: 38, bolt: true, flame: false)
-                    cap("Gas", n: gas, hue: 217, bolt: false, flame: true)
+                    StatCap(label: "Dual", n: dual, pct: pct(dual), hue: 152, bolt: true, flame: true)
+                    StatCap(label: "Elettrico", n: elet, pct: pct(elet), hue: 38, bolt: true, flame: false)
+                    StatCap(label: "Gas", n: gas, pct: pct(gas), hue: 217, bolt: false, flame: true)
                 }
-                SparkField(dual: dual, elet: elet, gas: gas, total: total)
-                    .frame(height: 36)
+                // bande proporzionali al mix (verde Dual · ambra Elettrico · blu Gas)
+                WaveEqualizer(hueAt: { f in
+                    let d = total > 0 ? CGFloat(dual) / CGFloat(total) : 0.34
+                    let e = total > 0 ? CGFloat(elet) / CGFloat(total) : 0.33
+                    return f < d ? 152 : (f < d + e ? 38 : 217)
+                })
+                .frame(height: 36)
             }
             .padding(EdgeInsets(top: 14, leading: 16, bottom: 10, trailing: 16))
         }
         .frame(maxWidth: .infinity)
     }
+}
 
-    private func cap(_ label: String, n: Int, hue: Double, bolt: Bool, flame: Bool) -> some View {
+/// Mini-stat con barra (usata dai pannelli servizio Energizzo ed EasyAct).
+struct StatCap: View {
+    let label: String
+    let n: Int
+    let pct: Int
+    let hue: Double
+    var bolt = false
+    var flame = false
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
                 if bolt { Image(systemName: "bolt.fill").font(.system(size: 9)).foregroundStyle(Holo.hsl(38, 92, 62)) }
@@ -296,13 +271,13 @@ private struct ServicePanel: View {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
                 Text("\(n)").font(.system(size: 22, weight: .black)).foregroundStyle(Holo.hsl(hue, 90, 68))
                     .shadow(color: Holo.hsl(hue, 90, 60).opacity(0.55), radius: 6)
-                Text("\(pct(n))%").font(.system(size: 10, weight: .semibold)).foregroundStyle(Holo.subDim)
+                Text("\(pct)%").font(.system(size: 10, weight: .semibold)).foregroundStyle(Holo.subDim)
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.white.opacity(0.07))
                     Capsule().fill(Holo.hsl(hue, 90, 60))
-                        .frame(width: geo.size.width * CGFloat(pct(n)) / 100)
+                        .frame(width: geo.size.width * CGFloat(pct) / 100)
                         .shadow(color: Holo.hsl(hue, 90, 60).opacity(0.8), radius: 4)
                 }
             }
@@ -312,21 +287,11 @@ private struct ServicePanel: View {
     }
 }
 
-/// Equalizer ordinato: barre equidistanti mosse da un'onda morbida che viaggia,
-/// colorate in 3 bande proporzionali al mix (verde Dual · ambra Elettrico · blu Gas).
-private struct SparkField: View {
-    let dual: Int, elet: Int, gas: Int, total: Int
-
-    private let n = 44
-
-    // proporzioni → larghezza delle bande colore (fallback equo se vuoto)
-    private func hue(at f: CGFloat) -> Double {
-        let d = total > 0 ? CGFloat(dual) / CGFloat(total) : 0.34
-        let e = total > 0 ? CGFloat(elet) / CGFloat(total) : 0.33
-        if f < d { return 152 }        // Dual = verde
-        if f < d + e { return 38 }     // Elettrico = ambra
-        return 217                     // Gas = blu
-    }
+/// Equalizer ordinato: barre equidistanti mosse da un'onda morbida che viaggia;
+/// hueAt(0..1) decide il colore per posizione (bande proporzionali).
+struct WaveEqualizer: View {
+    let hueAt: (CGFloat) -> Double
+    var n = 44
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30)) { tl in
@@ -340,7 +305,7 @@ private struct SparkField: View {
                     let wave = 0.5 + 0.5 * sin(t * 1.3 + Double(i) * 0.45)
                     let h = 5 + CGFloat(wave) * (size.height - 7)
                     let x = slot * CGFloat(i) + (slot - bw) / 2
-                    let color = Color(hue: hue(at: f) / 360, saturation: 0.82, brightness: 0.96)
+                    let color = Color(hue: hueAt(f) / 360, saturation: 0.82, brightness: 0.96)
                         .opacity(0.28 + 0.55 * wave)
                     ctx.fill(Path(roundedRect: CGRect(x: x, y: size.height - h, width: bw, height: h),
                                   cornerRadius: 1.25), with: .color(color))
@@ -348,16 +313,6 @@ private struct SparkField: View {
             }
         }
         .clipped()
-    }
-}
-
-/// RNG deterministico (niente Math.random in layout: stessa scena a ogni render)
-struct SeededRandom {
-    private var state: UInt64
-    init(seed: UInt64) { state = seed }
-    mutating func next() -> Double {
-        state = state &* 6364136223846793005 &+ 1442695040888963407
-        return Double(state >> 11) / Double(UInt64.max >> 11)
     }
 }
 

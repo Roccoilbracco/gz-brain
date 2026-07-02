@@ -84,7 +84,7 @@ struct FatturaEditorView: View {
                                    startPoint: .top, endPoint: .bottom))
         .preferredColorScheme(.dark)
         .onAppear { if selCliente == nil { selCliente = clienteId }; Task { await loadNumero() } }
-        .onChange(of: anno) { _, _ in Task { await loadNumero() } }
+        .onChange(of: anno) { _, _ in numeroText = ""; Task { await loadNumero() } }
     }
 
     // ── Card: dettagli ──
@@ -152,8 +152,13 @@ struct FatturaEditorView: View {
             }
             Button { righe.append(RigaInput()) } label: {
                 HStack(spacing: 5) { Image(systemName: "plus.circle"); Text("Aggiungi riga") }
-                    .font(.system(size: 12, weight: .medium)).foregroundStyle(Holo.hsl(217, 80, 72))
-            }.buttonStyle(.plain).padding(.top, 2)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(righe.count >= 8 ? Holo.labelDim : Holo.hsl(217, 80, 72))
+            }.buttonStyle(.plain).padding(.top, 2).disabled(righe.count >= 8)
+            if righe.count >= 8 {
+                Text("Massimo 8 righe: il template PDF è una pagina A4 singola.")
+                    .font(.system(size: 10.5)).foregroundStyle(Holo.labelDim)
+            }
         }
     }
 
@@ -217,14 +222,6 @@ struct FatturaEditorView: View {
         .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color(red: 130/255, green: 180/255, blue: 1).opacity(0.4), lineWidth: 1))
     }
 
-    private func clienteRiga(_ c: Cliente) -> String {
-        var parts: [String] = []
-        let ind = clienteIndirizzoCompleto(c)
-        if !ind.isEmpty { parts.append(ind) }
-        if let p = c.piva, !p.isEmpty { parts.append("VAT Number: \(p)") }
-        return parts.joined(separator: " - ")
-    }
-
     private func save() {
         guard let cid = selCliente, let cliente = model.clienti.first(where: { $0.id == cid }),
               let azienda = model.azienda else { err = "Cliente o dati aziendali mancanti."; return }
@@ -235,7 +232,14 @@ struct FatturaEditorView: View {
         Task {
             do {
                 let numero = numeroInt > 0 ? numeroInt : (try await HubAPI.nextNumero(anno: anno))
-                let imp = imponibile, ivaC = iva, tot = totale
+                guard try await HubAPI.fatturaExists(anno: anno, numero: numero) == false else {
+                    await MainActor.run { saving = false; err = "Esiste già la fattura \(anno)\(String(format: "%03d", numero)): cambia numero." }
+                    return
+                }
+                // totali dalle sole righe valide (quelle che finiscono in fattura)
+                let imp = valid.map(rigaTot).reduce(0, +)
+                let ivaC = Int((Double(imp) * Double(vatMode.rate) / 100).rounded())
+                let tot = imp + ivaC
                 let righeBodies: [[String: Any?]] = valid.enumerated().map { idx, r in
                     let p = Money.parse(r.prezzo) ?? 0
                     let q = Double(r.qta.replacingOccurrences(of: ",", with: ".")) ?? 1
@@ -255,15 +259,17 @@ struct FatturaEditorView: View {
                     return InvoiceData.Riga(desc: r.desc, qta: qStr, prezzoC: p, totaleC: Int((Double(p) * q).rounded()))
                 }
                 let inv = InvoiceData(
-                    azienda: azienda, clienteNome: cliente.ragione_sociale, clienteRiga: clienteRiga(cliente),
+                    azienda: azienda, clienteNome: cliente.ragione_sociale, clienteRiga: fatturaClienteRiga(cliente),
                     numero: "\(anno)\(String(format: "%03d", numero))", data: eaDate(data, "dd/MM/yyyy"),
                     righe: invRighe, imponibileC: imp, ivaC: ivaC, totaleC: tot,
-                    vatRate: vatMode.rate, vatNote: vatMode.note, logo: model.logo)
-                if let pdf = await InvoicePDF.render(inv) {
+                    vatNote: vatMode.note, logo: model.logo)
+                if let pdf = InvoicePDF.render(inv) {
                     let path = try await HubAPI.uploadFatturaPDF(pdf, anno: anno, numero: numero)
                     try await HubAPI.setFatturaPdfPath(id: f.id, path: path)
+                    await MainActor.run { saving = false; onSaved(); dismiss() }
+                } else {
+                    await MainActor.run { saving = false; onSaved(); err = "Fattura salvata ma PDF non generato: modificala e risalva per rigenerarlo." }
                 }
-                await MainActor.run { saving = false; onSaved(); dismiss() }
             } catch {
                 await MainActor.run { saving = false; err = error.localizedDescription }
             }

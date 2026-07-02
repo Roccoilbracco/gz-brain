@@ -13,7 +13,6 @@ enum Csb {
     static let itemOn = Color(hex: 0x1c2436)        // selezione blu-tinta desaturata
     static let secFg = Color(hex: 0x6b7384)
     static let tagFg = Color(hex: 0x7c8496)
-    static let tagBorder = Color(hex: 0x2a3344)
     static let footBorder = Color(hex: 0x1e2536)
     static let avatar = Color(hex: 0xd97757)        // accento caldo: pop arancio
 }

@@ -151,6 +151,32 @@ struct EmptyStateCard: View {
 }
 
 // Bottone-icona uniforme: monocromo, sfondo + leggero scale al passaggio del mouse (animazione)
+// ─── Campo ricerca condiviso (stile holo): radius 999 = capsula ───
+struct HoloSearchField: View {
+    let placeholder: String
+    @Binding var text: String
+    var width: CGFloat = 170
+    var radius: CGFloat = 10
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.6))
+            TextField(placeholder, text: $text)
+                .textFieldStyle(.plain).font(.system(size: 12)).foregroundStyle(Holo.text).frame(width: width)
+            if !text.isEmpty {
+                Button { text = "" } label: {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 11))
+                        .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.5))
+                }.buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: radius).fill(Color(red: 13/255, green: 21/255, blue: 44/255).opacity(0.75)))
+        .overlay(RoundedRectangle(cornerRadius: radius).strokeBorder(Color(red: 125/255, green: 175/255, blue: 1).opacity(0.25), lineWidth: 1))
+    }
+}
+
 struct IconButton: View {
     let icon: String
     let help: String
@@ -423,7 +449,10 @@ struct ClienteDetailView: View {
                     .frame(width: 90, alignment: .trailing)
             }
             Button {
-                Task { try? await HubAPI.deleteCommessa(id: com.id); await load() }
+                Task {
+                    do { try await HubAPI.deleteCommessa(id: com.id); await load() }
+                    catch let e { errorMsg = "Eliminazione commessa fallita: \(e.localizedDescription)" }
+                }
             } label: {
                 Image(systemName: "trash").font(.system(size: 11)).foregroundStyle(Holo.labelDim)
             }.buttonStyle(.plain)
@@ -448,8 +477,13 @@ struct ClienteDetailView: View {
     }
     private func delete() {
         Task {
-            try? await HubAPI.deleteCliente(id: clienteId)
-            await MainActor.run { AppState.shared.route = .clienti }
+            do {
+                try await HubAPI.deleteCliente(id: clienteId)
+                await MainActor.run { AppState.shared.route = .clienti }
+            } catch let e {
+                // se il DELETE fallisce (es. FK su fatture) il cliente esiste ancora: niente navigazione
+                await MainActor.run { errorMsg = "Eliminazione fallita: \(e.localizedDescription)" }
+            }
         }
     }
 }
@@ -654,7 +688,8 @@ struct CommessaFormView: View {
             do {
                 try await HubAPI.createCommessa([
                     "cliente_id": clienteId, "nome": n, "tipo": nz(tipo), "stato": stato,
-                    "importo": nz(importo).flatMap { Double($0) }, "note": nz(note),
+                    // Money.parse gestisce "1.500" e "1500,50" (Double() grezzo li perdeva in silenzio)
+                    "importo": nz(importo).flatMap { Money.parse($0) }.map { Double($0) / 100 }, "note": nz(note),
                 ])
                 await MainActor.run { saving = false; onSaved(); dismiss() }
             } catch {
@@ -772,7 +807,7 @@ struct ClienteDocumentiSection: View {
         guard let data = try? await HubAPI.downloadClienteFile(path: d.path) else { msg = "Documento non disponibile."; return }
         let ext = (d.path as NSString).pathExtension
         let base = (d.nome as NSString).deletingPathExtension
-        let url = FileManager.default.temporaryDirectory
+        let url = appTempDir()
             .appendingPathComponent(base.isEmpty ? "documento" : base)
             .appendingPathExtension(ext.isEmpty ? "pdf" : ext)
         try? data.write(to: url)

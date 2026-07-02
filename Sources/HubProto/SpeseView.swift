@@ -14,8 +14,12 @@ final class SpeseModel: ObservableObject {
         catch let e { error = e.localizedDescription }
         loading = false
     }
-    var totale: Int { spese.reduce(0) { $0 + $1.importo_cents } }
+    /// Uscita reale dal conto: imponibile + IVA (coerente con la riconciliazione)
+    var totale: Int { spese.reduce(0) { $0 + $1.importo_cents + $1.iva_cents } }
 }
+
+// categorie condivise dai due form spesa (nuova + modifica)
+let SPESA_CATEGORIE = ["Software", "Consulenza", "Hosting/Cloud", "Marketing", "Hardware", "Servizi", "Tasse/Bolli", "Altro"]
 
 // ─── Spese: fatture passive ricevute/pagate ───
 struct SpeseView: View {
@@ -139,21 +143,7 @@ struct SpeseView: View {
     }
 
     private var searchField: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.6))
-            TextField("Cerca spesa…", text: $search)
-                .textFieldStyle(.plain).font(.system(size: 12)).foregroundStyle(Holo.text).frame(width: 160)
-            if !search.isEmpty {
-                Button { search = "" } label: {
-                    Image(systemName: "xmark.circle.fill").font(.system(size: 11))
-                        .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.5))
-                }.buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 12).padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color(red: 13/255, green: 21/255, blue: 44/255).opacity(0.75)))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color(red: 125/255, green: 175/255, blue: 1).opacity(0.25), lineWidth: 1))
+        HoloSearchField(placeholder: "Cerca spesa…", text: $search, width: 160)
     }
     private var addButton: some View {
         MenuPillButton(label: "Carica spesa", icon: "tray.and.arrow.down.fill") { showForm = true }
@@ -186,7 +176,7 @@ struct SpeseView: View {
             msg = "Allegato non disponibile."; return
         }
         let ext = (path as NSString).pathExtension
-        let url = FileManager.default.temporaryDirectory
+        let url = appTempDir()
             .appendingPathComponent((s.fornitore ?? "spesa").replacingOccurrences(of: "/", with: "-"))
             .appendingPathExtension(ext.isEmpty ? "pdf" : ext)
         try? data.write(to: url)
@@ -199,10 +189,10 @@ struct SpeseView: View {
     }
 }
 
-// cents → "1234,56" per i campi input
+// cents → "1234,56" per i campi input (segno esplicito: -50/100 = 0 e perdeva il "-")
 func centsToInput(_ c: Int) -> String {
     guard c != 0 else { return "" }
-    return "\(c/100)," + String(format: "%02d", abs(c) % 100)
+    return (c < 0 ? "-" : "") + "\(abs(c)/100)," + String(format: "%02d", abs(c) % 100)
 }
 func parseYMD(_ s: String?) -> Date {
     let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
@@ -224,7 +214,7 @@ struct SpesaEditView: View {
     @State private var saving = false
     @State private var err: String?
 
-    private let categorie = ["Software", "Consulenza", "Hosting/Cloud", "Marketing", "Hardware", "Servizi", "Tasse/Bolli", "Altro"]
+    private let categorie = SPESA_CATEGORIE
 
     init(spesa: Spesa, onSaved: @escaping () -> Void) {
         self.spesa = spesa; self.onSaved = onSaved
@@ -326,7 +316,7 @@ struct SpesaFormView: View {
     @State private var saving = false
     @State private var err: String?
 
-    private let categorie = ["Software", "Consulenza", "Hosting/Cloud", "Marketing", "Hardware", "Servizi", "Tasse/Bolli", "Altro"]
+    private let categorie = SPESA_CATEGORIE
 
     var body: some View {
         ScrollView {

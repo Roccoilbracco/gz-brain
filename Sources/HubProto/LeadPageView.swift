@@ -39,6 +39,7 @@ struct LeadPageView: View {
     @State private var updatingStatus = false
     @State private var loading = true
     @State private var error: String?
+    @State private var actionError: String?   // errori di nota/stadio: non oscurano la pagina
 
     var body: some View {
         ScrollView {
@@ -55,6 +56,9 @@ struct LeadPageView: View {
                 } else if let error {
                     GlassCard { Text("Errore: \(error)").foregroundStyle(Color(hex: 0xffb3ad)).padding(20) }
                 } else if let lead {
+                    if let actionError {
+                        Text("Errore: \(actionError)").font(.system(size: 11.5)).foregroundStyle(Color(hex: 0xffb3ad))
+                    }
                     headerCard(lead)
                     HStack(alignment: .top, spacing: 16) {
                         VStack(spacing: 16) {
@@ -89,25 +93,25 @@ struct LeadPageView: View {
 
     private func changeStatus(_ newStatus: String) async {
         guard let l = lead, newStatus != l.status, !updatingStatus else { return }
-        updatingStatus = true
+        updatingStatus = true; actionError = nil
         do {
             try await HubAPI.updateLeadStatus(l, to: newStatus)
             if let updated = try await HubAPI.getLead(id: l.id) { lead = updated }
             activity = try await HubAPI.getLeadDetail(leadId: l.id).activity
-        } catch { self.error = error.localizedDescription }
+        } catch { actionError = error.localizedDescription }
         updatingStatus = false
     }
 
     private func addNote() async {
         guard let l = lead, !newNote.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        addingNote = true
+        addingNote = true; actionError = nil
         do {
             try await HubAPI.addLeadNote(l, body: newNote.trimmingCharacters(in: .whitespacesAndNewlines))
             newNote = ""
             let d = try await HubAPI.getLeadDetail(leadId: l.id)
             notes = d.notes
             activity = d.activity
-        } catch { self.error = error.localizedDescription }
+        } catch { actionError = error.localizedDescription }
         addingNote = false
     }
 

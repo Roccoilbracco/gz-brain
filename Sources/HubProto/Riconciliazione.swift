@@ -9,32 +9,8 @@ struct Movimento: Identifiable {
     let desc: String
 }
 
-func parseAmountCents(_ raw: String) -> Int? {
-    var s = raw.trimmingCharacters(in: .whitespaces)
-    if s.isEmpty { return nil }
-    var neg = false
-    if s.hasPrefix("(") && s.hasSuffix(")") { neg = true; s.removeFirst(); s.removeLast() }
-    for sym in ["€", "$", "£", "EUR", "USD"] { s = s.replacingOccurrences(of: sym, with: "") }
-    s = s.replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "\u{00a0}", with: "")
-    if s.hasPrefix("+") { s.removeFirst() }
-    if s.contains("-") { neg = true; s = s.replacingOccurrences(of: "-", with: "") }
-    let hasDot = s.contains("."), hasComma = s.contains(",")
-    if hasDot && hasComma {
-        if s.lastIndex(of: ",")! > s.lastIndex(of: ".")! {
-            s = s.replacingOccurrences(of: ".", with: "").replacingOccurrences(of: ",", with: ".")
-        } else { s = s.replacingOccurrences(of: ",", with: "") }
-    } else if hasComma {
-        s = s.replacingOccurrences(of: ",", with: ".")
-    } else if hasDot {
-        let parts = s.split(separator: ".")
-        if parts.count > 2 || (parts.count == 2 && parts.last!.count != 2) {
-            s = s.replacingOccurrences(of: ".", with: "")
-        }
-    }
-    guard let d = Double(s) else { return nil }
-    let cents = Int((d * 100).rounded())
-    return neg ? -cents : cents
-}
+// Parser unico degli importi: vive in Money.parse (FattureModels.swift)
+func parseAmountCents(_ raw: String) -> Int? { Money.parse(raw) }
 
 private func csvSplit(_ line: String, _ delim: Character) -> [String] {
     var out: [String] = []; var cur = ""; var q = false
@@ -60,19 +36,28 @@ func parseBankCSV(_ text: String) -> [Movimento] {
     let header = lines[0]
     let delim: Character = header.filter { $0 == ";" }.count > header.filter { $0 == "," }.count ? ";" : ","
     let cols = csvSplit(header, delim).map { $0.lowercased().trimmingCharacters(in: .whitespaces) }
+    // itera le CHIAVI in ordine: la prima chiave che matcha vince (priorità reale —
+    // con il loop sulle colonne "started date" batteva "completed date" perché viene prima nell'header)
     func findIdx(_ keys: [String], avoid: [String] = []) -> Int? {
-        for (i, c) in cols.enumerated() where keys.contains(where: { c.contains($0) }) && !avoid.contains(where: { c.contains($0) }) { return i }
+        for k in keys {
+            for (i, c) in cols.enumerated() where c.contains(k) && !avoid.contains(where: { c.contains($0) }) { return i }
+        }
         return nil
     }
     let dateIdx = findIdx(["completed date", "date completed", "data contabile", "data valuta", "completed", "data", "date", "started"])
     let amtIdx = findIdx(["amount", "importo", "value"], avoid: ["fee", "balance", "saldo", "orig", "commission", "total"])
     let descIdx = findIdx(["description", "descrizione", "reference", "causale", "merchant", "beneficiary", "payee", "narrative"])
     let idIdx = cols.firstIndex(of: "id") ?? findIdx(["transaction id", "tx id", "trans id"])
+    let stateIdx = findIdx(["state", "stato", "status"])
+    // stati Revolut che NON sono movimenti reali (lista chiusa: altri istituti usano valori diversi)
+    let skipStates: Set<String> = ["REVERTED", "PENDING", "DECLINED", "FAILED", "CANCELLED"]
     guard let ai = amtIdx else { return [] }
     var movs: [Movimento] = []
     for line in lines.dropFirst() {
         let cells = csvSplit(line, delim)
         guard cells.count > ai, let amt = parseAmountCents(cells[ai]), amt != 0 else { continue }
+        if let si = stateIdx, cells.count > si,
+           skipStates.contains(cells[si].trimmingCharacters(in: .whitespaces).uppercased()) { continue }
         let date = String((dateIdx.flatMap { cells.count > $0 ? cells[$0] : nil } ?? "").prefix(10))
         let desc = (descIdx.flatMap { cells.count > $0 ? cells[$0] : nil } ?? "").trimmingCharacters(in: .whitespaces)
         let tx = (idIdx.flatMap { cells.count > $0 ? cells[$0] : nil }).flatMap { $0.isEmpty ? nil : $0 } ?? "\(date)|\(amt)|\(desc)"
@@ -108,13 +93,18 @@ func reconcile(_ movs: [Movimento], fatture: [Fattura], spese: [Spesa],
                matches: [String: MovMatch], anno: Int, mese: Int) -> Riconc {
     var r = Riconc(); r.totMov = movs.count
     var usedF = Set<String>(), usedS = Set<String>()
-    // pass 1 — abbinamenti manuali
+    // pass 0 — TUTTI i match salvati bloccano i loro riferimenti: una spesa abbinata
+    // sull'estratto di gennaio non deve tornare "libera" per l'auto-match di febbraio
+    for mm in matches.values {
+        if mm.kind == "spesa", let rid = mm.ref_id { usedS.insert(rid) }
+        if mm.kind == "fattura", let rid = mm.ref_id { usedF.insert(rid) }
+    }
+    // pass 1 — abbinamenti manuali dei movimenti di QUESTO estratto (contatori)
     for m in movs {
         guard let mm = matches[m.txId] else { continue }
         switch mm.kind {
         case "ignora": r.ignorati += 1
-        case "spesa":   if let rid = mm.ref_id { usedS.insert(rid); r.matched += 1 }
-        case "fattura": if let rid = mm.ref_id { usedF.insert(rid); r.matched += 1 }
+        case "spesa", "fattura": if mm.ref_id != nil { r.matched += 1 }
         default: break
         }
     }
@@ -193,7 +183,7 @@ struct RiconciliazioneView: View {
                         if !r.fattureNonPagate.isEmpty || !r.speseNonPagate.isEmpty {
                             sezione("Registrate ma non risultano sull'estratto di questo mese", color: 0x8fb3ff) {
                                 ForEach(r.fattureNonPagate) { f in
-                                    infoRow("Fattura \(f.anno)\(String(format: "%03d", f.numero))", Money.eur(f.totale_cents), "in entrata")
+                                    infoRow("Fattura \(f.numeroCompleto)", Money.eur(f.totale_cents), "in entrata")
                                 }
                                 ForEach(r.speseNonPagate) { s in
                                     infoRow("Spesa \(s.fornitore ?? "")", Money.eur(s.importo_cents + s.iva_cents), "in uscita")
@@ -221,7 +211,10 @@ struct RiconciliazioneView: View {
         }
         do {
             let data = try await HubAPI.downloadEstrattoFile(path: path)
-            movs = parseBankCSV(String(decoding: data, as: UTF8.self))
+            // UTF-8 con fallback Latin-1 (CSV di banche italiane): decodifica lossy
+            // cambierebbe le descrizioni e quindi i txId derivati, perdendo gli abbinamenti
+            let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
+            movs = parseBankCSV(text)
             let all = try await HubAPI.listMatches()
             matches = Dictionary(uniqueKeysWithValues: all.map { ($0.tx_id, $0) })
             if movs.isEmpty {
@@ -239,8 +232,11 @@ struct RiconciliazioneView: View {
         Task { try? await HubAPI.upsertMatch(txId: tx, kind: kind, refId: refId) }
     }
     private func azzera() async {
+        // rimuove SOLO gli abbinamenti dei movimenti di questo estratto:
+        // matches contiene anche quelli degli altri mesi, che restano validi
         let ids = movs.map { $0.txId }.filter { matches[$0] != nil }
-        matches.removeAll(); recompute()
+        for id in ids { matches.removeValue(forKey: id) }
+        recompute()
         for id in ids { try? await HubAPI.deleteMatch(txId: id) }
     }
 
@@ -294,7 +290,7 @@ struct RiconciliazioneView: View {
             } else {
                 if r.fattureLibere.isEmpty { Text("Nessuna fattura libera") }
                 ForEach(r.fattureLibere) { f in
-                    Button("Fattura \(f.anno)\(String(format: "%03d", f.numero)) — \(Money.eur(f.totale_cents))") {
+                    Button("Fattura \(f.numeroCompleto) — \(Money.eur(f.totale_cents))") {
                         setMatch(m.txId, kind: "fattura", refId: f.id)
                     }
                 }

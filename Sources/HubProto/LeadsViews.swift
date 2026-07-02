@@ -65,7 +65,15 @@ struct LeadStatusBadgeView: View {
 }
 
 func openExternal(_ urlString: String) {
-    if let url = URL(string: urlString) { NSWorkspace.shared.open(url) }
+    // solo schemi attesi: un valore malevolo dal DB (file://, app-scheme custom) non deve aprirsi
+    var s = urlString.trimmingCharacters(in: .whitespaces)
+    let allowed = ["http", "https", "mailto", "tel"]
+    if let scheme = URL(string: s)?.scheme?.lowercased() {
+        guard allowed.contains(scheme) else { return }
+    } else {
+        s = "https://\(s)"   // "sito.it" senza schema
+    }
+    if let url = URL(string: s) { NSWorkspace.shared.open(url) }
 }
 
 // ─── Tabella leads con paginazione (replica EnergizzoTable) ───
@@ -422,19 +430,24 @@ struct ClusterMap: NSViewRepresentable {
     }
 
     func updateNSView(_ map: MKMapView, context: Context) {
-        let existing = map.annotations.count - (map.annotations.first(where: { $0 is MKUserLocation }) != nil ? 1 : 0)
         let coords = leads.compactMap { l -> CLLocationCoordinate2D? in
             guard let lat = l.latitude, let lon = l.longitude else { return nil }
             return CLLocationCoordinate2D(latitude: lat, longitude: lon)
         }
-        guard existing != coords.count else { return }
-        map.removeAnnotations(map.annotations)
+        // hash delle coordinate, non solo il conteggio: un set diverso a parità di numero deve aggiornare i pin
+        var h = Hasher()
+        for c in coords { h.combine(c.latitude); h.combine(c.longitude) }
+        let key = h.finalize()
+        guard context.coordinator.lastKey != key else { return }
+        context.coordinator.lastKey = key
+        map.removeAnnotations(map.annotations.filter { !($0 is MKUserLocation) })
         map.addAnnotations(coords.map(LeadAnnotation.init))
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     final class Coordinator: NSObject, MKMapViewDelegate {
+        var lastKey: Int?
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
             guard !(annotation is MKUserLocation) else { return nil }
             let id = annotation is MKClusterAnnotation

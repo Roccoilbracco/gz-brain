@@ -53,7 +53,7 @@ struct Fattura: Decodable, Identifiable {
     let stato: String
     let note: String?
     let pdf_path: String?
-    var numeroCompleto: String { "\(anno)/\(String(format: "%03d", numero))" }
+    var numeroCompleto: String { "\(anno)\(String(format: "%03d", numero))" }
 }
 
 struct FatturaRiga: Decodable, Identifiable {
@@ -108,14 +108,34 @@ enum Money {
         }
         return "\(neg ? "-" : "")€\(s),\(String(format: "%02d", cc))"
     }
-    /// "1234,56" / "1234.56" / "1.234,56" → cents
+    /// "1234,56" / "1234.56" / "1.234,56" / "1.500" / "(10,50)" → cents
     static func parse(_ s: String) -> Int? {
-        var t = s.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "€", with: "").trimmingCharacters(in: .whitespaces)
+        var t = s.trimmingCharacters(in: .whitespaces)
         if t.isEmpty { return nil }
-        // se ha sia '.' che ',' → '.' è separatore migliaia
-        if t.contains(",") && t.contains(".") { t = t.replacingOccurrences(of: ".", with: "") }
-        t = t.replacingOccurrences(of: ",", with: ".")
+        var neg = false
+        if t.hasPrefix("(") && t.hasSuffix(")") { neg = true; t.removeFirst(); t.removeLast() }
+        for sym in ["€", "$", "£", "EUR", "USD"] { t = t.replacingOccurrences(of: sym, with: "") }
+        t = t.replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "\u{00a0}", with: "")
+        if t.hasPrefix("+") { t.removeFirst() }
+        if t.contains("-") { neg = true; t = t.replacingOccurrences(of: "-", with: "") }
+        let hasDot = t.contains("."), hasComma = t.contains(",")
+        if hasDot && hasComma {
+            // vince come decimale il separatore più a destra
+            if t.lastIndex(of: ",")! > t.lastIndex(of: ".")! {
+                t = t.replacingOccurrences(of: ".", with: "").replacingOccurrences(of: ",", with: ".")
+            } else { t = t.replacingOccurrences(of: ",", with: "") }
+        } else if hasComma {
+            t = t.replacingOccurrences(of: ",", with: ".")
+        } else if hasDot {
+            // solo punto: con più gruppi o esattamente 3 cifre finali è separatore migliaia ("1.500"),
+            // con 1-2 cifre finali è decimale ("10.5", "1234.56")
+            let parts = t.split(separator: ".")
+            if parts.count > 2 || (parts.count == 2 && parts.last!.count == 3) {
+                t = t.replacingOccurrences(of: ".", with: "")
+            }
+        }
         guard let d = Double(t) else { return nil }
-        return Int((d * 100).rounded())
+        let cents = Int((d * 100).rounded())
+        return neg ? -cents : cents
     }
 }

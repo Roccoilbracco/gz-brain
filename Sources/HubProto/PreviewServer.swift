@@ -49,10 +49,12 @@ enum PreviewServer {
             onStatus("Avvio dev server…")
             spawn(npm, ["run", "dev", "--", "--port", "\(dev)", "--host", "127.0.0.1"],
                   cwd: dir, env: ["PORT": "\(dev)"], logName: "unvrs-hub-dev-\(dev)")
+            rememberPort(dev)
         }
         if !isListening(proxy) {
             spawn(node, [proxyScriptPath(), "\(proxy)", "\(dev)"], cwd: dir,
                   logName: "unvrs-hub-proxy-\(proxy)")
+            rememberPort(proxy)
         }
 
         onStatus("Attendo il dev server…")
@@ -81,12 +83,28 @@ enum PreviewServer {
             let bundled = res + "/preview-proxy.mjs"
             if FileManager.default.fileExists(atPath: bundled) { return bundled }
         }
-        // fallback: sorgente nel repo (cartella attuale del progetto)
-        let candidates = [
-            NSHomeDirectory() + "/Developer/unvrs-brain/scripts/preview-proxy.mjs",
-            NSHomeDirectory() + "/Developer/unvrs-hub-swift/scripts/preview-proxy.mjs",
-        ]
-        return candidates.first { FileManager.default.fileExists(atPath: $0) } ?? candidates[0]
+        // fallback: sorgente nel repo
+        return NSHomeDirectory() + "/Developer/unvrs-brain/scripts/preview-proxy.mjs"
+    }
+
+    // ── cleanup: i processi spawnati in questa sessione vengono chiusi all'uscita dell'app ──
+    private static let stateLock = NSLock()
+    private static var startedPorts = Set<Int>()
+
+    private static func rememberPort(_ port: Int) {
+        stateLock.lock(); startedPorts.insert(port); stateLock.unlock()
+    }
+
+    /// Termina dev server e proxy avviati in questa sessione (via porta: npm spawna figli
+    /// che un semplice terminate() sul padre non chiuderebbe).
+    static func shutdown() {
+        stateLock.lock(); let ports = startedPorts; startedPorts.removeAll(); stateLock.unlock()
+        for port in ports {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/bin/sh")
+            p.arguments = ["-c", "/usr/sbin/lsof -ti tcp:\(port) | xargs kill 2>/dev/null"]
+            try? p.run(); p.waitUntilExit()
+        }
     }
 
     private static func firstExisting(_ paths: [String]) -> String? {
