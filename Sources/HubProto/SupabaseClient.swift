@@ -70,6 +70,15 @@ struct SupabaseClient {
         return first
     }
 
+    /// INSERT bulk (array JSON): tutte le righe in una sola richiesta, atomica lato PostgREST.
+    func insertMany(_ table: String, rows: [[String: Any?]]) async throws {
+        guard !rows.isEmpty else { return }
+        var req = try request(table, method: "POST", prefer: "return=minimal")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: rows.map { $0.mapValues { $0 ?? NSNull() } })
+        _ = try await run(req)
+    }
+
     // ── Storage (/storage/v1/object) ──
     @discardableResult
     func uploadFile(bucket: String, path: String, data: Data, contentType: String) async throws -> String {
@@ -294,23 +303,37 @@ enum HubAPI {
     static func updateSpesa(id: String, fields: [String: Any?]) async throws {
         try await sb.mutate("spese?id=eq.\(enc(id))", method: "PATCH", body: fields)
     }
+    static func fatturaExists(anno: Int, numero: Int) async throws -> Bool {
+        struct R: Decodable { let id: String }
+        let rows: [R] = try await sb.fetch("fatture?select=id&anno=eq.\(anno)&numero=eq.\(numero)&limit=1")
+        return !rows.isEmpty
+    }
     @discardableResult
     static func createFattura(_ fields: [String: Any?], righe: [[String: Any?]]) async throws -> Fattura {
         let f: Fattura = try await sb.insertReturning("fatture", body: fields)
-        for var r in righe { r["fattura_id"] = f.id; try await sb.mutate("fattura_righe", method: "POST", body: r) }
+        do {
+            try await sb.insertMany("fattura_righe", rows: righe.map { r in
+                var r = r; r["fattura_id"] = f.id; return r
+            })
+        } catch {
+            // niente fattura orfana senza righe: rollback e rilancio
+            try? await sb.mutate("fatture?id=eq.\(enc(f.id))", method: "DELETE")
+            throw error
+        }
         return f
     }
     static func setFatturaPdfPath(id: String, path: String) async throws {
         try await sb.mutate("fatture?id=eq.\(enc(id))", method: "PATCH", body: ["pdf_path": path, "updated_at": isoNow()])
-    }
-    static func updateFatturaStato(id: String, stato: String) async throws {
-        try await sb.mutate("fatture?id=eq.\(enc(id))", method: "PATCH", body: ["stato": stato, "updated_at": isoNow()])
     }
     static func uploadFatturaPDF(_ data: Data, anno: Int, numero: Int) async throws -> String {
         try await sb.uploadFile(bucket: "fatture", path: "\(anno)/\(numero).pdf", data: data, contentType: "application/pdf")
     }
     static func downloadFatturaPDF(path: String) async throws -> Data {
         try await sb.downloadFile(bucket: "fatture", path: path)
+    }
+    /// Rimuove dal bucket un PDF orfano (es. dopo il cambio numero di una fattura).
+    static func deleteFatturaPDFFile(path: String) async throws {
+        try await sb.deleteFile(bucket: "fatture", path: path)
     }
     /// Elimina la fattura e le sue righe (e tenta di rimuovere il PDF dallo storage).
     static func deleteFattura(id: String, pdfPath: String?) async throws {
@@ -423,8 +446,6 @@ enum HubAPI {
     }
 
     private static func isoNow(addingDays days: Int = 0) -> String {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f.string(from: Date().addingTimeInterval(Double(days) * 86_400))
+        isoNowString(addingDays: days)
     }
 }

@@ -128,7 +128,7 @@ struct BancaView: View {
     private func apri(_ e: Estratto) async {
         guard let path = e.file_path, let data = try? await HubAPI.downloadEstrattoFile(path: path) else { msg = "File non disponibile."; return }
         let ext = (path as NSString).pathExtension
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("estratto-\(e.anno)-\(e.mese)").appendingPathExtension(ext.isEmpty ? "csv" : ext)
+        let url = appTempDir().appendingPathComponent("estratto-\(e.anno)-\(e.mese)").appendingPathExtension(ext.isEmpty ? "csv" : ext)
         try? data.write(to: url); NSWorkspace.shared.open(url)
     }
     private func elimina(_ e: Estratto) async {

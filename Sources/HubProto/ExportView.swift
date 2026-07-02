@@ -264,6 +264,14 @@ struct ExportView: View {
         sp.allowedContentTypes = [.zip]
         if sp.runModal() == .OK, let url = sp.url { Task { await runExport(to: url) } }
     }
+    /// Nome file sicuro per lo ZIP: sempre un singolo componente, mai traversal, mai vuoto.
+    private func safeName(_ s: String) -> String {
+        var n = (s as NSString).lastPathComponent
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+        while n.hasPrefix(".") { n.removeFirst() }
+        return n.isEmpty ? "file" : n
+    }
     private func runExport(to dest: URL) async {
         exporting = true; defer { exporting = false }
         msg = nil
@@ -277,7 +285,7 @@ struct ExportView: View {
                 try fm.createDirectory(at: dir, withIntermediateDirectories: true)
                 for f in filteredFatture {
                     if let p = f.pdf_path, let d = try? await HubAPI.downloadFatturaPDF(path: p) {
-                        try? d.write(to: dir.appendingPathComponent("\(f.anno)\(String(format: "%03d", f.numero)).pdf"))
+                        try? d.write(to: dir.appendingPathComponent("\(f.numeroCompleto).pdf"))
                     }
                 }
                 try csvFatture().data(using: .utf8)?.write(to: root.appendingPathComponent("registro_fatture.csv"))
@@ -288,8 +296,7 @@ struct ExportView: View {
                 for s in filteredSpese {
                     if let p = s.file_path, let d = try? await HubAPI.downloadSpesaFile(path: p) {
                         let ext = (p as NSString).pathExtension
-                        let nm = "\((s.fornitore ?? "spesa"))-\(s.id.prefix(6)).\(ext.isEmpty ? "pdf" : ext)"
-                            .replacingOccurrences(of: "/", with: "-")
+                        let nm = safeName("\((s.fornitore ?? "spesa"))-\(s.id.prefix(6)).\(ext.isEmpty ? "pdf" : ext)")
                         try? d.write(to: dir.appendingPathComponent(nm))
                     }
                 }
@@ -301,23 +308,28 @@ struct ExportView: View {
                 for e in filteredEstratti {
                     if let p = e.file_path, let d = try? await HubAPI.downloadEstrattoFile(path: p) {
                         let ext = (p as NSString).pathExtension
-                        let nm = "estratto-\(e.anno)-\(String(format: "%02d", e.mese))" + (ext.isEmpty ? "" : ".\(ext)")
+                        let nm = safeName("estratto-\(e.anno)-\(String(format: "%02d", e.mese))" + (ext.isEmpty ? "" : ".\(ext)"))
                         try? d.write(to: dir.appendingPathComponent(nm))
                     }
                 }
-                for u in bankFiles { try? fm.copyItem(at: u, to: dir.appendingPathComponent(u.lastPathComponent)) }
+                for u in bankFiles { try? fm.copyItem(at: u, to: dir.appendingPathComponent(safeName(u.lastPathComponent))) }
             }
             try? fm.removeItem(at: dest)   // zip non sovrascrive bene
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
-            proc.currentDirectoryURL = tmp
-            proc.arguments = ["-r", "-q", dest.path, folderName]
-            try proc.run(); proc.waitUntilExit()
+            let folder = folderName
+            let status: Int32 = await Task.detached {
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
+                proc.currentDirectoryURL = tmp
+                proc.arguments = ["-r", "-q", dest.path, folder]
+                do { try proc.run() } catch { return -1 }
+                proc.waitUntilExit()
+                return proc.terminationStatus
+            }.value
             try? fm.removeItem(at: tmp)
-            if proc.terminationStatus == 0 {
+            if status == 0 {
                 NSWorkspace.shared.activateFileViewerSelecting([dest])
                 msg = "✓ Export creato: \(dest.lastPathComponent)"
-            } else { msg = "Errore nella creazione dello ZIP (zip exit \(proc.terminationStatus))." }
+            } else { msg = "Errore nella creazione dello ZIP (zip exit \(status))." }
         } catch { msg = "Errore export: \(error.localizedDescription)" }
     }
 
@@ -326,7 +338,7 @@ struct ExportView: View {
         for f in filteredFatture.sorted(by: { ($0.data ?? "") < ($1.data ?? "") }) {
             let c = model.cliente(f.cliente_id)
             rows.append([
-                "\(f.anno)\(String(format: "%03d", f.numero))",
+                f.numeroCompleto,
                 dataIT(f.data),
                 csvCell(c?.ragione_sociale ?? ""),
                 csvCell(c?.piva ?? ""),

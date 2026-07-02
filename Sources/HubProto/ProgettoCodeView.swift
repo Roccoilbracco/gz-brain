@@ -222,11 +222,18 @@ final class TerminalStore {
         let cmd: String
         if let host = sshHost, !host.isEmpty {
             // ── Progetto REMOTO: SSH dentro la macchina e avvia claude lì.
-            //    PATH esteso a mano così claude (~/.local/bin) viene trovato senza dipendere dai rc remoti.
-            //    $HOME/$PATH restano letterali (q li single-quota) → espansi dalla shell REMOTA. ──
-            let cdPart = dir.isEmpty ? "" : "cd \"\(dir)\" && "
-            let remote = "export PATH=\"$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH\"; \(cdPart)exec claude"
-            cmd = "exec ssh -t \(q(host)) \(q(remote))"
+            //    host e dir arrivano dal DB: host validato (un valore che inizia con '-' diventerebbe
+            //    un flag ssh), dir single-quotato ANCHE per la shell remota (dentro doppi apici
+            //    $(...)/backtick verrebbero eseguiti). PATH esteso a mano così claude (~/.local/bin)
+            //    viene trovato senza dipendere dai rc remoti; $HOME/$PATH restano letterali
+            //    (q li single-quota) → espansi dalla shell REMOTA. ──
+            if host.range(of: "^[A-Za-z0-9][A-Za-z0-9@._-]*$", options: .regularExpression) == nil {
+                cmd = "echo 'ssh_host non valido (caratteri non ammessi): correggilo nel progetto'; exec zsh -i"
+            } else {
+                let cdPart = dir.isEmpty ? "" : "cd \(q(dir)) && "
+                let remote = "export PATH=\"$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH\"; \(cdPart)exec claude"
+                cmd = "exec ssh -t -- \(q(host)) \(q(remote))"
+            }
         } else {
             cmd = "cd \(q(dir)) && exec \(claude.map(q) ?? "zsh -i")"
         }

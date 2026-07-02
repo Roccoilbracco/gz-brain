@@ -13,7 +13,6 @@ struct InvoiceData {
     var imponibileC: Int
     var ivaC: Int
     var totaleC: Int
-    var vatRate: Int
     var vatNote: String
     var logo: NSImage?
 }
@@ -187,9 +186,14 @@ struct InvoiceDocumentView: View {
         }
     }
 
-    // ── Footer: dati banca su una sola riga, centrati ──
+    // ── Footer: firma in corsivo (se impostata) + dati banca su una sola riga ──
     private var footer: some View {
         VStack(spacing: 8) {
+            if let firma = doc.azienda.firmatario, !firma.isEmpty {
+                Text(firma).font(.custom("Snell Roundhand", size: 21)).foregroundStyle(ink)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.trailing, 6).padding(.bottom, 2)
+            }
             Rectangle().fill(cardBd).frame(height: 1)
             (Text("Bank account ").font(.system(size: 9.5)).foregroundStyle(gray)
              + Text(doc.azienda.ragione_sociale ?? "").font(.system(size: 9.5, weight: .bold)).foregroundStyle(dark)

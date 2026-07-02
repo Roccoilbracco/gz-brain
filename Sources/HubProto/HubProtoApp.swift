@@ -45,7 +45,7 @@ enum Route: Equatable {
     case codeGeneric            // terminale Claude generico, senza progetto
 }
 
-enum ProjectTab: String { case dash, code, altro }
+enum ProjectTab: String { case dash, code }
 
 struct ContentView: View {
     @StateObject private var model = PanoramicaModel()
@@ -144,6 +144,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var installedWindows = Set<Int>()
     private let quickDash = QuickDashController()
 
+    func applicationWillTerminate(_ notification: Notification) {
+        PreviewServer.shutdown()   // niente dev server/proxy orfani sulle porte 58xx/68xx
+        try? FileManager.default.removeItem(at: appTempDir())   // via i PDF temporanei
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
         if !hasVisibleWindows,
            let w = sender.windows.first(where: { $0.styleMask.contains(.titled) }) {
@@ -159,7 +164,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(
             forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main
         ) { [weak self] n in
-            if let w = n.object as? NSWindow { self?.setup(w) }
+            // la closure gira su queue .main ma il compilatore non lo sa: assumeIsolated è corretto qui
+            MainActor.assumeIsolated {
+                if let w = n.object as? NSWindow { self?.setup(w) }
+            }
         }
         NSApp.windows.forEach(setup)
     }

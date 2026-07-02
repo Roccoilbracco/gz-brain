@@ -123,6 +123,19 @@ func parseISO(_ s: String) -> Date? {
         ?? isoFrac.date(from: s + "Z") ?? isoPlain.date(from: s + "Z")
 }
 
+func isoNowString(addingDays days: Int = 0) -> String {
+    isoFrac.string(from: Date().addingTimeInterval(Double(days) * 86_400))
+}
+
+/// Cartella temp dedicata all'app (0700, svuotata all'uscita): i PDF di fatture
+/// ed estratti non restano nella temp condivisa con nomi prevedibili.
+func appTempDir() -> URL {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("unvrs-brain", isDirectory: true)
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
+                                             attributes: [.posixPermissions: 0o700])
+    return dir
+}
+
 func formatDateIT(_ s: String, time: Bool = true) -> String {
     guard let d = parseISO(s) else { return s }
     let f = DateFormatter()
@@ -131,18 +144,22 @@ func formatDateIT(_ s: String, time: Bool = true) -> String {
     return f.string(from: d)
 }
 
-/// Conta eventi per giorno sugli ultimi `days` giorni. Indice 0 = giorno più vecchio.
-/// (port di bucketEventsByDay in lib/helpers.ts)
-func bucketEventsByDay(_ events: [HubEvent], days: Int, today: Date = Date()) -> [Int] {
+/// Conta date ISO per giorno sugli ultimi `days` giorni. Indice 0 = giorno più vecchio.
+func bucketISODatesByDay(_ isoDates: [String?], days: Int, today: Date = Date()) -> [Int] {
     var buckets = [Int](repeating: 0, count: days)
     let cal = Calendar.current
     let end = cal.date(bySettingHour: 23, minute: 59, second: 59, of: today) ?? today
-    for e in events {
-        guard let d = parseISO(e.created_at) else { continue }
+    for s in isoDates {
+        guard let s, let d = parseISO(s) else { continue }
         let diff = Int(floor(end.timeIntervalSince(d) / 86_400))
         if diff >= 0 && diff < days { buckets[days - 1 - diff] += 1 }
     }
     return buckets
+}
+
+/// (port di bucketEventsByDay in lib/helpers.ts)
+func bucketEventsByDay(_ events: [HubEvent], days: Int, today: Date = Date()) -> [Int] {
+    bucketISODatesByDay(events.map { $0.created_at }, days: days, today: today)
 }
 
 /// Bucket tipo servizio → Dual/Elettrico/Gas (port di groupTipoServizio)

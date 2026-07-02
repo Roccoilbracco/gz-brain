@@ -42,6 +42,47 @@ func dataIT(_ s: String?) -> String {
     return "\(p[2])/\(p[1])/\(p[0])"
 }
 
+// ─── Azioni condivise sulle fatture (lista globale + sezione cliente) ───
+
+func fatturaStatoHue(_ s: String) -> Double {
+    s == "pagata" ? 152 : s == "inviata" ? 217 : s == "emessa" ? 38 : 0
+}
+
+/// "indirizzo completo - VAT Number: ..." per l'intestazione fattura
+func fatturaClienteRiga(_ c: Cliente) -> String {
+    var parts: [String] = []
+    let ind = clienteIndirizzoCompleto(c)
+    if !ind.isEmpty { parts.append(ind) }
+    if let p = c.piva, !p.isEmpty { parts.append("VAT Number: \(p)") }
+    return parts.joined(separator: " - ")
+}
+
+func fatturaTempPDF(_ f: Fattura) async -> URL? {
+    guard let path = f.pdf_path, let data = try? await HubAPI.downloadFatturaPDF(path: path) else { return nil }
+    let ext = (path as NSString).pathExtension
+    let url = appTempDir()
+        .appendingPathComponent(f.numeroCompleto)
+        .appendingPathExtension(ext.isEmpty ? "pdf" : ext)
+    try? data.write(to: url)
+    return url
+}
+
+/// Apre il PDF; ritorna un messaggio di errore se non disponibile.
+@MainActor func fatturaApri(_ f: Fattura) async -> String? {
+    guard let url = await fatturaTempPDF(f) else { return "PDF non disponibile per questa fattura." }
+    NSWorkspace.shared.open(url)
+    return nil
+}
+
+/// Compone la mail con PDF allegato; ritorna un messaggio di errore se non disponibile.
+@MainActor func fatturaInvia(_ f: Fattura, model: FattureModel) async -> String? {
+    guard let url = await fatturaTempPDF(f) else { return "PDF non disponibile." }
+    let subj = "Invoice \(f.numeroCompleto) — \(model.azienda?.ragione_sociale ?? "")"
+    _ = InvoiceMailer.compose(to: model.cliente(f.cliente_id)?.email, subject: subj,
+                              body: "In allegato la fattura \(f.numeroCompleto).", attachment: url)
+    return nil
+}
+
 // ─── Sezione fatture del singolo cliente (embeddata nella scheda cliente) ───
 struct ClienteFattureSection: View {
     let clienteId: String
@@ -88,10 +129,10 @@ struct ClienteFattureSection: View {
             FatturaEditorView(model: model, clienteId: clienteId) { Task { await model.load() } }
         }
         .sheet(item: $editing) { f in
-            FatturaEditView(fattura: f, clienteNome: model.clienteNome(f.cliente_id)) { Task { await model.load() } }
+            FatturaEditView(fattura: f, model: model) { Task { await model.load() } }
         }
         .confirmationDialog(
-            toDelete.map { "Eliminare la fattura \($0.anno)\(String(format: "%03d", $0.numero))?" } ?? "",
+            toDelete.map { "Eliminare la fattura \($0.numeroCompleto)?" } ?? "",
             isPresented: Binding(get: { toDelete != nil }, set: { if !$0 { toDelete = nil } }),
             titleVisibility: .visible
         ) {
@@ -121,7 +162,7 @@ struct ClienteFattureSection: View {
 
     private func row(_ f: Fattura) -> some View {
         HStack(spacing: 18) {
-            Text("\(f.anno)\(String(format: "%03d", f.numero))").font(.system(size: 13, weight: .semibold))
+            Text(f.numeroCompleto).font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Holo.text).frame(maxWidth: .infinity, alignment: .leading)
             Text(dataIT(f.data)).font(.system(size: 12)).foregroundStyle(Holo.subDim)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -131,37 +172,15 @@ struct ClienteFattureSection: View {
                 .frame(maxWidth: .infinity, alignment: .trailing)
             Text(Money.eur(f.totale_cents)).font(.system(size: 13, weight: .semibold)).foregroundStyle(Holo.text)
                 .frame(maxWidth: .infinity, alignment: .trailing)
-            StatusChip(text: f.stato, hue: statoHue(f.stato)).frame(width: 96, alignment: .center)
+            StatusChip(text: f.stato, hue: fatturaStatoHue(f.stato)).frame(width: 96, alignment: .center)
             HStack(spacing: 4) {
-                IconButton(icon: "arrow.up.right.square", help: "Apri PDF") { Task { await apri(f) } }
-                IconButton(icon: "paperplane", help: "Invia per email") { Task { await invia(f) } }
+                IconButton(icon: "arrow.up.right.square", help: "Apri PDF") { Task { if let e = await fatturaApri(f) { msg = e } } }
+                IconButton(icon: "paperplane", help: "Invia per email") { Task { if let e = await fatturaInvia(f, model: model) { msg = e } } }
                 IconButton(icon: "pencil", help: "Modifica") { editing = f }
                 IconButton(icon: "trash", help: "Elimina", danger: true) { toDelete = f }
             }.frame(width: 124, alignment: .trailing)
         }
         .padding(.horizontal, 18).padding(.vertical, 11)
-    }
-    private func statoHue(_ s: String) -> Double {
-        s == "pagata" ? 152 : s == "inviata" ? 217 : s == "emessa" ? 38 : 0
-    }
-    private func tempPDF(_ f: Fattura) async -> URL? {
-        guard let path = f.pdf_path, let data = try? await HubAPI.downloadFatturaPDF(path: path) else { return nil }
-        let ext = (path as NSString).pathExtension
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(f.anno)\(String(format: "%03d", f.numero))")
-            .appendingPathExtension(ext.isEmpty ? "pdf" : ext)
-        try? data.write(to: url); return url
-    }
-    private func apri(_ f: Fattura) async {
-        guard let url = await tempPDF(f) else { msg = "PDF non disponibile."; return }
-        NSWorkspace.shared.open(url)
-    }
-    private func invia(_ f: Fattura) async {
-        guard let url = await tempPDF(f) else { msg = "PDF non disponibile."; return }
-        let num = "\(f.anno)\(String(format: "%03d", f.numero))"
-        let subj = "Invoice \(num) — \(model.azienda?.ragione_sociale ?? "")"
-        _ = InvoiceMailer.compose(to: model.cliente(f.cliente_id)?.email, subject: subj,
-                                  body: "In allegato la fattura \(num).", attachment: url)
     }
     private func elimina(_ f: Fattura) async {
         toDelete = nil
@@ -170,10 +189,9 @@ struct ClienteFattureSection: View {
     }
 }
 
-// ─── Lista fatture (host nella sezione Clienti o nella scheda cliente) ───
+// ─── Lista fatture globale (sezione Clienti; la variante per-cliente è ClienteFattureSection) ───
 struct FattureView: View {
-    let clienteId: String?
-    @StateObject private var model: FattureModel
+    @StateObject private var model = FattureModel()
     @State private var search = ""
     @State private var showEditor = false
     @State private var msg: String?
@@ -181,16 +199,12 @@ struct FattureView: View {
     @State private var editing: Fattura?
     @State private var deleting = false
 
-    init(clienteId: String? = nil) {
-        self.clienteId = clienteId
-        _model = StateObject(wrappedValue: FattureModel(clienteFilter: clienteId))
-    }
-
     private var filtered: [Fattura] {
         let q = search.trimmingCharacters(in: .whitespaces).lowercased()
         guard !q.isEmpty else { return model.fatture }
         return model.fatture.filter {
-            "\($0.anno)\($0.numero)".contains(q) || model.clienteNome($0.cliente_id).lowercased().contains(q)
+            $0.numeroCompleto.contains(q) || String($0.numero).contains(q)
+                || model.clienteNome($0.cliente_id).lowercased().contains(q)
         }
     }
 
@@ -233,13 +247,13 @@ struct FattureView: View {
         }
         .task { await model.load() }
         .sheet(isPresented: $showEditor) {
-            FatturaEditorView(model: model, clienteId: clienteId) { Task { await model.load() } }
+            FatturaEditorView(model: model, clienteId: nil) { Task { await model.load() } }
         }
         .sheet(item: $editing) { f in
-            FatturaEditView(fattura: f, clienteNome: model.clienteNome(f.cliente_id)) { Task { await model.load() } }
+            FatturaEditView(fattura: f, model: model) { Task { await model.load() } }
         }
         .confirmationDialog(
-            toDelete.map { "Eliminare la fattura \($0.anno)\(String(format: "%03d", $0.numero))?" } ?? "",
+            toDelete.map { "Eliminare la fattura \($0.numeroCompleto)?" } ?? "",
             isPresented: Binding(get: { toDelete != nil }, set: { if !$0 { toDelete = nil } }),
             titleVisibility: .visible
         ) {
@@ -251,21 +265,7 @@ struct FattureView: View {
     }
 
     private var searchField: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.6))
-            TextField("Cerca fattura…", text: $search)
-                .textFieldStyle(.plain).font(.system(size: 12)).foregroundStyle(Holo.text).frame(width: 170)
-            if !search.isEmpty {
-                Button { search = "" } label: {
-                    Image(systemName: "xmark.circle.fill").font(.system(size: 11))
-                        .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.5))
-                }.buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 12).padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color(red: 13/255, green: 21/255, blue: 44/255).opacity(0.75)))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color(red: 125/255, green: 175/255, blue: 1).opacity(0.25), lineWidth: 1))
+        HoloSearchField(placeholder: "Cerca fattura…", text: $search)
     }
     private var addButton: some View {
         MenuPillButton(label: "Nuova fattura", icon: "plus",
@@ -309,7 +309,7 @@ struct FattureView: View {
     }
     private func row(_ f: Fattura) -> some View {
         HStack(spacing: 12) {
-            Text("\(f.anno)\(String(format: "%03d", f.numero))").font(.system(size: 12.5, weight: .semibold))
+            Text(f.numeroCompleto).font(.system(size: 12.5, weight: .semibold))
                 .foregroundStyle(Holo.text).frame(width: 110, alignment: .leading)
             Text(dataIT(f.data)).font(.system(size: 11)).foregroundStyle(Holo.subDim)
                 .frame(width: 90, alignment: .leading)
@@ -317,10 +317,10 @@ struct FattureView: View {
                 .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
             Text(Money.eur(f.totale_cents)).font(.system(size: 12, weight: .semibold)).foregroundStyle(Holo.subDim)
                 .frame(width: 100, alignment: .leading)
-            StatusChip(text: f.stato, hue: statoHue(f.stato)).frame(width: 90, alignment: .leading)
+            StatusChip(text: f.stato, hue: fatturaStatoHue(f.stato)).frame(width: 90, alignment: .leading)
             HStack(spacing: 4) {
-                IconButton(icon: "doc.richtext", help: "Apri PDF") { Task { await apri(f) } }
-                IconButton(icon: "paperplane", help: "Invia per email") { Task { await invia(f) } }
+                IconButton(icon: "doc.richtext", help: "Apri PDF") { Task { if let e = await fatturaApri(f) { msg = e } } }
+                IconButton(icon: "paperplane", help: "Invia per email") { Task { if let e = await fatturaInvia(f, model: model) { msg = e } } }
                 IconButton(icon: "pencil", help: "Modifica") { editing = f }
                 IconButton(icon: "trash", help: "Elimina fattura", danger: true) { toDelete = f }
                     .disabled(deleting)
@@ -328,45 +328,21 @@ struct FattureView: View {
         }
         .padding(.horizontal, 14).padding(.vertical, 9)
     }
-    private func statoHue(_ s: String) -> Double {
-        s == "pagata" ? 152 : s == "inviata" ? 217 : s == "emessa" ? 38 : 0
-    }
-
-    private func tempPDF(_ f: Fattura) async -> URL? {
-        guard let path = f.pdf_path, let data = try? await HubAPI.downloadFatturaPDF(path: path) else { return nil }
-        let ext = (path as NSString).pathExtension
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(f.anno)\(String(format: "%03d", f.numero))")
-            .appendingPathExtension(ext.isEmpty ? "pdf" : ext)
-        try? data.write(to: url)
-        return url
-    }
-    private func apri(_ f: Fattura) async {
-        guard let url = await tempPDF(f) else { msg = "PDF non disponibile per questa fattura."; return }
-        NSWorkspace.shared.open(url)
-    }
     private func elimina(_ f: Fattura) async {
         deleting = true; defer { deleting = false }
         toDelete = nil
         do {
             try await HubAPI.deleteFattura(id: f.id, pdfPath: f.pdf_path)
             await model.load()
-            msg = "Fattura \(f.anno)\(String(format: "%03d", f.numero)) eliminata."
+            msg = "Fattura \(f.numeroCompleto) eliminata."
         } catch let e { msg = "Errore eliminazione: \(e.localizedDescription)" }
-    }
-    private func invia(_ f: Fattura) async {
-        guard let url = await tempPDF(f) else { msg = "PDF non disponibile."; return }
-        let to = model.cliente(f.cliente_id)?.email
-        let num = "\(f.anno)\(String(format: "%03d", f.numero))"
-        let subj = "Invoice \(num) — \(model.azienda?.ragione_sociale ?? "")"
-        _ = InvoiceMailer.compose(to: to, subject: subj, body: "In allegato la fattura \(num).", attachment: url)
     }
 }
 
 // ─── Form: modifica fattura (numero, data, stato, importi) ───
 struct FatturaEditView: View {
     let fattura: Fattura
-    let clienteNome: String
+    @ObservedObject var model: FattureModel
     var onSaved: () -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -379,9 +355,10 @@ struct FatturaEditView: View {
     @State private var err: String?
 
     private let stati = ["emessa", "inviata", "pagata", "annullata"]
+    private var clienteNome: String { model.clienteNome(fattura.cliente_id) }
 
-    init(fattura: Fattura, clienteNome: String, onSaved: @escaping () -> Void) {
-        self.fattura = fattura; self.clienteNome = clienteNome; self.onSaved = onSaved
+    init(fattura: Fattura, model: FattureModel, onSaved: @escaping () -> Void) {
+        self.fattura = fattura; self.model = model; self.onSaved = onSaved
         _numeroText = State(initialValue: String(fattura.numero))
         _data = State(initialValue: parseYMD(fattura.data))
         _stato = State(initialValue: fattura.stato)
@@ -465,15 +442,51 @@ struct FatturaEditView: View {
     private func save() {
         saving = true; err = nil
         let imp = Money.parse(imponibile) ?? 0, ivaC = Money.parse(iva) ?? 0
+        let numero = Int(numeroText) ?? fattura.numero
         Task {
             do {
+                if numero != fattura.numero, try await HubAPI.fatturaExists(anno: fattura.anno, numero: numero) {
+                    await MainActor.run { saving = false; err = "Esiste già la fattura \(fattura.anno)\(String(format: "%03d", numero)): cambia numero." }
+                    return
+                }
                 try await HubAPI.updateFattura(id: fattura.id, fields: [
-                    "numero": Int(numeroText) ?? fattura.numero,
+                    "numero": numero,
                     "data": eaDate(data, "yyyy-MM-dd"), "stato": stato,
                     "imponibile_cents": imp, "iva_cents": ivaC, "totale_cents": imp + ivaC,
                 ])
-                await MainActor.run { saving = false; onSaved(); dismiss() }
+                // rigenera il PDF: senza, il documento in storage resterebbe quello vecchio
+                let pdfOK = await regenPDF(numero: numero, imp: imp, ivaC: ivaC)
+                await MainActor.run {
+                    saving = false; onSaved()
+                    if pdfOK { dismiss() } else { err = "Dati salvati, ma il PDF non è stato rigenerato." }
+                }
             } catch { await MainActor.run { saving = false; err = error.localizedDescription } }
         }
+    }
+
+    /// Ricostruisce il PDF dai dati aggiornati (righe dal DB) e lo ricarica in storage.
+    private func regenPDF(numero: Int, imp: Int, ivaC: Int) async -> Bool {
+        guard let azienda = model.azienda else { return false }
+        do {
+            let righe = try await HubAPI.getFatturaRighe(fattura.id)
+            let invRighe = righe.map { r in
+                InvoiceData.Riga(desc: r.descrizione,
+                                 qta: r.qta == r.qta.rounded() ? String(Int(r.qta)) : String(r.qta),
+                                 prezzoC: r.prezzo_unitario_cents, totaleC: r.totale_cents)
+            }
+            let cliente = model.cliente(fattura.cliente_id)
+            let vat = fattura.vat_mode.flatMap { VatMode(rawValue: $0) }
+            let inv = InvoiceData(
+                azienda: azienda, clienteNome: cliente?.ragione_sociale ?? clienteNome,
+                clienteRiga: cliente.map(fatturaClienteRiga) ?? "",
+                numero: "\(fattura.anno)\(String(format: "%03d", numero))", data: eaDate(data, "dd/MM/yyyy"),
+                righe: invRighe, imponibileC: imp, ivaC: ivaC, totaleC: imp + ivaC,
+                vatNote: vat?.note ?? "", logo: model.logo)
+            guard let pdf = InvoicePDF.render(inv) else { return false }
+            let path = try await HubAPI.uploadFatturaPDF(pdf, anno: fattura.anno, numero: numero)
+            try await HubAPI.setFatturaPdfPath(id: fattura.id, path: path)
+            if let old = fattura.pdf_path, old != path { try? await HubAPI.deleteFatturaPDFFile(path: old) }
+            return true
+        } catch { return false }
     }
 }
