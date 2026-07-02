@@ -51,8 +51,9 @@ create table if not exists public.fatture (
 );
 alter table public.fatture enable row level security;
 
--- PROPOSTO, NON ANCORA APPLICATO AL DB LIVE (dati attuali già senza duplicati):
--- create unique index if not exists fatture_anno_numero_uq on public.fatture (anno, numero);
+-- Applicato al DB live il 2026-07-02 (migration 'unique_fatture_anno_numero'):
+-- nessun numero fattura duplicato possibile, nemmeno da scritture fuori dall'app.
+create unique index if not exists fatture_anno_numero_uq on public.fatture (anno, numero);
 
 create table if not exists public.fattura_righe (
   id                     uuid primary key default gen_random_uuid(),
