@@ -328,6 +328,28 @@ create table if not exists public.proprieta_documenti (
 );
 create index if not exists proprieta_documenti_prop_idx on public.proprieta_documenti using btree (proprieta_id, created_at desc);
 
+-- ── prenotazioni (Camere PSE: pannello controllo camere/pagamenti) ─────────
+create table if not exists public.prenotazioni (
+  id            uuid primary key default gen_random_uuid(),
+  struttura     text not null default 'es-vedra',   -- es-vedra | via-romagna
+  camera        text,
+  guest_name    text not null,
+  guest_phone   text,
+  guest_email   text,
+  checkin       date,
+  checkout      date,
+  guests        smallint,
+  amount_cents  integer not null default 0,
+  paid_cents    integer not null default 0,
+  status        text not null default 'in_attesa',  -- in_attesa|confermata|in_casa|partita|cancellata
+  source        text,                                -- sito|whatsapp|booking|telefono
+  notes         text,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+create index if not exists prenotazioni_checkin_idx on public.prenotazioni using btree (checkin);
+create index if not exists prenotazioni_status_idx on public.prenotazioni using btree (status);
+
 -- ── funzione + trigger: lead chiuso_vinto → crea/aggiorna cliente ─────────
 create or replace function public.sync_lead_cliente()
 returns trigger
@@ -381,3 +403,4 @@ alter table public.re_leads          enable row level security;
 alter table public.proprieta          enable row level security;
 alter table public.proprieta_storico  enable row level security;
 alter table public.proprieta_documenti enable row level security;
+alter table public.prenotazioni       enable row level security;

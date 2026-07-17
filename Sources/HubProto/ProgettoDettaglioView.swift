@@ -78,7 +78,10 @@ struct ProgettoDettaglioView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 backLink
-                if model.project.slug == "easyact" {
+                if model.project.slug == "camere-pse" {
+                    // dash dedicata Camere PSE: pannello prenotazioni camere
+                    CamerePSEDashboard()
+                } else if model.project.slug == "easyact" {
                     // dash dedicata EasyAct (legge il suo Supabase dal .env.local)
                     EasyActLayout(project: model.project)
                 } else {
