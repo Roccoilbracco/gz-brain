@@ -51,8 +51,9 @@ enum PreviewServer {
         if !isListening(dev) {
             if hasDev {
                 onStatus("Avvio dev server…")
-                spawn(npm, ["run", "dev", "--", "--port", "\(dev)", "--host", "127.0.0.1"],
-                      cwd: dir, env: ["PORT": "\(dev)"], logName: "unvrs-hub-dev-\(dev)")
+                // niente --host: Next usa --hostname, Vite usa --host; entrambi ascoltano su localhost di default
+                spawn(npm, ["run", "dev", "--", "--port", "\(dev)"],
+                      cwd: dir, env: ["PORT": "\(dev)", "HOSTNAME": "127.0.0.1"], logName: "unvrs-hub-dev-\(dev)")
             } else {
                 // sito statico (HTML/CSS): server file locale, nessuna dipendenza richiesta
                 onStatus("Avvio server statico…")

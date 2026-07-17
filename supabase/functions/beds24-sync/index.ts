@@ -129,6 +129,7 @@ Deno.serve(async () => {
         guests: (Number(b.numAdult) || 0) + (Number(b.numChild) || 0) || null,
         amount_cents: Math.round((Number(b.price) || 0) * 100),
         source: sourceFor(b.channel, b.referer),
+        conto_id: "massimo", // i soldi delle OTA vanno sul conto Massimo Affittacamere
         notes: clean(b.referer) ? `${b.referer}${b.apiReference ? ` · rif. ${b.apiReference}` : ""}` : null,
         ext_id: extId,
       };

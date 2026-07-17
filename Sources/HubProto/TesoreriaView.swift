@@ -36,6 +36,10 @@ extension HubAPI {
         try await sb.mutate("movimenti?id=eq.\(id)", method: "PATCH", body: b)
     }
     static func deleteTesMovimento(id: String) async throws { try await sb.mutate("movimenti?id=eq.\(id)", method: "DELETE") }
+    static func deleteMovimentoByExtKey(_ key: String) async throws {
+        let enc = key.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? key
+        try await sb.mutate("movimenti?ext_key=eq.\(enc)", method: "DELETE")
+    }
 }
 
 private let tesYmd: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f }()
@@ -70,23 +74,46 @@ let BREAKFAST_COST = 350   // 3,50 € per persona/notte (solo Booking)
     }
 }
 
-enum TesSub: String, CaseIterable, Identifiable { case riepilogo = "Riepilogo", movimenti = "Movimenti", servizi = "Servizi"; var id: String { rawValue } }
+enum TesSub: String, CaseIterable, Identifiable { case riepilogo = "Riepilogo", movimenti = "Movimenti"; var id: String { rawValue } }
 
 struct TesoreriaView: View {
     let prenotazioni: [Prenotazione]
-    let struttura: Struttura?
+    @Binding var newTrigger: Bool
     @StateObject private var model = TesoreriaModel()
     @State private var sub: TesSub = .riepilogo
     @State private var showForm = false
     @State private var editing: TesMovimento?
+    @State private var movStrut: Struttura? = nil
+    @State private var mese: String = "tutto"
+
+    private let green = Color(hue: 150/360, saturation: 0.4, brightness: 0.62)
+    private let red = Color(hue: 5/360, saturation: 0.46, brightness: 0.62)
 
     private var visibiliMov: [TesMovimento] {
-        guard let s = struttura else { return model.movimenti }
-        return model.movimenti.filter { $0.struttura == s.rawValue || $0.struttura == nil }
+        model.movimenti.filter { m in
+            (movStrut == nil || m.struttura == movStrut!.rawValue) &&
+            (mese == "tutto" || String(m.data.prefix(7)) == mese)
+        }
     }
-    private var prenFiltrate: [Prenotazione] {
-        prenotazioni.filter { b in b.status != "cancellata" && (struttura == nil || b.struttura == struttura!.rawValue) }
+    private var movEntrate: Int { var t = 0; for m in visibiliMov where m.tipo == "entrata" { t += m.importo_cents }; return t }
+    private var movUscite: Int { var t = 0; for m in visibiliMov where m.tipo == "uscita" { t += m.importo_cents }; return t }
+    private var mesiDisponibili: [(String, String)] {
+        let keys = Set(model.movimenti.map { String($0.data.prefix(7)) })
+        let f = DateFormatter(); f.locale = Locale(identifier: "it_IT"); f.dateFormat = "MMMM yyyy"
+        return keys.sorted().compactMap { k in
+            guard let d = tesYmd.date(from: k + "-01") else { return nil }
+            return (k, f.string(from: d).capitalized)
+        }
     }
+    private var meseLabel: String { mese == "tutto" ? "Tutti i mesi" : (mesiDisponibili.first { $0.0 == mese }?.1 ?? mese) }
+    private func casaStats(_ s: Struttura) -> (inc: Int, spese: Int) {
+        var inc = 0, spese = 0
+        for m in model.movimenti where m.struttura == s.rawValue {
+            if m.tipo == "entrata" { inc += m.importo_cents } else { spese += m.importo_cents }
+        }
+        return (inc, spese)
+    }
+    private var prenFiltrate: [Prenotazione] { prenotazioni.filter { $0.status != "cancellata" } }
 
     // ── servizi calcolati ──
     private var puliziaFatte: Int { checkouts.filter { $0 <= today }.count * CLEAN_COST }
@@ -106,29 +133,55 @@ struct TesoreriaView: View {
         }
         return (serv, tot)
     }
-    private var daIncassareOTA: Int {
+    // conto di destinazione dei soldi di una prenotazione (OTA→Massimo, dirette→scelto/Beeper)
+    private func contoDest(_ b: Prenotazione) -> String {
+        if let c = b.conto_id, !c.isEmpty { return c }
+        let s = b.source ?? ""
+        return (s == "booking" || s == "airbnb") ? "massimo" : "beeper"
+    }
+    private func daIncassare(_ contoId: String) -> Int {
         var t = 0
-        for b in prenFiltrate {
-            let src = b.source ?? ""
-            guard (src == "booking" || src == "airbnb"), BookingStatus.from(b.status).active else { continue }
+        for b in prenFiltrate where contoDest(b) == contoId {
             t += max(0, b.amount_cents - b.paid_cents)
         }
         return t
     }
+    // da incassare del periodo/casa selezionati (checkin nel mese, filtro casa)
+    private var daIncassarePeriodo: Int {
+        var t = 0
+        for b in prenFiltrate {
+            if let s = movStrut, b.struttura != s.rawValue { continue }
+            if mese != "tutto" && String((b.checkin ?? "").prefix(7)) != mese { continue }
+            t += max(0, b.amount_cents - b.paid_cents)
+        }
+        return t
+    }
+    private var daIncassareTot: Int {
+        var t = 0
+        for c in model.conti { t += daIncassare(c.id) }
+        return t
+    }
+    // da incassare per canale/fonte
+    private func daIncassareSource(_ srcs: [String]) -> Int {
+        var t = 0
+        for b in prenFiltrate where srcs.contains(b.source ?? "") {
+            t += max(0, b.amount_cents - b.paid_cents)
+        }
+        return t
+    }
+    private var daIncassareDirette: Int { daIncassareSource(["diretto", "sito", "whatsapp", "telefono", "email"]) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Picker("", selection: $sub) {
-                    ForEach(TesSub.allCases) { Text($0.rawValue).tag($0) }
-                }.pickerStyle(.segmented).frame(width: 320).labelsHidden()
+            HStack(spacing: 12) {
+                PSESegmented(items: TesSub.allCases.map { ($0, $0.rawValue) }, selection: $sub)
+                if sub == .movimenti {
+                    PSESegmented(items: [(nil, "Tutte"), (.esVedra, "Es Vedra"), (.viaRomagna, "Via Romagna")] as [(Struttura?, String)], selection: $movStrut)
+                    meseMenu
+                }
                 Spacer()
                 if sub == .movimenti {
-                    Button { editing = nil; showForm = true } label: {
-                        HStack(spacing: 6) { Image(systemName: "plus").font(.system(size: 11, weight: .bold)); Text("Nuovo movimento").font(.system(size: 12.5, weight: .semibold)) }
-                            .foregroundStyle(PSE.ink).padding(.horizontal, 14).padding(.vertical, 8)
-                            .background(Capsule().fill(PSE.warn.opacity(0.95)))
-                    }.buttonStyle(.plain)
+                    Text("\(visibiliMov.count) movimenti").font(.system(size: 11, weight: .medium)).foregroundStyle(PSE.faint)
                 }
             }
             if model.loading {
@@ -138,38 +191,62 @@ struct TesoreriaView: View {
                     switch sub {
                     case .riepilogo: riepilogo
                     case .movimenti: movimentiList
-                    case .servizi: servizi
                     }
                 }
             }
         }
         .task { await model.load() }
+        .onChange(of: newTrigger) { _, v in
+            if v { editing = nil; sub = .movimenti; showForm = true; newTrigger = false }
+        }
         .sheet(isPresented: $showForm, onDismiss: { editing = nil }) {
             TesMovimentoForm(conti: model.conti, existing: editing) { await model.load() }
         }
     }
 
-    // ── Riepilogo ──
+    // ── Riepilogo (conti + servizi uniti) ──
     private var riepilogo: some View {
         VStack(alignment: .leading, spacing: 12) {
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                 ForEach(model.conti) { c in contoCard(c) }
             }
             HStack(spacing: 12) {
-                totCard("TOTALE CONTI", model.totaleConti, PSE.accent)
-                totCard("DA INCASSARE (OTA)", daIncassareOTA, PSE.warn)
-                totCard("POTENZIALE", model.totaleConti + daIncassareOTA, Color(hue: 150/360, saturation: 0.34, brightness: 0.60))
+                totCard("TOTALE CONTI (incassato)", model.totaleConti, PSE.accent)
+                totCard("POTENZIALE (con da incassare)", model.totaleConti + daIncassareTot, Color(hue: 150/360, saturation: 0.34, brightness: 0.60))
             }
-            Text("Da incassare = prenotazioni Booking/Airbnb attive non ancora saldate. Pulizia e colazioni nella scheda Servizi.")
+            Text("DA INCASSARE — prenotazioni confermate, soldi non ancora incassati").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.warn).padding(.top, 6)
+            HStack(spacing: 12) {
+                totCard("BOOKING", daIncassareSource(["booking"]), PSE.warn)
+                totCard("AIRBNB", daIncassareSource(["airbnb"]), PSE.warn)
+                totCard("DIRETTE", daIncassareDirette, PSE.warn)
+                totCard("TOTALE", daIncassareTot, green)
+            }
+            Text("PER CASA — entrate, spese e utile registrati").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint).padding(.top, 6)
+            HStack(spacing: 12) {
+                casaCard(.esVedra)
+                casaCard(.viaRomagna)
+            }
+            Text("SERVIZI").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint).padding(.top, 6)
+            HStack(spacing: 12) {
+                servCard("PULIZIA — FATTE", puliziaFatte, "sparkles", PSE.dim)
+                servCard("PULIZIA — PREVISTE", puliziePreviste, "sparkles", PSE.warn)
+                servCard("COLAZIONI BOOKING", colazioni.totale, "cup.and.saucer.fill", PSE.accent)
+            }
+            Text("OTA (Booking/Airbnb) → conto Massimo · dirette → Beeper o Cassa (scelto per prenotazione). Pulizia 20 €/check-out. Le colazioni Booking (3,50 €/pers·notte) sono aggiunte automaticamente ai Movimenti.")
                 .font(.system(size: 10.5)).foregroundStyle(PSE.faint).padding(.top, 2)
         }.padding(.bottom, 20)
     }
     private func contoCard(_ c: Conto) -> some View {
         let s = model.saldo(c.id)
-        return VStack(alignment: .leading, spacing: 8) {
+        let inc = daIncassare(c.id)
+        return VStack(alignment: .leading, spacing: 7) {
             Text(c.nome.uppercased()).font(.system(size: 10, weight: .heavy)).tracking(0.5).foregroundStyle(PSE.faint).lineLimit(1)
             Text(eur(s)).font(.system(size: 22, weight: .bold)).foregroundStyle(s < 0 ? Color(hue: 5/360, saturation: 0.5, brightness: 0.62) : PSE.ink).monospacedDigit()
-            Text(c.tipo == "cassa" ? "Contante" : c.tipo == "ota" ? "Booking + Airbnb" : "Banca").font(.system(size: 10)).foregroundStyle(PSE.dim)
+            if inc > 0 {
+                Text("+ \(eur(inc)) da incassare").font(.system(size: 11, weight: .semibold)).foregroundStyle(PSE.warn)
+            } else {
+                Text(c.tipo == "cassa" ? "Contante" : c.tipo == "ota" ? "Booking + Airbnb" : "Banca").font(.system(size: 10)).foregroundStyle(PSE.dim)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading).padding(16)
         .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
@@ -186,54 +263,80 @@ struct TesoreriaView: View {
     }
 
     // ── Movimenti ──
+    private var meseMenu: some View {
+        Menu {
+            Button("Tutti i mesi") { mese = "tutto" }
+            ForEach(mesiDisponibili, id: \.0) { m in Button(m.1) { mese = m.0 } }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "calendar").font(.system(size: 10))
+                Text(meseLabel).font(.system(size: 12, weight: .semibold))
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold))
+            }
+            .foregroundStyle(PSE.dim).padding(.horizontal, 12).padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 10).fill(PSE.surface))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(PSE.line, lineWidth: 1))
+        }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+    }
     private var movimentiList: some View {
-        VStack(spacing: 0) {
-            if visibiliMov.isEmpty {
-                EmptyStateCard(icon: "tray", text: "Nessun movimento.")
-            } else {
-                ForEach(Array(visibiliMov.enumerated()), id: \.element.id) { i, m in
-                    movRow(m)
-                    if i < visibiliMov.count - 1 { Divider().overlay(PSE.line).padding(.leading, 16) }
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                totCard("ENTRATE", movEntrate, green)
+                totCard("USCITE", movUscite, red)
+                totCard("SALDO PERIODO", movEntrate - movUscite, PSE.accent)
+                totCard("DA INCASSARE", daIncassarePeriodo, PSE.warn)
+            }
+            VStack(spacing: 0) {
+                if visibiliMov.isEmpty {
+                    EmptyStateCard(icon: "tray", text: "Nessun movimento per il filtro scelto.")
+                } else {
+                    movHeader
+                    ForEach(Array(visibiliMov.enumerated()), id: \.element.id) { i, m in
+                        movRow(m)
+                        if i < visibiliMov.count - 1 { Divider().overlay(PSE.line).padding(.leading, 16) }
+                    }
                 }
             }
+            .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
         }
-        .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
         .padding(.bottom, 20)
+    }
+    private var movHeader: some View {
+        HStack(spacing: 12) {
+            Text("DATA").frame(width: 62, alignment: .leading)
+            Text("DESCRIZIONE").frame(maxWidth: .infinity, alignment: .leading)
+            Text("CASA").frame(width: 96, alignment: .leading)
+            Text("CONTO").frame(width: 150, alignment: .leading)
+            Text("CATEGORIA").frame(width: 100, alignment: .leading)
+            Text("MODALITÀ").frame(width: 84, alignment: .leading)
+            Text("IMPORTO").frame(width: 92, alignment: .trailing)
+        }
+        .font(.system(size: 8.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
+        .padding(.horizontal, 16).padding(.vertical, 9)
+        .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
     }
     private func movRow(_ m: TesMovimento) -> some View {
         let entrata = m.tipo == "entrata"
         let contoNome = model.conti.first { $0.id == m.conto_id }?.nome ?? (m.conto_id ?? "—")
+        let casa = m.struttura == "es-vedra" ? "Es Vedra" : m.struttura == "via-romagna" ? "Via Romagna" : "—"
         return Button { editing = m; showForm = true } label: {
-            HStack(spacing: 14) {
-                Text(tesPrettyStr(m.data)).font(.system(size: 11, weight: .semibold)).foregroundStyle(PSE.dim).frame(width: 56, alignment: .leading).monospacedDigit()
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(m.descrizione ?? (m.categoria ?? "—")).font(.system(size: 12.5, weight: .medium)).foregroundStyle(PSE.ink).lineLimit(1)
-                    Text([contoNome, m.categoria, m.modalita].compactMap { $0 }.joined(separator: " · ")).font(.system(size: 10)).foregroundStyle(PSE.faint).lineLimit(1)
-                }.frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 12) {
+                Text(tesPrettyStr(m.data)).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim).frame(width: 62, alignment: .leading).monospacedDigit()
+                Text(m.descrizione ?? (m.categoria ?? "—")).font(.system(size: 12.5, weight: .medium)).foregroundStyle(PSE.ink).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                Text(casa).font(.system(size: 11)).foregroundStyle(PSE.dim).frame(width: 96, alignment: .leading).lineLimit(1)
+                Text(contoNome).font(.system(size: 11)).foregroundStyle(PSE.dim).frame(width: 150, alignment: .leading).lineLimit(1)
+                Text((m.categoria ?? "—").capitalized).font(.system(size: 11)).foregroundStyle(PSE.faint).frame(width: 100, alignment: .leading).lineLimit(1)
+                Text((m.modalita ?? "—").capitalized).font(.system(size: 11)).foregroundStyle(PSE.faint).frame(width: 84, alignment: .leading).lineLimit(1)
                 Text((entrata ? "+" : "−") + eur(m.importo_cents))
                     .font(.system(size: 13, weight: .bold)).monospacedDigit()
                     .foregroundStyle(entrata ? Color(hue: 150/360, saturation: 0.4, brightness: 0.62) : Color(hue: 5/360, saturation: 0.46, brightness: 0.62))
+                    .frame(width: 92, alignment: .trailing)
             }
-            .padding(.horizontal, 16).padding(.vertical, 10).contentShape(Rectangle())
+            .padding(.horizontal, 16).padding(.vertical, 9).contentShape(Rectangle())
         }.buttonStyle(.plain)
     }
 
-    // ── Servizi (pulizia + colazioni) ──
-    private var servizi: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
-                servCard("PULIZIA — FATTE", puliziaFatte, "sparkles", PSE.dim)
-                servCard("PULIZIA — PREVISTE", puliziePreviste, "sparkles", PSE.warn)
-            }
-            HStack(spacing: 12) {
-                servCard("COLAZIONI — SERVITE", colazioni.servite, "cup.and.saucer.fill", PSE.dim)
-                servCard("COLAZIONI — TOTALE", colazioni.totale, "cup.and.saucer.fill", PSE.accent)
-            }
-            Text("Pulizia: \(CLEAN_COST/100) € per ogni check-out. Colazioni: \(String(format: "%.2f", Double(BREAKFAST_COST)/100)) € per persona/notte, solo prenotazioni Booking. Calcolate in automatico dalle prenotazioni; le «fatte/servite» fino a oggi sono già registrate in Cassa.")
-                .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
-        }.padding(.bottom, 20)
-    }
     private func servCard(_ t: String, _ v: Int, _ icon: String, _ c: Color) -> some View {
         HStack(spacing: 12) {
             Image(systemName: icon).font(.system(size: 16)).foregroundStyle(c)
@@ -246,6 +349,29 @@ struct TesoreriaView: View {
         .frame(maxWidth: .infinity, alignment: .leading).padding(16)
         .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
+    }
+
+    // card per casa: entrate, spese, utile
+    private func casaCard(_ s: Struttura) -> some View {
+        let st = casaStats(s)
+        let utile = st.inc - st.spese
+        return VStack(alignment: .leading, spacing: 12) {
+            Text(s.label.uppercased()).font(.system(size: 11, weight: .heavy)).tracking(0.6).foregroundStyle(PSE.ink)
+            HStack(spacing: 0) {
+                miniStat("ENTRATE", st.inc, green)
+                miniStat("SPESE", st.spese, red)
+                miniStat("UTILE", utile, utile >= 0 ? green : red)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading).padding(16)
+        .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
+    }
+    private func miniStat(_ t: String, _ v: Int, _ c: Color) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(t).font(.system(size: 8.5, weight: .heavy)).tracking(0.6).foregroundStyle(PSE.faint)
+            Text(eur(v)).font(.system(size: 15, weight: .bold)).foregroundStyle(c).monospacedDigit()
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -267,34 +393,83 @@ private struct TesMovimentoForm: View {
     @State private var saving = false
 
     private let modalitaOpts = ["contante", "booking", "airbnb", "bonifico"]
-    private let struttOpts = ["—", "es-vedra", "via-romagna"]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(existing == nil ? "NUOVO MOVIMENTO" : "MODIFICA MOVIMENTO").font(.system(size: 15, weight: .heavy)).tracking(2).foregroundStyle(Holo.titleText)
-            Picker("Tipo", selection: $tipo) { Text("Entrata").tag("entrata"); Text("Uscita").tag("uscita") }.pickerStyle(.segmented)
-            HStack {
-                DatePicker("Data", selection: $data, displayedComponents: .date).labelsHidden()
-                Picker("Conto", selection: $contoId) { ForEach(conti) { Text($0.nome).tag($0.id) } }
-            }
-            HStack {
-                TextField("Importo (€)", text: $importo).textFieldStyle(.roundedBorder).frame(width: 130)
-                Picker("Modalità", selection: $modalita) { ForEach(modalitaOpts, id: \.self) { Text($0.capitalized).tag($0) } }
-                Picker("Struttura", selection: $struttura) { ForEach(struttOpts, id: \.self) { Text($0 == "—" ? "Entrambe" : ($0 == "es-vedra" ? "Es Vedra" : "Via Romagna")).tag($0) } }
-            }
-            TextField("Categoria (es. affitto, spesa, pulizia…)", text: $categoria).textFieldStyle(.roundedBorder)
-            TextField("Descrizione", text: $descrizione).textFieldStyle(.roundedBorder)
-            HStack {
-                if existing != nil {
-                    Button(role: .destructive) { Task { await del() } } label: { Text("Elimina") }
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text(existing == nil ? "NUOVO MOVIMENTO" : "MODIFICA MOVIMENTO")
+                    .font(.system(size: 15, weight: .heavy)).tracking(2).foregroundStyle(Holo.titleText)
+                HStack(spacing: 12) {
+                    pick("Tipo", [("entrata", "Entrata"), ("uscita", "Uscita")], tipo) { tipo = $0 }
+                    pick("Conto", conti.map { ($0.id, $0.nome) }, contoId) { contoId = $0 }
                 }
-                Spacer()
-                Button("Annulla") { dismiss() }
-                Button(saving ? "Salvo…" : "Salva") { Task { await save() } }.buttonStyle(.borderedProminent).disabled(saving || cents == nil)
-            }.padding(.top, 4)
+                HStack(spacing: 12) {
+                    dateField("Data", $data)
+                    HoloField(label: "Importo €", text: $importo, placeholder: "120").frame(width: 150)
+                }
+                HStack(spacing: 12) {
+                    pick("Modalità", modalitaOpts.map { ($0, $0.capitalized) }, modalita) { modalita = $0 }
+                    pick("Struttura", [("—", "Entrambe"), ("es-vedra", "Es Vedra"), ("via-romagna", "Via Romagna")], struttura) { struttura = $0 }
+                }
+                HoloField(label: "Categoria", text: $categoria, placeholder: "affitto, spesa, pulizia…")
+                HoloField(label: "Descrizione", text: $descrizione, placeholder: "Es. Stanza Camino — Federica")
+
+                HStack(spacing: 10) {
+                    if existing != nil {
+                        Button { Task { await del() } } label: {
+                            Text("Elimina").font(.system(size: 13)).foregroundStyle(Color(hex: 0xffb3ad))
+                                .padding(.horizontal, 14).padding(.vertical, 9)
+                        }.buttonStyle(.plain)
+                    }
+                    Spacer()
+                    Button("Annulla") { dismiss() }.buttonStyle(.plain)
+                        .font(.system(size: 13)).foregroundStyle(Holo.subDim).padding(.horizontal, 16).padding(.vertical, 9)
+                    Button { Task { await save() } } label: {
+                        Text(saving ? "Salvataggio…" : "Salva movimento").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                            .padding(.horizontal, 18).padding(.vertical, 9)
+                            .background(Capsule().fill(LinearGradient(
+                                colors: [Color(red: 37/255, green: 99/255, blue: 235/255), Color(red: 79/255, green: 70/255, blue: 229/255)],
+                                startPoint: .leading, endPoint: .trailing)))
+                    }.buttonStyle(.plain).disabled(saving || cents == nil)
+                    .opacity(cents == nil ? 0.5 : 1)
+                }.padding(.top, 4)
+            }
+            .padding(24)
         }
-        .padding(22).frame(width: 460)
+        .frame(width: 520, height: 470)
+        .background(LinearGradient(colors: [Color(red: 16/255, green: 24/255, blue: 48/255), Color(red: 8/255, green: 12/255, blue: 26/255)],
+                                   startPoint: .top, endPoint: .bottom))
+        .preferredColorScheme(.dark)
         .onAppear(perform: fill)
+    }
+
+    private func dateField(_ label: String, _ date: Binding<Date>) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(label.uppercased()).font(.system(size: 9.5, weight: .heavy)).tracking(1.5)
+                .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.65))
+            DatePicker("", selection: date, displayedComponents: .date).labelsHidden().datePickerStyle(.compact).colorScheme(.dark)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    private func pick(_ label: String, _ opts: [(String, String)], _ sel: String, _ set: @escaping (String) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(label.uppercased()).font(.system(size: 9.5, weight: .heavy)).tracking(1.5)
+                .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.65))
+            Menu {
+                ForEach(opts, id: \.0) { o in Button(o.1) { set(o.0) } }
+            } label: {
+                HStack(spacing: 8) {
+                    Text(opts.first { $0.0 == sel }?.1 ?? "—").font(.system(size: 13)).foregroundStyle(Color(hex: 0xe8f2ff)).lineLimit(1)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(Holo.labelDim)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 9).frame(maxWidth: .infinity)
+                .background(RoundedRectangle(cornerRadius: 9).fill(Color(red: 10/255, green: 16/255, blue: 34/255).opacity(0.8)))
+                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color(red: 130/255, green: 180/255, blue: 1).opacity(0.35), lineWidth: 1))
+                .contentShape(Rectangle())
+            }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+        }
+        .frame(maxWidth: .infinity)
     }
 
     private var cents: Int? {

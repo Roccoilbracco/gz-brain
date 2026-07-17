@@ -20,6 +20,7 @@ struct Prenotazione: Identifiable, Decodable, Equatable {
     var paid_cents: Int
     var status: String
     var source: String?
+    var conto_id: String?
     var notes: String?
     let created_at: String?
 }
@@ -140,6 +141,29 @@ extension HubAPI {
 
 enum PSEViewMode { case prenotazioni, tesoreria }
 
+// segmented control coerente col tema Camere PSE (niente picker nativo grigio)
+struct PSESegmented<T: Hashable>: View {
+    let items: [(T, String)]
+    @Binding var selection: T
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(items, id: \.0) { item in
+                let sel = selection == item.0
+                Text(item.1)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(sel ? PSE.ink : PSE.dim)
+                    .padding(.horizontal, 15).padding(.vertical, 6)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(sel ? PSE.accent.opacity(0.9) : Color.clear))
+                    .contentShape(Rectangle())
+                    .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { selection = item.0 } }
+            }
+        }
+        .padding(3)
+        .background(RoundedRectangle(cornerRadius: 11).fill(PSE.surface))
+        .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(PSE.line, lineWidth: 1))
+    }
+}
+
 // ── Dashboard ────────────────────────────────────────────────────────────────
 struct CamerePSEDashboard: View {
     @State private var items: [Prenotazione] = []
@@ -151,6 +175,7 @@ struct CamerePSEDashboard: View {
     @State private var editing: Prenotazione? = nil
     @State private var showForm = false
     @State private var viewMode: PSEViewMode = .prenotazioni
+    @State private var newMovimento = false
 
     private var attive: [Prenotazione] { items.filter { BookingStatus.from($0.status).active } }
 
@@ -247,11 +272,10 @@ struct CamerePSEDashboard: View {
         ZStack(alignment: .trailing) {
             VStack(alignment: .leading, spacing: 16) {
                 header
-                viewSwitcher
-                strutturaChips
                 if viewMode == .tesoreria {
-                    TesoreriaView(prenotazioni: items, struttura: strutturaFilter)
+                    TesoreriaView(prenotazioni: items, newTrigger: $newMovimento)
                 } else {
+                    strutturaChips
                     kpiBar
                     if loading {
                         HStack { Spacer(); ProgressView().controlSize(.large); Spacer() }.padding(.top, 40)
@@ -286,32 +310,20 @@ struct CamerePSEDashboard: View {
     }
 
     private var header: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("PRENOTAZIONI").font(.system(size: 19, weight: .heavy)).tracking(5)
-                    .foregroundStyle(PSE.ink)
-                Text("Camere PSE · Porto Sant'Elpidio").font(.system(size: 11)).foregroundStyle(PSE.dim)
-            }
+        HStack(alignment: .center, spacing: 14) {
+            PSESegmented(items: [(PSEViewMode.prenotazioni, "Prenotazioni"), (PSEViewMode.tesoreria, "Tesoreria")], selection: $viewMode)
             Spacer()
-            if viewMode == .prenotazioni {
-                Button { editing = nil; showForm = true } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "plus").font(.system(size: 11, weight: .bold))
-                        Text("Nuova prenotazione").font(.system(size: 12.5, weight: .semibold))
-                    }
-                    .foregroundStyle(PSE.ink).padding(.horizontal, 14).padding(.vertical, 8)
-                    .background(Capsule().fill(PSE.warn.opacity(0.95)))
-                }.buttonStyle(.plain)
-            }
+            Button {
+                if viewMode == .prenotazioni { editing = nil; showForm = true } else { newMovimento = true }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "plus").font(.system(size: 11, weight: .bold))
+                    Text(viewMode == .prenotazioni ? "Nuova prenotazione" : "Nuovo movimento").font(.system(size: 12.5, weight: .semibold))
+                }
+                .foregroundStyle(PSE.ink).padding(.horizontal, 14).padding(.vertical, 8)
+                .background(Capsule().fill(PSE.warn.opacity(0.95)))
+            }.buttonStyle(.plain)
         }
-    }
-
-    private var viewSwitcher: some View {
-        Picker("", selection: $viewMode) {
-            Text("Prenotazioni").tag(PSEViewMode.prenotazioni)
-            Text("Tesoreria").tag(PSEViewMode.tesoreria)
-        }
-        .pickerStyle(.segmented).frame(width: 260).labelsHidden()
     }
 
     private var kpiBar: some View {
@@ -335,22 +347,10 @@ struct CamerePSEDashboard: View {
     }
 
     private var strutturaChips: some View {
-        HStack(spacing: 7) {
-            chip(strutturaFilter == nil, "Tutte") { strutturaFilter = nil }
-            ForEach(Struttura.allCases) { s in
-                chip(strutturaFilter == s, s.label) { strutturaFilter = strutturaFilter == s ? nil : s }
-            }
+        HStack {
+            PSESegmented(items: [(nil, "Tutte"), (.esVedra, "Es Vedra"), (.viaRomagna, "Via Romagna")] as [(Struttura?, String)], selection: $strutturaFilter)
             Spacer()
         }
-    }
-    private func chip(_ on: Bool, _ label: String, _ act: @escaping () -> Void) -> some View {
-        Button { withAnimation(.easeOut(duration: 0.15)) { act() } } label: {
-            Text(label).font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(on ? PSE.ink : PSE.dim)
-                .padding(.horizontal, 11).padding(.vertical, 5)
-                .background(Capsule().fill(on ? PSE.accent.opacity(0.85) : PSE.surface))
-                .overlay(Capsule().strokeBorder(on ? .clear : PSE.line, lineWidth: 1))
-        }.buttonStyle(.plain)
     }
 
     // ── barra calendario scorrevole ──
@@ -604,11 +604,29 @@ struct CamerePSEDashboard: View {
         if let i = items.firstIndex(where: { $0.id == b.id }) { items[i].status = s.rawValue }
         if var sel = selected, sel.id == b.id { sel.status = s.rawValue; selected = sel }
         try? await HubAPI.updatePrenotazione(id: b.id, fields: ["status": s.rawValue])
+        if s == .cancellata { try? await HubAPI.deleteMovimentoByExtKey("colazione:pren:\(b.id)") }
     }
     private func setPaid(_ b: Prenotazione, _ cents: Int) async {
         if let i = items.firstIndex(where: { $0.id == b.id }) { items[i].paid_cents = cents }
         if var sel = selected, sel.id == b.id { sel.paid_cents = cents; selected = sel }
         try? await HubAPI.updatePrenotazione(id: b.id, fields: ["paid_cents": cents])
+        await syncColazione(b, paidNow: cents)
+    }
+    // la colazione al bar (solo Booking) diventa un costo quando la prenotazione è incassata
+    private func syncColazione(_ b: Prenotazione, paidNow: Int) async {
+        let key = "colazione:pren:\(b.id)"
+        try? await HubAPI.deleteMovimentoByExtKey(key)
+        guard (b.source ?? "") == "booking" else { return }
+        let g = max(1, b.guests ?? 1)
+        let n = nights(b.checkin, b.checkout) ?? 0
+        guard paidNow >= b.amount_cents, b.amount_cents > 0, n > 0 else { return }
+        let fields: [String: Any?] = [
+            "ext_key": key, "conto_id": "cassa", "data": String((b.checkin ?? "").prefix(10)),
+            "tipo": "uscita", "categoria": "colazioni", "modalita": "contante", "struttura": "es-vedra",
+            "descrizione": "Colazione bar — \(b.guest_name) (\(n)n × \(g)p)",
+            "importo_cents": 350 * g * n,
+        ]
+        try? await HubAPI.createTesMovimento(fields)
     }
     private func remove(_ b: Prenotazione) async {
         try? await HubAPI.deletePrenotazione(id: b.id)
@@ -764,6 +782,7 @@ private struct BookingForm: View {
     @State private var amount = ""; @State private var paid = ""
     @State private var status = BookingStatus.in_attesa
     @State private var source = "sito"
+    @State private var contoId = "beeper"
     @State private var notes = ""
     @State private var saving = false
 
@@ -789,7 +808,8 @@ private struct BookingForm: View {
                 }
                 HStack(spacing: 12) {
                     pick("Stato", BookingStatus.allCases.map { ($0.rawValue, $0.label) }, status.rawValue) { status = .from($0) }
-                    pick("Fonte", bookingSources.map { ($0, $0.capitalized) }, source) { source = $0 }
+                    pick("Fonte", bookingSources.map { ($0, $0.capitalized) }, source) { source = $0; contoId = ($0 == "booking" || $0 == "airbnb") ? "massimo" : contoId }
+                    pick("Conto (soldi)", [("cassa", "Cassa contante"), ("beeper", "Beeper"), ("massimo", "Massimo")], contoId) { contoId = $0 }
                 }
                 HoloField(label: "Note", text: $notes)
 
@@ -824,7 +844,7 @@ private struct BookingForm: View {
         if let c = e.checkout.flatMap({ ymdBk.date(from: String($0.prefix(10))) }) { checkout = c }
         guests = e.guests.map(String.init) ?? ""
         amount = String(e.amount_cents / 100); paid = String(e.paid_cents / 100)
-        status = .from(e.status); source = e.source ?? "sito"; notes = e.notes ?? ""
+        status = .from(e.status); source = e.source ?? "sito"; contoId = e.conto_id ?? "beeper"; notes = e.notes ?? ""
     }
     private func save() async {
         saving = true
@@ -834,7 +854,7 @@ private struct BookingForm: View {
             "guest_name": name.trimmingCharacters(in: .whitespaces), "guest_phone": s(phone), "guest_email": s(email),
             "checkin": ymdBk.string(from: checkin), "checkout": ymdBk.string(from: checkout),
             "guests": Int(guests), "amount_cents": (Int(amount) ?? 0) * 100, "paid_cents": (Int(paid) ?? 0) * 100,
-            "status": status.rawValue, "source": source, "notes": s(notes),
+            "status": status.rawValue, "source": source, "conto_id": contoId, "notes": s(notes),
         ]
         do {
             if let e = existing { try await HubAPI.updatePrenotazione(id: e.id, fields: body) }
