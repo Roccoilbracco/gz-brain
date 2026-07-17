@@ -184,7 +184,7 @@ struct LeadsHubView: View {
         ZStack(alignment: .trailing) {
             VStack(alignment: .leading, spacing: 16) {
                 header
-                kpiBar
+                pipelineHeader
                 filterRow
                 if loading {
                     Spacer(); HStack { Spacer(); ProgressView().controlSize(.large); Spacer() }; Spacer()
@@ -240,14 +240,50 @@ struct LeadsHubView: View {
         }
     }
 
-    // KPI
-    private var kpiBar: some View {
-        HStack(spacing: 12) {
-            StatTile(label: "TOTALE", value: "\(leads.count)", hue: 210)
-            StatTile(label: "NUOVI", value: "\(nuoviCount)", hue: 45)
-            StatTile(label: "IN VISITA", value: "\(leads.filter { $0.stage == LeadStage.visita.rawValue }.count)", hue: 165)
-            StatTile(label: "VALORE PIPELINE", value: pipelineValue > 0 ? LeadFmt.compact(pipelineValue) : "—", hue: 270)
-            StatTile(label: "CONVERSIONE", value: conversion > 0 ? "\(conversion)%" : "—", hue: 145)
+    // conteggi su TUTTI i lead (overview, indipendente da filtri)
+    private func countStage(_ s: LeadStage) -> Int { leads.filter { $0.stage == s.rawValue }.count }
+    private var interest: (acq: Int, aff: Int, ven: Int, total: Int) {
+        var a = 0, f = 0, v = 0
+        for l in leads {
+            switch l.interest { case "acquisto": a += 1; case "affitto": f += 1; case "vendita": v += 1; default: break }
+        }
+        return (a, f, v, a + f + v)
+    }
+    private var activityValues: [Int] { bucketISODatesByDay(leads.map { $0.created_at }, days: 14) }
+
+    // testata stile Energizzo: barre attività + pannello 3 categorie + funnel pipeline
+    private var pipelineHeader: some View {
+        VStack(spacing: 14) {
+            HStack(spacing: 14) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("NUOVI LEAD · 14 GIORNI")
+                            .font(.system(size: 9.5, weight: .heavy)).tracking(2).foregroundStyle(Holo.labelDim)
+                        Spacer()
+                        if pipelineValue > 0 {
+                            Text("PIPELINE \(LeadFmt.compact(pipelineValue))")
+                                .font(.system(size: 9.5, weight: .heavy)).tracking(1)
+                                .foregroundStyle(Holo.hsl(270, 75, 72))
+                        }
+                        if conversion > 0 {
+                            Text("· CONV \(conversion)%")
+                                .font(.system(size: 9.5, weight: .heavy)).tracking(1)
+                                .foregroundStyle(Holo.hsl(145, 70, 66))
+                        }
+                    }
+                    SkyBars(values: activityValues, hue: 150, height: 78)
+                }
+                .padding(EdgeInsets(top: 14, leading: 16, bottom: 12, trailing: 16))
+                .frame(maxWidth: .infinity)
+                .background(LinearGradient(
+                    colors: [Holo.hsl(150, 60, 30).opacity(0.22), Color(red: 10/255, green: 16/255, blue: 34/255).opacity(0.6)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Holo.hsl(150, 85, 62).opacity(0.4), lineWidth: 1))
+
+                InterestPanel(acq: interest.acq, aff: interest.aff, ven: interest.ven, total: interest.total)
+            }
+            LeadFunnel(total: leads.count, count: { countStage($0) })
         }
     }
 
@@ -411,18 +447,154 @@ private struct LeadCard: View {
     }
 }
 
-// ── Stat tile KPI ────────────────────────────────────────────────────────────
-private struct StatTile: View {
-    let label: String; let value: String; let hue: Double
+// ── Pannello 3 categorie: Acquisto / Affitto / Vendita (stile ServicePanel) ──
+private struct InterestPanel: View {
+    let acq: Int, aff: Int, ven: Int, total: Int
+    private func pct(_ n: Int) -> Int { total > 0 ? Int((Double(n) / Double(total) * 100).rounded()) : 0 }
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label).font(.system(size: 9, weight: .heavy)).tracking(1).foregroundStyle(Holo.hsl(hue, 70, 68))
-            Text(value).font(.system(size: 22, weight: .bold)).foregroundStyle(Holo.titleText)
+        GlassCard {
+            VStack(spacing: 10) {
+                HStack(spacing: 14) {
+                    StatCap(label: "Acquisto", n: acq, pct: pct(acq), hue: 150)
+                    StatCap(label: "Affitto", n: aff, pct: pct(aff), hue: 210)
+                    StatCap(label: "Vendita", n: ven, pct: pct(ven), hue: 30)
+                }
+                WaveEqualizer(hueAt: { f in
+                    let a = total > 0 ? CGFloat(acq) / CGFloat(total) : 0.34
+                    let b = total > 0 ? CGFloat(aff) / CGFloat(total) : 0.33
+                    return f < a ? 150 : (f < a + b ? 210 : 30)
+                })
+                .frame(height: 36)
+            }
+            .padding(EdgeInsets(top: 14, leading: 16, bottom: 10, trailing: 16))
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+// ── Funnel pipeline 4×2 a serpentina con filamento animato ──────────────────
+private struct FunnelNode { let label: String; let icon: String; let stage: LeadStage? }
+private let FUNNEL_NODES: [FunnelNode] = [
+    .init(label: "Leads", icon: "chart.bar.fill", stage: nil),                       // 0 totale
+    .init(label: "Nuovo", icon: "sparkles", stage: .nuovo),                          // 1
+    .init(label: "Contattato", icon: "phone.fill", stage: .contattato),             // 2
+    .init(label: "Qualificato", icon: "checkmark.seal.fill", stage: .qualificato),  // 3
+    .init(label: "Chiuso vinto", icon: "trophy.fill", stage: .vinto),               // 4 (basso-sx)
+    .init(label: "Trattativa", icon: "arrow.left.arrow.right", stage: .trattativa), // 5
+    .init(label: "Proposta", icon: "paperplane.fill", stage: .proposta),            // 6
+    .init(label: "Visita", icon: "calendar", stage: .visita),                        // 7
+]
+private let FUNNEL_EDGES: [(Int, Int)] = [(0,1),(1,2),(2,3),(3,7),(7,6),(6,5),(5,4)]
+private let FUNNEL_ORDER = [0, 1, 2, 3, 7, 6, 5, 4]
+private let FUNNEL_GAP: CGFloat = 30
+private let FUNNEL_PERIOD = 15.0
+private let FUNNEL_TRAVEL = 0.72
+
+private func funnelHead(at t: Double) -> Double? {
+    let c = (t / FUNNEL_PERIOD).truncatingRemainder(dividingBy: 1)
+    guard c < FUNNEL_TRAVEL else { return nil }
+    let u = c / FUNNEL_TRAVEL
+    return u < 0.5 ? 2 * u * u : 1 - pow(-2 * u + 2, 2) / 2
+}
+private func funnelGlow(node: Int, at t: Double) -> Double {
+    guard let head = funnelHead(at: t), let idx = FUNNEL_ORDER.firstIndex(of: node) else { return 0 }
+    let pos = Double(idx) / Double(FUNNEL_ORDER.count - 1)
+    return max(0, 1 - abs(head - pos) / 0.13)
+}
+
+private struct LeadFunnel: View {
+    let total: Int
+    let count: (LeadStage) -> Int
+
+    var body: some View {
+        GlassCard {
+            VStack(spacing: FUNNEL_GAP) {
+                row([0, 1, 2, 3])
+                row([4, 5, 6, 7])
+            }
+            .background(FunnelLines())
+            .padding(14)
+        }
+    }
+    private func row(_ idx: [Int]) -> some View {
+        HStack(spacing: FUNNEL_GAP) { ForEach(idx, id: \.self) { node($0) } }
+    }
+    private func value(_ i: Int) -> Int {
+        guard let s = FUNNEL_NODES[i].stage else { return total }
+        return count(s)
+    }
+    private func node(_ i: Int) -> some View {
+        let n = FUNNEL_NODES[i]
+        let hue: Double = n.stage?.hue ?? 210
+        return VStack(alignment: .leading, spacing: 1) {
+            Text("\(value(i))").font(.system(size: 20, weight: .black))
+                .foregroundStyle(Holo.hsl(hue, 88, 72))
+                .shadow(color: Holo.hsl(hue, 90, 60).opacity(0.6), radius: 6)
+            Text(n.label.uppercased()).font(.system(size: 8.5, weight: .heavy)).tracking(1.2)
+                .foregroundStyle(Holo.labelDim).lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.03)))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Holo.hsl(hue, 60, 55).opacity(0.28), lineWidth: 1))
+        .padding(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+        .overlay(alignment: .topTrailing) { FunnelIcon(icon: n.icon, node: i, hue: hue) }
+        .background(Color(red: 8/255, green: 12/255, blue: 26/255))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .strokeBorder(Holo.hsl(hue, 70, 50).opacity(0.35), lineWidth: 1))
+        .overlay(FunnelBorder(node: i, hue: hue))
+    }
+}
+
+private struct FunnelBorder: View {
+    let node: Int; let hue: Double
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { tl in
+            let g = funnelGlow(node: node, at: tl.date.timeIntervalSinceReferenceDate)
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(Holo.hsl(hue, 92, 72).opacity(0.85 * g), lineWidth: 1.5)
+                .shadow(color: Holo.hsl(hue, 95, 66).opacity(0.6 * g), radius: 9 * g)
+        }
+    }
+}
+private struct FunnelIcon: View {
+    let icon: String; let node: Int; let hue: Double
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { tl in
+            let g = funnelGlow(node: node, at: tl.date.timeIntervalSinceReferenceDate)
+            Image(systemName: icon).font(.system(size: 13))
+                .foregroundStyle(Holo.hsl(hue, 85, 58 + 28 * g))
+                .opacity(0.55 + 0.45 * g).scaleEffect(1 + 0.12 * g)
+                .shadow(color: Holo.hsl(hue, 95, 70).opacity(0.7 * g), radius: 7 * g)
+                .padding(8)
+        }
+    }
+}
+private struct FunnelLines: View {
+    private func path(in size: CGSize) -> Path {
+        let cw = (size.width - 3 * FUNNEL_GAP) / 4, ch = (size.height - FUNNEL_GAP) / 2
+        func center(_ i: Int) -> CGPoint {
+            let row = i / 4, col = i % 4
+            return CGPoint(x: CGFloat(col) * (cw + FUNNEL_GAP) + cw / 2,
+                           y: CGFloat(row) * (ch + FUNNEL_GAP) + ch / 2)
+        }
+        return Path { p in for (a, b) in FUNNEL_EDGES { p.move(to: center(a)); p.addLine(to: center(b)) } }
+    }
+    var body: some View {
+        GeometryReader { geo in
+            let pth = path(in: geo.size)
+            TimelineView(.animation(minimumInterval: 1.0 / 30)) { tl in
+                let head = funnelHead(at: tl.date.timeIntervalSinceReferenceDate)
+                ZStack {
+                    pth.stroke(Color(red: 140/255, green: 180/255, blue: 250/255).opacity(0.24), lineWidth: 2)
+                    if let head {
+                        let h = CGFloat(head)
+                        pth.trim(from: max(0, h - 0.16), to: h)
+                            .stroke(Holo.hsl(150, 92, 72).opacity(0.8),
+                                    style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                            .shadow(color: Holo.hsl(150, 95, 64).opacity(0.55), radius: 5)
+                    }
+                }
+            }
+        }
     }
 }
 
