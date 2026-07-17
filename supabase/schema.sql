@@ -255,6 +255,31 @@ create table if not exists public.mov_match (
   created_at timestamptz default now()
 );
 
+-- ── re_leads (CRM immobiliare: richieste da Sito/Social/Chiamate/WhatsApp/Email/Idealista) ──
+create table if not exists public.re_leads (
+  id              uuid primary key default gen_random_uuid(),
+  name            text not null,
+  phone           text,
+  email           text,
+  source          text not null default 'sito',   -- sito|social|chiamata|whatsapp|email|idealista
+  stage           text not null default 'nuovo',  -- pipeline: nuovo|contattato|qualificato|visita|proposta|trattativa|vinto|perso
+  interest        text,                            -- acquisto|affitto|vendita
+  property_type   text,                            -- appartamento|villa|attico|terreno|commerciale
+  zone            text,
+  budget_min      integer,
+  budget_max      integer,
+  bedrooms        smallint,
+  notes           text,
+  assigned_to     text,
+  idealista_ref   text,
+  last_contact_at timestamptz,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
+);
+create index if not exists re_leads_stage_idx   on public.re_leads using btree (stage);
+create index if not exists re_leads_source_idx  on public.re_leads using btree (source);
+create index if not exists re_leads_created_idx on public.re_leads using btree (created_at desc);
+
 -- ── funzione + trigger: lead chiuso_vinto → crea/aggiorna cliente ─────────
 create or replace function public.sync_lead_cliente()
 returns trigger
@@ -304,3 +329,4 @@ alter table public.fattura_righe     enable row level security;
 alter table public.spese             enable row level security;
 alter table public.estratti_conto    enable row level security;
 alter table public.mov_match         enable row level security;
+alter table public.re_leads          enable row level security;

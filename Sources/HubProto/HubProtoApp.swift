@@ -37,6 +37,7 @@ enum ClientiTab: String, CaseIterable { case clienti, fatture, spese, banca, exp
 enum Route: Equatable {
     case panoramica
     case progetti
+    case leadsHub
     case clienti
     case impostazioni
     case progetto(slug: String, tab: ProjectTab)

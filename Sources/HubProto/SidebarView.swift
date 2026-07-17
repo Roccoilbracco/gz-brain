@@ -76,7 +76,16 @@ struct SidebarView: View {
             }
             .padding(3)
             .background(RoundedRectangle(cornerRadius: 11).fill(Csb.tabsBg))
-            .padding(.bottom, 22)
+            .padding(.bottom, 12)
+
+            // voce Leads: pipeline CRM immobiliare (globale, non legata a un progetto)
+            navRow("Leads", icon: "person.crop.rectangle.stack.fill", on: state.route == .leadsHub) {
+                state.route = .leadsHub
+            }
+            .padding(.bottom, 14)
+
+            Text("PROGETTI").font(.system(size: 9, weight: .heavy)).tracking(1.5)
+                .foregroundStyle(Csb.tagFg).padding(.leading, 6).padding(.bottom, 6)
 
             // lista progetti (uno sotto l'altro): click apre Dash o Code del progetto
             // a seconda della modalità scelta in alto
@@ -126,6 +135,25 @@ struct SidebarView: View {
             }
             .padding(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 10))
             .background(RoundedRectangle(cornerRadius: 10).fill(on ? Csb.itemOn : .clear))
+            .contentShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func navRow(_ label: String, icon: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: icon).font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(on ? Csb.itemFgOn : Csb.avatar)
+                    .frame(width: 18)
+                Text(label).font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(on ? Csb.itemFgOn : Color(hex: 0xd7dae2))
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 9)
+            .background(RoundedRectangle(cornerRadius: 10).fill(on ? Csb.itemOn : Color.white.opacity(0.02)))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(
+                on ? Csb.avatar.opacity(0.4) : Color.white.opacity(0.05), lineWidth: 1))
             .contentShape(RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain)
