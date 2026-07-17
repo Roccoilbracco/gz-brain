@@ -42,8 +42,6 @@ struct ClienteFormView: View {
     @State private var sitoWeb = ""
     @State private var note = ""
     @State private var docs: [URL] = []
-    @State private var commessaNome = ""
-    @State private var commessaTipo = ""
     @State private var saving = false
     @State private var errorMsg: String?
 
@@ -68,14 +66,6 @@ struct ClienteFormView: View {
                 }
                 HoloField(label: "Note", text: $note)
                 DocumentiStaging(docs: $docs)
-
-                Divider().overlay(Color.white.opacity(0.1))
-                Text("PRIMO PROGETTO (opzionale)").font(.system(size: 9.5, weight: .heavy)).tracking(1.5)
-                    .foregroundStyle(Holo.labelDim)
-                HStack(spacing: 12) {
-                    HoloField(label: "Nome progetto", text: $commessaNome, placeholder: "Es. Sito vetrina")
-                    HoloField(label: "Tipo", text: $commessaTipo, placeholder: "Es. Web").frame(width: 150)
-                }
 
                 if let errorMsg {
                     Text(errorMsg).font(.system(size: 11)).foregroundStyle(Color(hex: 0xffb3ad))
@@ -119,11 +109,6 @@ struct ClienteFormView: View {
                     "provincia": nz(provincia), "email": nz(email), "telefono": nz(telefono),
                     "sito_web": nz(sitoWeb), "note": nz(note),
                 ])
-                if let nome = nz(commessaNome) {
-                    try await HubAPI.createCommessa([
-                        "cliente_id": cliente.id, "nome": nome, "tipo": nz(commessaTipo),
-                    ])
-                }
                 for url in docs { try await HubAPI.addClienteDocumento(clienteId: cliente.id, fileURL: url) }
                 await MainActor.run { saving = false; onSaved(); dismiss() }
             } catch {
