@@ -139,7 +139,7 @@ extension HubAPI {
     static func listProprietaDocumenti(_ propId: String) async throws -> [ProprietaDocumento] {
         try await sb.fetch("proprieta_documenti?select=*&proprieta_id=eq.\(propId)&order=created_at.desc")
     }
-    static func addProprietaDocumento(propId: String, fileURL: URL) async throws {
+    static func addProprietaDocumento(propId: String, fileURL: URL, tipo: String) async throws {
         let bytes = try Data(contentsOf: fileURL)
         let ext = fileURL.pathExtension.isEmpty ? "pdf" : fileURL.pathExtension
         let ct = UTType(filenameExtension: ext)?.preferredMIMEType ?? "application/octet-stream"
@@ -148,7 +148,7 @@ extension HubAPI {
         let name = "\(propId)/docs/\(UUID().uuidString.prefix(8))-\(safe).\(ext)"
         let stored = try await sb.uploadFile(bucket: "proprieta", path: name, data: bytes, contentType: ct)
         try await sb.mutate("proprieta_documenti", method: "POST", body: [
-            "proprieta_id": propId, "nome": fileURL.lastPathComponent, "path": stored,
+            "proprieta_id": propId, "nome": fileURL.lastPathComponent, "path": stored, "tipo": tipo,
         ])
     }
     static func deleteProprietaDocumento(id: String, path: String?) async throws {
@@ -164,7 +164,31 @@ struct ProprietaDocumento: Decodable, Identifiable {
     let id: String
     let nome: String
     let path: String
+    let tipo: String?
     let created_at: String?
+}
+
+enum DocTipo: String, CaseIterable, Identifiable {
+    case contratto, piantina, catasto, altro
+    var id: String { rawValue }
+    var label: String { rawValue.capitalized }
+    var hue: Double {
+        switch self {
+        case .contratto: return 210
+        case .piantina: return 150
+        case .catasto: return 45
+        case .altro: return 280
+        }
+    }
+    var icon: String {
+        switch self {
+        case .contratto: return "doc.text.fill"
+        case .piantina: return "ruler.fill"
+        case .catasto: return "map.fill"
+        case .altro: return "paperclip"
+        }
+    }
+    static func from(_ s: String?) -> DocTipo { DocTipo(rawValue: s ?? "") ?? .altro }
 }
 
 // ── Carosello immagini remoto (scorre 1 alla volta) ──────────────────────────
@@ -795,6 +819,13 @@ struct ProprietaDocumentiSection: View {
     @State private var loading = true
     @State private var busy = false
     @State private var msg: String?
+    @State private var filter: DocTipo? = nil
+
+    private var shown: [ProprietaDocumento] {
+        guard let f = filter else { return docs }
+        return docs.filter { DocTipo.from($0.tipo) == f }
+    }
+    private func count(_ t: DocTipo) -> Int { docs.filter { DocTipo.from($0.tipo) == t }.count }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -802,7 +833,23 @@ struct ProprietaDocumentiSection: View {
                 Text("DOCUMENTI").font(.system(size: 10, weight: .heavy)).tracking(2)
                     .foregroundStyle(Holo.hsl(210, 60, 66))
                 Spacer()
-                MenuPillButton(label: "Carica", icon: "paperclip", disabled: busy) { pick() }
+                Menu {
+                    ForEach(DocTipo.allCases) { t in
+                        Button { pick(tipo: t) } label: { Label("Carica \(t.label)", systemImage: t.icon) }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "paperclip").font(.system(size: 10, weight: .bold))
+                        Text("Carica").font(.system(size: 12, weight: .semibold))
+                        Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold))
+                    }
+                    .foregroundStyle(Csb.itemFgOn)
+                    .padding(.horizontal, 13).padding(.vertical, 7)
+                    .background(RoundedRectangle(cornerRadius: 9).fill(Csb.tabOn.opacity(0.9)))
+                    .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Csb.tabOnBorder, lineWidth: 1))
+                }
+                .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+                .disabled(busy).opacity(busy ? 0.5 : 1)
             }
             if let msg { Text(msg).font(.system(size: 11)).foregroundStyle(Holo.subDim) }
             if loading {
@@ -810,10 +857,17 @@ struct ProprietaDocumentiSection: View {
             } else if docs.isEmpty {
                 EmptyStateCard(icon: "doc.text", text: "Nessun documento.\nCarica contratti, piantine, visure catastali con “Carica”.")
             } else {
+                // filtri per tipo
+                HStack(spacing: 7) {
+                    filterChip(nil, "Tutti", docs.count)
+                    ForEach(DocTipo.allCases) { t in
+                        if count(t) > 0 { filterChip(t, t.label, count(t)) }
+                    }
+                }
                 VStack(spacing: 0) {
-                    ForEach(Array(docs.enumerated()), id: \.element.id) { i, d in
+                    ForEach(Array(shown.enumerated()), id: \.element.id) { i, d in
                         row(d)
-                        if i < docs.count - 1 { Divider().overlay(Color.white.opacity(0.06)) }
+                        if i < shown.count - 1 { Divider().overlay(Color.white.opacity(0.06)) }
                     }
                 }
                 .padding(.vertical, 2)
@@ -825,22 +879,32 @@ struct ProprietaDocumentiSection: View {
         .task(id: proprietaId) { await load() }
     }
 
+    private func filterChip(_ t: DocTipo?, _ label: String, _ n: Int) -> some View {
+        let on = filter == t
+        let c = t?.hue ?? 210
+        return Button { withAnimation(.easeOut(duration: 0.15)) { filter = t } } label: {
+            Text("\(label) \(n)").font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(on ? Color(hex: 0x0b1220) : Holo.hsl(c, 60, 72))
+                .padding(.horizontal, 10).padding(.vertical, 4)
+                .background(Capsule().fill(on ? Holo.hsl(c, 75, 62) : Holo.hsl(c, 60, 45).opacity(0.15)))
+                .overlay(Capsule().strokeBorder(Holo.hsl(c, 70, 55).opacity(on ? 0 : 0.4), lineWidth: 1))
+        }.buttonStyle(.plain)
+    }
+
     private func row(_ d: ProprietaDocumento) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: iconFor(d.nome)).font(.system(size: 13)).foregroundStyle(Csb.itemFg)
+        let t = DocTipo.from(d.tipo)
+        return HStack(spacing: 12) {
+            Image(systemName: t.icon).font(.system(size: 13)).foregroundStyle(Holo.hsl(t.hue, 75, 70))
             Text(d.nome).font(.system(size: 12.5)).foregroundStyle(Holo.text).lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            Text(t.label.uppercased()).font(.system(size: 8, weight: .heavy)).tracking(0.5)
+                .foregroundStyle(Holo.hsl(t.hue, 80, 74))
+                .padding(.horizontal, 7).padding(.vertical, 2.5)
+                .background(Capsule().fill(Holo.hsl(t.hue, 70, 45).opacity(0.18)))
             IconButton(icon: "arrow.up.right.square", help: "Apri") { Task { await apri(d) } }
             IconButton(icon: "trash", help: "Elimina", danger: true) { Task { await elimina(d) } }
         }
         .padding(.horizontal, 14).padding(.vertical, 8)
-    }
-    private func iconFor(_ name: String) -> String {
-        let n = name.lowercased()
-        if n.hasSuffix(".pdf") { return "doc.richtext" }
-        if n.hasSuffix(".png") || n.hasSuffix(".jpg") || n.hasSuffix(".jpeg") { return "photo" }
-        if n.contains("piant") || n.contains("plan") { return "ruler" }
-        return "doc.text"
     }
 
     private func load() async {
@@ -862,7 +926,7 @@ struct ProprietaDocumentiSection: View {
         do { try await HubAPI.deleteProprietaDocumento(id: d.id, path: d.path); await load() }
         catch let e { msg = "Errore eliminazione: \(e.localizedDescription)" }
     }
-    private func pick() {
+    private func pick(tipo: DocTipo) {
         let p = NSOpenPanel()
         p.allowedContentTypes = [.pdf, .png, .jpeg, .image, .data]
         p.allowsMultipleSelection = true
@@ -872,7 +936,7 @@ struct ProprietaDocumentiSection: View {
         Task {
             busy = true; defer { busy = false }
             do {
-                for url in urls { try await HubAPI.addProprietaDocumento(propId: proprietaId, fileURL: url) }
+                for url in urls { try await HubAPI.addProprietaDocumento(propId: proprietaId, fileURL: url, tipo: tipo.rawValue) }
                 await load()
             } catch let e { msg = "Errore caricamento: \(e.localizedDescription)" }
         }
