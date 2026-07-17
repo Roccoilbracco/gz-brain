@@ -296,6 +296,9 @@ create table if not exists public.proprieta (
   size_sqm      integer,
   price         integer,                         -- prezzo/richiesta attuale (€)
   status        text not null default 'disponibile', -- disponibile|riservata|venduta|affittata|ritirata
+  photos        text[],                          -- path oggetti nel bucket storage 'proprieta'
+  latitude      double precision,
+  longitude     double precision,
   notes         text,
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()

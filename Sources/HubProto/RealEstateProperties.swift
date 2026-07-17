@@ -1,4 +1,5 @@
 import SwiftUI
+import MapKit
 
 // ============================================================================
 // Registro Proprietà (immobili) + storico operazioni.
@@ -21,6 +22,9 @@ struct Proprieta: Decodable, Identifiable {
     var size_sqm: Int?
     var price: Int?
     var status: String
+    var photos: [String]?
+    var latitude: Double?
+    var longitude: Double?
     var notes: String?
     let created_at: String?
     var proprieta_storico: [ProprietaStorico]?
@@ -119,15 +123,97 @@ extension HubAPI {
     static func deleteStorico(id: String) async throws {
         try await sb.mutate("proprieta_storico?id=eq.\(id)", method: "DELETE")
     }
+    // foto: bucket 'proprieta'
+    @discardableResult
+    static func uploadProprietaPhoto(propId: String, data: Data, ext: String) async throws -> String {
+        let name = "\(propId)/\(UUID().uuidString.prefix(8)).\(ext.isEmpty ? "jpg" : ext)"
+        return try await sb.uploadFile(bucket: "proprieta", path: name, data: data, contentType: "image/\(ext == "png" ? "png" : "jpeg")")
+    }
+    static func downloadProprietaPhoto(path: String) async throws -> Data {
+        try await sb.downloadFile(bucket: "proprieta", path: path)
+    }
 }
 
-// ── Lista proprietà (griglia card) ───────────────────────────────────────────
+// ── Carosello immagini remoto (scorre 1 alla volta) ──────────────────────────
+struct RemoteImageCarousel: View {
+    let paths: [String]
+    var height: CGFloat = 150
+    var corner: CGFloat = 10
+    @State private var images: [NSImage?] = []
+    @State private var index = 0
+    @State private var loaded = false
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: corner).fill(Color(hex: 0x0c1220))
+            if !loaded {
+                ProgressView().controlSize(.small)
+            } else if let img = images.indices.contains(index) ? images[index] : nil {
+                Image(nsImage: img).resizable().scaledToFill()
+            } else {
+                Image(systemName: "photo").font(.system(size: 26)).foregroundStyle(Csb.secFg.opacity(0.5))
+            }
+        }
+        .frame(height: height)
+        .frame(maxWidth: .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: corner))
+        .overlay(alignment: .center) { if paths.count > 1 { arrows } }
+        .overlay(alignment: .bottom) { if paths.count > 1 { dots } }
+        .overlay(RoundedRectangle(cornerRadius: corner).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+        .contentShape(Rectangle())
+        .gesture(DragGesture(minimumDistance: 20).onEnded { v in
+            if v.translation.width < -30 { step(1) } else if v.translation.width > 30 { step(-1) }
+        })
+        .task { await load() }
+    }
+
+    private var arrows: some View {
+        HStack {
+            navBtn("chevron.left") { step(-1) }
+            Spacer()
+            navBtn("chevron.right") { step(1) }
+        }
+        .padding(.horizontal, 6)
+    }
+    private func navBtn(_ icon: String, _ act: @escaping () -> Void) -> some View {
+        Button(action: act) {
+            Image(systemName: icon).font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
+                .frame(width: 24, height: 24).background(Circle().fill(.black.opacity(0.4)))
+        }.buttonStyle(.plain)
+    }
+    private var dots: some View {
+        HStack(spacing: 5) {
+            ForEach(paths.indices, id: \.self) { i in
+                Circle().fill(i == index ? Color.white : Color.white.opacity(0.4)).frame(width: 5, height: 5)
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(Capsule().fill(.black.opacity(0.35)))
+        .padding(.bottom, 8)
+    }
+    private func step(_ d: Int) {
+        guard !paths.isEmpty else { return }
+        withAnimation(.easeInOut(duration: 0.18)) { index = (index + d + paths.count) % paths.count }
+    }
+    private func load() async {
+        guard !loaded else { return }
+        var imgs: [NSImage?] = []
+        for p in paths {
+            if let data = try? await HubAPI.downloadProprietaPhoto(path: p) { imgs.append(NSImage(data: data)) }
+            else { imgs.append(nil) }
+        }
+        images = imgs; loaded = true
+    }
+}
+
+// ── Lista proprietà (griglia card + mappa) ───────────────────────────────────
 struct ProprietaView: View {
     @State private var items: [Proprieta] = []
     @State private var loading = true
     @State private var errorMsg: String?
     @State private var search = ""
     @State private var showAdd = false
+    @State private var mapMode = false
 
     private var filtered: [Proprieta] {
         items.filter { p in
@@ -144,6 +230,7 @@ struct ProprietaView: View {
                         .foregroundStyle(Holo.titleText)
                         .shadow(color: Color(red: 110/255, green: 180/255, blue: 1).opacity(0.7), radius: 9)
                     Spacer()
+                    viewToggle
                     HoloSearchField(placeholder: "Cerca immobile…", text: $search)
                     MenuPillButton(label: "Aggiungi proprietà", icon: "plus") { showAdd = true }
                 }
@@ -152,6 +239,11 @@ struct ProprietaView: View {
                     GlassCard { Text("Errore: \(errorMsg)").foregroundStyle(Color(hex: 0xffb3ad)).padding(20) }
                 } else if loading {
                     Text("Caricamento…").font(.system(size: 13)).foregroundStyle(Holo.subDim).padding(.top, 8)
+                } else if mapMode {
+                    PropertyMap(items: filtered)
+                        .frame(height: 560)
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Holo.cardBorder, lineWidth: 1))
                 } else if filtered.isEmpty {
                     EmptyStateCard(icon: "house", text: search.isEmpty
                         ? "Nessuna proprietà.\nAggiungine una con “+ Aggiungi proprietà”."
@@ -169,6 +261,27 @@ struct ProprietaView: View {
         .sheet(isPresented: $showAdd) { ProprietaFormView(existing: nil) { await load() } }
     }
 
+    private var viewToggle: some View {
+        HStack(spacing: 3) {
+            toggleBtn("Griglia", "square.grid.2x2", on: !mapMode) { mapMode = false }
+            toggleBtn("Mappa", "map", on: mapMode) { mapMode = true }
+        }
+        .padding(3)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Csb.tabsBg))
+    }
+    private func toggleBtn(_ label: String, _ icon: String, on: Bool, _ act: @escaping () -> Void) -> some View {
+        Button(action: act) {
+            HStack(spacing: 5) {
+                Image(systemName: icon).font(.system(size: 10, weight: .semibold))
+                Text(label).font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundStyle(on ? Csb.itemFgOn : Color(hex: 0x9b988f))
+            .padding(.horizontal, 11).padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 8).fill(on ? Csb.tabOn : .clear))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(on ? Csb.tabOnBorder : .clear, lineWidth: 1))
+        }.buttonStyle(.plain)
+    }
+
     private func load() async {
         loading = true; defer { loading = false }
         do { items = try await HubAPI.listProprieta() }
@@ -183,49 +296,56 @@ private struct PropertyCard: View {
     private var storicoCount: Int { p.proprieta_storico?.count ?? 0 }
 
     var body: some View {
-        Button { AppState.shared.route = .proprieta(id: p.id) } label: {
-            VStack(alignment: .leading, spacing: 9) {
-                HStack(alignment: .top, spacing: 8) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(p.title).font(.system(size: 14, weight: .bold)).foregroundStyle(Holo.titleText).lineLimit(1)
-                        if let r = p.reference, !r.isEmpty {
-                            Text("Rif. \(r)").font(.system(size: 10)).foregroundStyle(Csb.tagFg)
+        VStack(spacing: 0) {
+            if let ph = p.photos, !ph.isEmpty {
+                RemoteImageCarousel(paths: ph, height: 150, corner: 0)
+            }
+            Button { AppState.shared.route = .proprieta(id: p.id) } label: {
+                VStack(alignment: .leading, spacing: 9) {
+                    HStack(alignment: .top, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(p.title).font(.system(size: 14, weight: .bold)).foregroundStyle(Holo.titleText).lineLimit(1)
+                            if let r = p.reference, !r.isEmpty {
+                                Text("Rif. \(r)").font(.system(size: 10)).foregroundStyle(Csb.tagFg)
+                            }
+                        }
+                        Spacer(minLength: 4)
+                        statusBadge
+                    }
+                    if [p.zone, p.city].compactMap({ $0 }).first != nil {
+                        HStack(spacing: 5) {
+                            Image(systemName: "mappin.circle.fill").font(.system(size: 10)).foregroundStyle(Csb.secFg)
+                            Text([p.zone, p.city].compactMap { $0 }.joined(separator: ", ")).font(.system(size: 11))
+                                .foregroundStyle(Holo.subDim).lineLimit(1)
                         }
                     }
-                    Spacer(minLength: 4)
-                    statusBadge
-                }
-                if let loc = [p.zone, p.city].compactMap({ $0 }).first {
-                    HStack(spacing: 5) {
-                        Image(systemName: "mappin.circle.fill").font(.system(size: 10)).foregroundStyle(Csb.secFg)
-                        Text([p.zone, p.city].compactMap { $0 }.joined(separator: ", ")).font(.system(size: 11))
-                            .foregroundStyle(Holo.subDim).lineLimit(1)
+                    Text([p.category?.capitalized, p.property_type,
+                          p.size_sqm.map { "\($0) m²" }, p.bedrooms.map { "\($0) cam" }]
+                        .compactMap { $0 }.joined(separator: " · "))
+                        .font(.system(size: 10.5)).foregroundStyle(Holo.labelDim).lineLimit(1)
+                    HStack {
+                        if let pr = p.price { Text(LeadFmt.euro(pr)).font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(Holo.hsl(150, 70, 68)) }
+                        Spacer()
+                        if storicoCount > 0 {
+                            HStack(spacing: 4) {
+                                Image(systemName: "clock.arrow.circlepath").font(.system(size: 9))
+                                Text("\(storicoCount)").font(.system(size: 10, weight: .bold))
+                            }.foregroundStyle(Csb.avatar)
+                        }
                     }
                 }
-                Text([p.category?.capitalized, p.property_type,
-                      p.size_sqm.map { "\($0) m²" }, p.bedrooms.map { "\($0) cam" }]
-                    .compactMap { $0 }.joined(separator: " · "))
-                    .font(.system(size: 10.5)).foregroundStyle(Holo.labelDim).lineLimit(1)
-                HStack {
-                    if let pr = p.price { Text(LeadFmt.euro(pr)).font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(Holo.hsl(150, 70, 68)) }
-                    Spacer()
-                    if storicoCount > 0 {
-                        HStack(spacing: 4) {
-                            Image(systemName: "clock.arrow.circlepath").font(.system(size: 9))
-                            Text("\(storicoCount)").font(.system(size: 10, weight: .bold))
-                        }.foregroundStyle(Csb.avatar)
-                    }
-                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(hover ? Color.white.opacity(0.05) : Color.clear)
+                .contentShape(Rectangle())
             }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 13).fill(hover ? Color.white.opacity(0.05) : Color(hex: 0x121a2c).opacity(0.6)))
-            .overlay(RoundedRectangle(cornerRadius: 13).strokeBorder(st.hue == 0 ? Color.white.opacity(0.08) : Holo.hsl(st.hue, 60, 55).opacity(0.28), lineWidth: 1))
-            .contentShape(RoundedRectangle(cornerRadius: 13))
+            .buttonStyle(.plain)
+            .onHover { hover = $0 }
         }
-        .buttonStyle(.plain)
-        .onHover { hover = $0 }
+        .background(RoundedRectangle(cornerRadius: 13).fill(Color(hex: 0x121a2c).opacity(0.6)))
+        .overlay(RoundedRectangle(cornerRadius: 13).strokeBorder(st.hue == 0 ? Color.white.opacity(0.08) : Holo.hsl(st.hue, 60, 55).opacity(0.28), lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 13))
     }
 
     private var statusBadge: some View {
@@ -262,6 +382,9 @@ struct ProprietaDetailView: View {
                     Text("Caricamento…").font(.system(size: 13)).foregroundStyle(Holo.subDim)
                 } else if let p {
                     anagrafica(p)
+                    if let ph = p.photos, !ph.isEmpty {
+                        RemoteImageCarousel(paths: ph, height: 300, corner: 16)
+                    }
                     storicoSection(p)
                 }
             }
@@ -424,6 +547,7 @@ struct ProprietaFormView: View {
     @State private var bedrooms = ""; @State private var bathrooms = ""; @State private var sqm = ""
     @State private var price = ""; @State private var status = PropertyStatus.disponibile
     @State private var notes = ""; @State private var saving = false
+    @State private var newPhotos: [URL] = []
 
     var body: some View {
         ScrollView {
@@ -448,6 +572,7 @@ struct ProprietaFormView: View {
                     holoPicker("Stato", PropertyStatus.allCases.map { ($0.rawValue, $0.label) }, status.rawValue) { status = .from($0) }
                 }
                 HoloField(label: "Note", text: $notes)
+                photoStaging
 
                 HStack(spacing: 10) {
                     Spacer()
@@ -473,6 +598,40 @@ struct ProprietaFormView: View {
         .onAppear(perform: prefill)
     }
 
+    private var photoStaging: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("FOTO").font(.system(size: 9.5, weight: .heavy)).tracking(1.5)
+                    .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.65))
+                Spacer()
+                Button { pickPhotos() } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "photo.badge.plus").font(.system(size: 10, weight: .bold))
+                        Text("Aggiungi foto").font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundStyle(Color(hex: 0xeaf0fb))
+                    .padding(.horizontal, 11).padding(.vertical, 5)
+                    .background(Capsule().fill(Color(red: 40/255, green: 70/255, blue: 140/255).opacity(0.5)))
+                    .overlay(Capsule().strokeBorder(Holo.hsl(217, 85, 62).opacity(0.5), lineWidth: 1))
+                }.buttonStyle(.plain)
+            }
+            let existingCount = existing?.photos?.count ?? 0
+            if newPhotos.isEmpty && existingCount == 0 {
+                Text("Aggiungi foto dell'immobile (JPG, PNG).").font(.system(size: 10.5)).foregroundStyle(Holo.labelDim)
+            } else {
+                Text("\(existingCount) già caricate · \(newPhotos.count) nuove da caricare")
+                    .font(.system(size: 10.5)).foregroundStyle(Holo.subDim)
+            }
+        }
+    }
+    private func pickPhotos() {
+        let p = NSOpenPanel()
+        p.allowedContentTypes = [.jpeg, .png, .image]
+        p.allowsMultipleSelection = true
+        p.canChooseDirectories = false
+        if p.runModal() == .OK { newPhotos.append(contentsOf: p.urls.filter { !newPhotos.contains($0) }) }
+    }
+
     private func prefill() {
         guard let e = existing else { return }
         title = e.title; reference = e.reference ?? ""; address = e.address ?? ""
@@ -492,8 +651,19 @@ struct ProprietaFormView: View {
             "price": Int(price), "status": status.rawValue, "notes": s(notes),
         ]
         do {
-            if let e = existing { try await HubAPI.updateProprieta(id: e.id, fields: body) }
-            else { try await HubAPI.createProprieta(body) }
+            let propId: String
+            if let e = existing { try await HubAPI.updateProprieta(id: e.id, fields: body); propId = e.id }
+            else { propId = try await HubAPI.createProprieta(body).id }
+            if !newPhotos.isEmpty {
+                var paths = existing?.photos ?? []
+                for url in newPhotos {
+                    if let data = try? Data(contentsOf: url) {
+                        let p = try await HubAPI.uploadProprietaPhoto(propId: propId, data: data, ext: url.pathExtension.lowercased())
+                        paths.append(p)
+                    }
+                }
+                try await HubAPI.updateProprieta(id: propId, fields: ["photos": paths])
+            }
             await onSaved(); dismiss()
         } catch { saving = false }
     }
@@ -561,6 +731,69 @@ struct StoricoFormView: View {
         ]
         do { try await HubAPI.addStorico(body); await onSaved(); dismiss() }
         catch { saving = false }
+    }
+}
+
+// ── Mappa Ibiza con pin proprietà (MapKit) ───────────────────────────────────
+final class PropAnnotation: NSObject, MKAnnotation {
+    let coordinate: CLLocationCoordinate2D
+    let title: String?
+    let subtitle: String?
+    let propId: String
+    init(propId: String, coordinate: CLLocationCoordinate2D, title: String?, subtitle: String?) {
+        self.propId = propId; self.coordinate = coordinate; self.title = title; self.subtitle = subtitle
+    }
+}
+
+struct PropertyMap: NSViewRepresentable {
+    let items: [Proprieta]
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> MKMapView {
+        let mv = MKMapView()
+        mv.delegate = context.coordinator
+        mv.appearance = NSAppearance(named: .darkAqua)
+        mv.showsZoomControls = true
+        mv.showsCompass = true
+        // Ibiza
+        mv.setRegion(MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: 38.98, longitude: 1.43),
+                                        span: MKCoordinateSpan(latitudeDelta: 0.42, longitudeDelta: 0.42)), animated: false)
+        return mv
+    }
+
+    func updateNSView(_ mv: MKMapView, context: Context) {
+        mv.removeAnnotations(mv.annotations)
+        let anns: [PropAnnotation] = items.compactMap { p in
+            guard let la = p.latitude, let lo = p.longitude else { return nil }
+            return PropAnnotation(propId: p.id,
+                                  coordinate: CLLocationCoordinate2D(latitude: la, longitude: lo),
+                                  title: p.title, subtitle: p.price.map { LeadFmt.euro($0) })
+        }
+        mv.addAnnotations(anns)
+    }
+
+    final class Coordinator: NSObject, MKMapViewDelegate {
+        func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            guard annotation is PropAnnotation else { return nil }
+            let id = "prop"
+            let v = (mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView)
+                ?? MKMarkerAnnotationView(annotation: annotation, reuseIdentifier: id)
+            v.annotation = annotation
+            v.canShowCallout = true
+            v.markerTintColor = NSColor(red: 0.85, green: 0.47, blue: 0.34, alpha: 1)
+            v.glyphImage = NSImage(systemSymbolName: "house.fill", accessibilityDescription: nil)
+            let btn = NSButton(title: "Apri", target: self, action: #selector(openProp(_:)))
+            btn.bezelStyle = .rounded
+            v.rightCalloutAccessoryView = btn
+            return v
+        }
+        @objc private func openProp(_ sender: NSButton) { /* callout button, navigazione via mapView(_:annotationView:) */ }
+        func mapView(_ mapView: MKMapView, annotationView view: MKAnnotationView, calloutAccessoryControlTapped control: NSControl) {
+            if let a = view.annotation as? PropAnnotation {
+                AppState.shared.route = .proprieta(id: a.propId)
+            }
+        }
     }
 }
 
