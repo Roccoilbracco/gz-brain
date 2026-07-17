@@ -554,7 +554,10 @@ struct ProprietaDetailView: View {
                 GlassCard {
                     VStack(spacing: 0) {
                         ForEach(Array(eventi.enumerated()), id: \.element.id) { i, ev in
-                            storicoRow(ev, last: i == eventi.count - 1)
+                            storicoRow(ev)
+                            if i < eventi.count - 1 {
+                                Divider().overlay(Color.white.opacity(0.07)).padding(.leading, 68)
+                            }
                         }
                     }
                     .padding(.vertical, 6)
@@ -563,36 +566,47 @@ struct ProprietaDetailView: View {
         }
     }
 
-    private func storicoRow(_ ev: ProprietaStorico, last: Bool) -> some View {
+    private func storicoRow(_ ev: ProprietaStorico) -> some View {
         let e = StoricoEvent.from(ev.event_type)
-        return HStack(alignment: .top, spacing: 12) {
-            VStack(spacing: 0) {
-                Image(systemName: e.icon).font(.system(size: 14)).foregroundStyle(Holo.hsl(e.hue, 85, 68))
-                    .frame(width: 26, height: 26)
-                    .background(Circle().fill(Holo.hsl(e.hue, 70, 45).opacity(0.18)))
-                if !last { Rectangle().fill(Color.white.opacity(0.1)).frame(width: 1.5).frame(maxHeight: .infinity) }
-            }
+        return HStack(alignment: .center, spacing: 14) {
+            // pastiglia icona colorata (evento)
+            Image(systemName: e.icon).font(.system(size: 16))
+                .foregroundStyle(Holo.hsl(e.hue, 88, 70))
+                .frame(width: 40, height: 40)
+                .background(Circle().fill(Holo.hsl(e.hue, 70, 45).opacity(0.16)))
+                .overlay(Circle().strokeBorder(Holo.hsl(e.hue, 70, 55).opacity(0.35), lineWidth: 1))
+
+            // corpo: tipo + data, controparte/agente, note
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
-                    Text(e.label).font(.system(size: 12.5, weight: .bold)).foregroundStyle(Holo.hsl(e.hue, 80, 74))
-                    Text(prettyDate(ev.event_date)).font(.system(size: 10.5)).foregroundStyle(Csb.secFg)
-                    Spacer()
-                    if let pr = ev.price { Text(LeadFmt.euro(pr)).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Holo.text) }
+                    Text(e.label).font(.system(size: 13.5, weight: .bold)).foregroundStyle(Holo.hsl(e.hue, 82, 76))
+                    Text(prettyDate(ev.event_date)).font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Csb.secFg)
+                        .padding(.horizontal, 7).padding(.vertical, 1.5)
+                        .background(Capsule().fill(Color.white.opacity(0.05)))
                 }
                 if ev.counterparty != nil || ev.agent != nil {
                     Text([ev.counterparty, ev.agent.map { "Agente: \($0)" }].compactMap { $0 }.joined(separator: " · "))
-                        .font(.system(size: 11)).foregroundStyle(Holo.subDim)
+                        .font(.system(size: 11.5)).foregroundStyle(Holo.subDim).lineLimit(1)
                 }
                 if let n = ev.notes, !n.isEmpty {
-                    Text(n).font(.system(size: 11)).foregroundStyle(Holo.labelDim).fixedSize(horizontal: false, vertical: true)
+                    Text(n).font(.system(size: 11)).foregroundStyle(Holo.labelDim)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .padding(.bottom, last ? 0 : 14)
-            Button { Task { try? await HubAPI.deleteStorico(id: ev.id); await load() } } label: {
-                Image(systemName: "trash").font(.system(size: 11)).foregroundStyle(Holo.labelDim)
-            }.buttonStyle(.plain)
+
+            Spacer(minLength: 16)
+
+            // colonna destra: prezzo + elimina
+            if let pr = ev.price {
+                Text(LeadFmt.euro(pr)).font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(Holo.titleText).monospacedDigit()
+            }
+            IconButton(icon: "trash", help: "Elimina", danger: true) {
+                Task { try? await HubAPI.deleteStorico(id: ev.id); await load() }
+            }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16).padding(.vertical, 14)
     }
 
     private func load() async {
