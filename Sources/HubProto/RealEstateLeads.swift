@@ -15,6 +15,7 @@ struct RELead: Identifiable, Decodable, Equatable {
     var source: String
     var stage: String
     var interest: String?
+    var category: String?
     var property_type: String?
     var zone: String?
     var budget_min: Int?
@@ -99,7 +100,13 @@ enum LeadStage: String, CaseIterable, Identifiable {
 }
 
 enum LeadInterest: String, CaseIterable, Identifiable {
-    case acquisto, affitto, vendita, traspaso
+    case affitto, vendita, traspaso
+    var id: String { rawValue }
+    var label: String { rawValue.capitalized }
+}
+
+enum LeadCategory: String, CaseIterable, Identifiable {
+    case residenziale, commerciale
     var id: String { rawValue }
     var label: String { rawValue.capitalized }
 }
@@ -242,14 +249,14 @@ struct LeadsHubView: View {
 
     // conteggi su TUTTI i lead (overview, indipendente da filtri)
     private func countStage(_ s: LeadStage) -> Int { leads.filter { $0.stage == s.rawValue }.count }
-    private var interest: (acq: Int, aff: Int, ven: Int, tra: Int, total: Int) {
-        var a = 0, f = 0, v = 0, t = 0
+    private var interest: (aff: Int, ven: Int, tra: Int, total: Int) {
+        var f = 0, v = 0, t = 0
         for l in leads {
             switch l.interest {
-            case "acquisto": a += 1; case "affitto": f += 1; case "vendita": v += 1; case "traspaso": t += 1; default: break
+            case "affitto": f += 1; case "vendita": v += 1; case "traspaso": t += 1; default: break
             }
         }
-        return (a, f, v, t, a + f + v + t)
+        return (f, v, t, f + v + t)
     }
     private var activityValues: [Int] { bucketISODatesByDay(leads.map { $0.created_at }, days: 14) }
 
@@ -283,7 +290,7 @@ struct LeadsHubView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Holo.hsl(150, 85, 62).opacity(0.4), lineWidth: 1))
 
-                InterestPanel(acq: interest.acq, aff: interest.aff, ven: interest.ven, tra: interest.tra, total: interest.total)
+                InterestPanel(aff: interest.aff, ven: interest.ven, tra: interest.tra, total: interest.total)
             }
             LeadFunnel(total: leads.count, count: { countStage($0) })
         }
@@ -431,8 +438,8 @@ private struct LeadCard: View {
                 .padding(.horizontal, 6).padding(.vertical, 2)
                 .background(Capsule().fill(src.color.opacity(0.14)))
             }
-            if lead.interest != nil || lead.property_type != nil || lead.zone != nil {
-                Text([lead.interest?.capitalized, lead.property_type, lead.zone].compactMap { $0 }.joined(separator: " · "))
+            if lead.interest != nil || lead.category != nil || lead.property_type != nil || lead.zone != nil {
+                Text([lead.interest?.capitalized, lead.category?.capitalized, lead.property_type, lead.zone].compactMap { $0 }.joined(separator: " · "))
                     .font(.system(size: 10.5)).foregroundStyle(Holo.labelDim).lineLimit(1)
             }
             if let b = LeadFmt.budget(lead.budget_min, lead.budget_max) {
@@ -451,24 +458,21 @@ private struct LeadCard: View {
 
 // ── Pannello 3 categorie: Acquisto / Affitto / Vendita (stile ServicePanel) ──
 private struct InterestPanel: View {
-    let acq: Int, aff: Int, ven: Int, tra: Int, total: Int
+    let aff: Int, ven: Int, tra: Int, total: Int
     private func pct(_ n: Int) -> Int { total > 0 ? Int((Double(n) / Double(total) * 100).rounded()) : 0 }
     var body: some View {
         GlassCard {
             VStack(spacing: 10) {
-                HStack(spacing: 12) {
-                    StatCap(label: "Acquisto", n: acq, pct: pct(acq), hue: 150)
+                HStack(spacing: 14) {
                     StatCap(label: "Affitto", n: aff, pct: pct(aff), hue: 210)
                     StatCap(label: "Vendita", n: ven, pct: pct(ven), hue: 30)
                     StatCap(label: "Traspaso", n: tra, pct: pct(tra), hue: 280)
                 }
                 WaveEqualizer(hueAt: { f in
-                    let a = total > 0 ? CGFloat(acq) / CGFloat(total) : 0.25
-                    let b = total > 0 ? CGFloat(aff) / CGFloat(total) : 0.25
-                    let c = total > 0 ? CGFloat(ven) / CGFloat(total) : 0.25
-                    if f < a { return 150 }
-                    if f < a + b { return 210 }
-                    if f < a + b + c { return 30 }
+                    let a = total > 0 ? CGFloat(aff) / CGFloat(total) : 0.34
+                    let b = total > 0 ? CGFloat(ven) / CGFloat(total) : 0.33
+                    if f < a { return 210 }
+                    if f < a + b { return 30 }
                     return 280
                 })
                 .frame(height: 36)
@@ -655,6 +659,7 @@ private struct LeadDrawerView: View {
                     section("RICHIESTA") {
                         VStack(alignment: .leading, spacing: 8) {
                             if let i = lead.interest { infoRow("tag.fill", i.capitalized) }
+                            if let c = lead.category { infoRow("building.2.fill", c.capitalized) }
                             if let p = lead.property_type { infoRow("house.fill", p) }
                             if let z = lead.zone, !z.isEmpty { infoRow("mappin.circle.fill", z) }
                             if let n = lead.bedrooms { infoRow("bed.double.fill", "\(n) camere") }
@@ -738,7 +743,7 @@ private struct LeadFormView: View {
     @State private var name = ""; @State private var phone = ""; @State private var email = ""
     @State private var source = LeadSource.sito
     @State private var stage = LeadStage.nuovo
-    @State private var interest = ""; @State private var propertyType = ""; @State private var zone = ""
+    @State private var interest = ""; @State private var category = ""; @State private var propertyType = ""; @State private var zone = ""
     @State private var budgetMin = ""; @State private var budgetMax = ""; @State private var bedrooms = ""
     @State private var assignedTo = ""; @State private var idealistaRef = ""; @State private var notes = ""
     @State private var saving = false
@@ -757,6 +762,7 @@ private struct LeadFormView: View {
                     picker("Stato pipeline", LeadStage.allCases.map { ($0.rawValue, $0.label) }, stage.rawValue) { stage = .from($0) }
                     HStack(spacing: 12) {
                         picker("Interesse", [("", "—")] + LeadInterest.allCases.map { ($0.rawValue, $0.label) }, interest) { interest = $0 }
+                        picker("Categoria", [("", "—")] + LeadCategory.allCases.map { ($0.rawValue, $0.label) }, category) { category = $0 }
                         picker("Tipo immobile", [("", "—")] + propertyTypes.map { ($0, $0) }, propertyType) { propertyType = $0 }
                     }
                     HStack(spacing: 12) { field("Zona", $zone, "Es. Ibiza centro"); field("Camere", $bedrooms, "3") }
@@ -793,7 +799,7 @@ private struct LeadFormView: View {
         guard let e = existing else { return }
         name = e.name; phone = e.phone ?? ""; email = e.email ?? ""
         source = .from(e.source); stage = .from(e.stage)
-        interest = e.interest ?? ""; propertyType = e.property_type ?? ""; zone = e.zone ?? ""
+        interest = e.interest ?? ""; category = e.category ?? ""; propertyType = e.property_type ?? ""; zone = e.zone ?? ""
         budgetMin = e.budget_min.map(String.init) ?? ""; budgetMax = e.budget_max.map(String.init) ?? ""
         bedrooms = e.bedrooms.map(String.init) ?? ""
         assignedTo = e.assigned_to ?? ""; idealistaRef = e.idealista_ref ?? ""; notes = e.notes ?? ""
@@ -805,7 +811,7 @@ private struct LeadFormView: View {
         let body: [String: Any?] = [
             "name": name.trimmingCharacters(in: .whitespaces),
             "phone": s(phone), "email": s(email), "source": source.rawValue, "stage": stage.rawValue,
-            "interest": s(interest), "property_type": s(propertyType), "zone": s(zone),
+            "interest": s(interest), "category": s(category), "property_type": s(propertyType), "zone": s(zone),
             "budget_min": Int(budgetMin), "budget_max": Int(budgetMax), "bedrooms": Int(bedrooms),
             "assigned_to": s(assignedTo), "idealista_ref": s(idealistaRef), "notes": s(notes),
         ]

@@ -263,7 +263,8 @@ create table if not exists public.re_leads (
   email           text,
   source          text not null default 'sito',   -- sito|social|chiamata|whatsapp|email|idealista
   stage           text not null default 'nuovo',  -- pipeline: nuovo|contattato|qualificato|visita|proposta|trattativa|vinto|perso
-  interest        text,                            -- acquisto|affitto|vendita
+  interest        text,                            -- acquisto|affitto|vendita|traspaso
+  category        text,                            -- residenziale|commerciale
   property_type   text,                            -- appartamento|villa|attico|terreno|commerciale
   zone            text,
   budget_min      integer,
