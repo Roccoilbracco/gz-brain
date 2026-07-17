@@ -110,15 +110,15 @@ struct SidebarView: View {
         let on = state.route == .impostazioni
         return Button { state.route = .impostazioni } label: {
             HStack(spacing: 10) {
-                Text("E")
+                Text("G")
                     .font(.system(size: 12, weight: .heavy))
                     .foregroundStyle(Color(hex: 0x1a1208))
                     .frame(width: 28, height: 28)
                     .background(Circle().fill(Csb.avatar))
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("emanuele").font(.system(size: 12.5, weight: .semibold))
+                    Text("Giorgio").font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(on ? Csb.itemFgOn : Color(hex: 0xe0ddd4))
-                    Text("UNVRS Labs").font(.system(size: 11)).foregroundStyle(Csb.tagFg)
+                    Text("GZ Ibiza Properties").font(.system(size: 11)).foregroundStyle(Csb.tagFg)
                 }
                 Spacer(minLength: 0)
                 Image(systemName: "gearshape").font(.system(size: 13))
