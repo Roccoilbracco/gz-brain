@@ -1,5 +1,7 @@
 import SwiftUI
 import MapKit
+import AppKit
+import UniformTypeIdentifiers
 
 // ============================================================================
 // Registro Proprietà (immobili) + storico operazioni.
@@ -133,6 +135,36 @@ extension HubAPI {
     static func downloadProprietaPhoto(path: String) async throws -> Data {
         try await sb.downloadFile(bucket: "proprieta", path: path)
     }
+    // documenti (contratti, piantine, ecc.) nel bucket 'proprieta' sotto <propId>/docs/
+    static func listProprietaDocumenti(_ propId: String) async throws -> [ProprietaDocumento] {
+        try await sb.fetch("proprieta_documenti?select=*&proprieta_id=eq.\(propId)&order=created_at.desc")
+    }
+    static func addProprietaDocumento(propId: String, fileURL: URL) async throws {
+        let bytes = try Data(contentsOf: fileURL)
+        let ext = fileURL.pathExtension.isEmpty ? "pdf" : fileURL.pathExtension
+        let ct = UTType(filenameExtension: ext)?.preferredMIMEType ?? "application/octet-stream"
+        let safe = fileURL.deletingPathExtension().lastPathComponent
+            .replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: " ", with: "_")
+        let name = "\(propId)/docs/\(UUID().uuidString.prefix(8))-\(safe).\(ext)"
+        let stored = try await sb.uploadFile(bucket: "proprieta", path: name, data: bytes, contentType: ct)
+        try await sb.mutate("proprieta_documenti", method: "POST", body: [
+            "proprieta_id": propId, "nome": fileURL.lastPathComponent, "path": stored,
+        ])
+    }
+    static func deleteProprietaDocumento(id: String, path: String?) async throws {
+        try await sb.mutate("proprieta_documenti?id=eq.\(id)", method: "DELETE")
+        if let p = path { try? await sb.deleteFile(bucket: "proprieta", path: p) }
+    }
+    static func downloadProprietaDoc(path: String) async throws -> Data {
+        try await sb.downloadFile(bucket: "proprieta", path: path)
+    }
+}
+
+struct ProprietaDocumento: Decodable, Identifiable {
+    let id: String
+    let nome: String
+    let path: String
+    let created_at: String?
 }
 
 // ── Carosello immagini remoto (scorre 1 alla volta) ──────────────────────────
@@ -403,6 +435,7 @@ struct ProprietaDetailView: View {
                         RemoteImageCarousel(paths: ph, height: 300, corner: 16)
                     }
                     storicoSection(p)
+                    ProprietaDocumentiSection(proprietaId: proprietaId)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -752,6 +785,97 @@ struct StoricoFormView: View {
         ]
         do { try await HubAPI.addStorico(body); await onSaved(); dismiss() }
         catch { saving = false }
+    }
+}
+
+// ── Sezione documenti della proprietà (contratti, piantine, ecc.) ────────────
+struct ProprietaDocumentiSection: View {
+    let proprietaId: String
+    @State private var docs: [ProprietaDocumento] = []
+    @State private var loading = true
+    @State private var busy = false
+    @State private var msg: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("DOCUMENTI").font(.system(size: 10, weight: .heavy)).tracking(2)
+                    .foregroundStyle(Holo.hsl(210, 60, 66))
+                Spacer()
+                MenuPillButton(label: "Carica", icon: "paperclip", disabled: busy) { pick() }
+            }
+            if let msg { Text(msg).font(.system(size: 11)).foregroundStyle(Holo.subDim) }
+            if loading {
+                Text("Caricamento…").font(.system(size: 12)).foregroundStyle(Holo.subDim).padding(.vertical, 6)
+            } else if docs.isEmpty {
+                EmptyStateCard(icon: "doc.text", text: "Nessun documento.\nCarica contratti, piantine, visure catastali con “Carica”.")
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(docs.enumerated()), id: \.element.id) { i, d in
+                        row(d)
+                        if i < docs.count - 1 { Divider().overlay(Color.white.opacity(0.06)) }
+                    }
+                }
+                .padding(.vertical, 2)
+                .background(RoundedRectangle(cornerRadius: 14).fill(Csb.panel))
+                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Csb.panelBorder, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+            }
+        }
+        .task(id: proprietaId) { await load() }
+    }
+
+    private func row(_ d: ProprietaDocumento) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: iconFor(d.nome)).font(.system(size: 13)).foregroundStyle(Csb.itemFg)
+            Text(d.nome).font(.system(size: 12.5)).foregroundStyle(Holo.text).lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            IconButton(icon: "arrow.up.right.square", help: "Apri") { Task { await apri(d) } }
+            IconButton(icon: "trash", help: "Elimina", danger: true) { Task { await elimina(d) } }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 8)
+    }
+    private func iconFor(_ name: String) -> String {
+        let n = name.lowercased()
+        if n.hasSuffix(".pdf") { return "doc.richtext" }
+        if n.hasSuffix(".png") || n.hasSuffix(".jpg") || n.hasSuffix(".jpeg") { return "photo" }
+        if n.contains("piant") || n.contains("plan") { return "ruler" }
+        return "doc.text"
+    }
+
+    private func load() async {
+        loading = true; defer { loading = false }
+        do { docs = try await HubAPI.listProprietaDocumenti(proprietaId) }
+        catch let e { msg = "Errore: \(e.localizedDescription)" }
+    }
+    private func apri(_ d: ProprietaDocumento) async {
+        guard let data = try? await HubAPI.downloadProprietaDoc(path: d.path) else { msg = "Documento non disponibile."; return }
+        let ext = (d.path as NSString).pathExtension
+        let base = (d.nome as NSString).deletingPathExtension
+        let url = appTempDir().appendingPathComponent(base.isEmpty ? "documento" : base)
+            .appendingPathExtension(ext.isEmpty ? "pdf" : ext)
+        try? data.write(to: url)
+        NSWorkspace.shared.open(url)
+    }
+    private func elimina(_ d: ProprietaDocumento) async {
+        busy = true; defer { busy = false }
+        do { try await HubAPI.deleteProprietaDocumento(id: d.id, path: d.path); await load() }
+        catch let e { msg = "Errore eliminazione: \(e.localizedDescription)" }
+    }
+    private func pick() {
+        let p = NSOpenPanel()
+        p.allowedContentTypes = [.pdf, .png, .jpeg, .image, .data]
+        p.allowsMultipleSelection = true
+        p.canChooseDirectories = false
+        guard p.runModal() == .OK, !p.urls.isEmpty else { return }
+        let urls = p.urls
+        Task {
+            busy = true; defer { busy = false }
+            do {
+                for url in urls { try await HubAPI.addProprietaDocumento(propId: proprietaId, fileURL: url) }
+                await load()
+            } catch let e { msg = "Errore caricamento: \(e.localizedDescription)" }
+        }
     }
 }
 

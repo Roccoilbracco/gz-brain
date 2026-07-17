@@ -317,6 +317,16 @@ create table if not exists public.proprieta_storico (
 );
 create index if not exists proprieta_storico_prop_idx on public.proprieta_storico using btree (proprieta_id, event_date desc);
 create index if not exists proprieta_status_idx on public.proprieta using btree (status);
+-- documenti allegati a una proprietà (contratti, piantine, catasto, ecc.) nel bucket 'proprieta'
+create table if not exists public.proprieta_documenti (
+  id           uuid primary key default gen_random_uuid(),
+  proprieta_id uuid not null references public.proprieta(id) on delete cascade,
+  nome         text not null,
+  path         text not null,
+  tipo         text,
+  created_at   timestamptz not null default now()
+);
+create index if not exists proprieta_documenti_prop_idx on public.proprieta_documenti using btree (proprieta_id, created_at desc);
 
 -- ── funzione + trigger: lead chiuso_vinto → crea/aggiorna cliente ─────────
 create or replace function public.sync_lead_cliente()
@@ -368,5 +378,6 @@ alter table public.spese             enable row level security;
 alter table public.estratti_conto    enable row level security;
 alter table public.mov_match         enable row level security;
 alter table public.re_leads          enable row level security;
-alter table public.proprieta         enable row level security;
-alter table public.proprieta_storico enable row level security;
+alter table public.proprieta          enable row level security;
+alter table public.proprieta_storico  enable row level security;
+alter table public.proprieta_documenti enable row level security;
