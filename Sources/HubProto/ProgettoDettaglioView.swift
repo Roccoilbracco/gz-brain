@@ -75,7 +75,7 @@ struct ProgettoDettaglioView: View {
     }
 
     private var dashBody: some View {
-        ScrollView {
+        ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
                 backLink
                 if model.project.slug == "camere-pse" {

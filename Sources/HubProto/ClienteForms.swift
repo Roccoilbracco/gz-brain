@@ -46,7 +46,7 @@ struct ClienteFormView: View {
     @State private var errorMsg: String?
 
     var body: some View {
-        ScrollView {
+        ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("NUOVO CLIENTE").font(.system(size: 15, weight: .heavy)).tracking(2)
                     .foregroundStyle(Holo.titleText)
@@ -244,7 +244,7 @@ struct ClienteDetailView: View {
     @State private var tab: ClienteDetailTab = .documenti
 
     var body: some View {
-        ScrollView {
+        ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
                 Button { AppState.shared.route = .clienti } label: {
                     Text("← CLIENTI").font(.system(size: 11)).tracking(1.5)
@@ -509,7 +509,7 @@ struct ClienteEditFormView: View {
     }
 
     var body: some View {
-        ScrollView {
+        ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("MODIFICA CLIENTE").font(.system(size: 15, weight: .heavy)).tracking(2)
                     .foregroundStyle(Holo.titleText)
@@ -606,7 +606,7 @@ struct CommessaFormView: View {
     private let stati = ["in_corso", "completata", "sospesa", "annullata"]
 
     var body: some View {
-        ScrollView {
+        ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("NUOVO PROGETTO").font(.system(size: 15, weight: .heavy)).tracking(2)
                     .foregroundStyle(Holo.titleText)

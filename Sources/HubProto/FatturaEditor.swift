@@ -52,7 +52,7 @@ struct FatturaEditorView: View {
             .padding(EdgeInsets(top: 20, leading: 24, bottom: 16, trailing: 24))
             Divider().overlay(Color.white.opacity(0.08))
 
-            ScrollView {
+            ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 16) {
                     detailsCard
                     righeCard

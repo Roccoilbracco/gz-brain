@@ -42,7 +42,7 @@ struct LeadPageView: View {
     @State private var actionError: String?   // errori di nota/stadio: non oscurano la pagina
 
     var body: some View {
-        ScrollView {
+        ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
                 Button { AppState.shared.route = .progetto(slug: slug, tab: .dash) } label: {
                     Text("← Torna ai lead")

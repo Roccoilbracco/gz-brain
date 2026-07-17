@@ -57,8 +57,8 @@ enum Struttura: String, CaseIterable, Identifiable {
     var hue: Double { self == .esVedra ? 200 : 280 }
     var rooms: [String] {
         self == .esVedra
-        ? ["Camera 1 · Ingresso indip.", "Camera 2 · Doppia luminosa", "Camera 3 · Doppia spaziosa", "Camera 4 · Parete blu", "Intera struttura"]
-        : ["Doppia con camino", "Doppia con balcone", "Doppia angolo studio", "Doppia balcone e bagno", "Doppia 5", "Doppia 6", "Intero appartamento"]
+        ? ["Stanza 1 · Camera Queen", "Stanza 2 · Standard", "Stanza 3 · Camera King", "Stanza 4 · Ampia Matrimoniale", "Intera struttura"]
+        : ["Doppia senza bagno", "Balcone senza bagno", "Stanza Camino", "Balcone con bagno (ragazzi)", "Mansarda", "Intero appartamento"]
     }
     static func from(_ s: String?) -> Struttura { Struttura(rawValue: s ?? "") ?? .esVedra }
 }
@@ -86,6 +86,7 @@ enum PSE {
     static let line = Color.white.opacity(0.09)
     static let surface = Color.white.opacity(0.035)
     static let accent = Color(red: 0.44, green: 0.56, blue: 0.74)     // slate blue sobrio
+    static let warn = Color(hex: 0xd97757)   // arancio del brand (come sidebar/avatar): da confermare / azioni
     static let panel = Color(hex: 0x0f141e)
 
     // tinte di stato desaturate (professionali, non fluo)
@@ -137,6 +138,8 @@ extension HubAPI {
     }
 }
 
+enum PSEViewMode { case prenotazioni, tesoreria }
+
 // ── Dashboard ────────────────────────────────────────────────────────────────
 struct CamerePSEDashboard: View {
     @State private var items: [Prenotazione] = []
@@ -147,6 +150,7 @@ struct CamerePSEDashboard: View {
     @State private var selected: Prenotazione? = nil
     @State private var editing: Prenotazione? = nil
     @State private var showForm = false
+    @State private var viewMode: PSEViewMode = .prenotazioni
 
     private var attive: [Prenotazione] { items.filter { BookingStatus.from($0.status).active } }
 
@@ -170,7 +174,7 @@ struct CamerePSEDashboard: View {
         }.count
     }
     private var capacity: Int {
-        switch strutturaFilter { case .esVedra: return 4; case .viaRomagna: return 6; case nil: return 10 }
+        switch strutturaFilter { case .esVedra: return 4; case .viaRomagna: return 5; case nil: return 9 }
     }
     // prenotazioni rilevanti per il giorno (arrivo, in casa, partenza)
     private func bookingsOn(_ d: Date) -> [Prenotazione] {
@@ -194,12 +198,44 @@ struct CamerePSEDashboard: View {
     }
     private func roomsFor(_ s: Struttura) -> [String] { s.rooms.filter { !$0.lowercased().contains("inter") } }
     private func firstName(_ n: String) -> String { n.split(separator: " ").first.map(String.init) ?? n }
+    // Assegna ogni prenotazione attiva a una camera del reticolo, per struttura:
+    //  • camera che coincide con una camera specifica → quella camera
+    //  • camera "intera/intero" → tutte le camere
+    //  • camera generica o mancante (es. richiesta dal sito) → prima camera libera per quelle date (greedy)
+    // Ritorna, per struttura, la lista di prenotazioni assegnate a ciascun indice camera.
+    private var gridAssignment: [String: [Int: [Prenotazione]]] {
+        var result: [String: [Int: [Prenotazione]]] = [:]
+        for s in Struttura.allCases {
+            let rooms = roomsFor(s)
+            var occupied: [[(Date, Date)]] = Array(repeating: [], count: rooms.count)
+            var byRoom: [Int: [Prenotazione]] = [:]
+            func overlaps(_ a: (Date, Date), _ ci: Date, _ co: Date) -> Bool { ci < a.1 && a.0 < co }
+            let bs = items
+                .filter { $0.status != "cancellata" && $0.struttura == s.rawValue && day($0.checkin) != nil && day($0.checkout) != nil }
+                .sorted { (day($0.checkin) ?? .distantPast) < (day($1.checkin) ?? .distantPast) }
+            for b in bs {
+                guard let ci = day(b.checkin), let co = day(b.checkout), ci < co else { continue }
+                let cam = (b.camera ?? "")
+                let exact = rooms.firstIndex(of: cam)
+                if cam.lowercased().contains("inter") {                       // intera struttura
+                    for i in rooms.indices { occupied[i].append((ci, co)); byRoom[i, default: []].append(b) }
+                } else if let e = exact, !occupied[e].contains(where: { overlaps($0, ci, co) }) {
+                    occupied[e].append((ci, co)); byRoom[e, default: []].append(b)          // camera esatta se libera
+                } else if let free = rooms.indices.first(where: { i in !occupied[i].contains { overlaps($0, ci, co) } }) {
+                    occupied[free].append((ci, co)); byRoom[free, default: []].append(b)     // altrimenti prima libera
+                } else {
+                    byRoom[0, default: []].append(b)                          // tutte occupate: overbooking
+                }
+            }
+            result[s.rawValue] = byRoom
+        }
+        return result
+    }
     private func bookingFor(_ s: Struttura, _ room: String, _ d: Date) -> Prenotazione? {
-        items.first { b in
-            guard b.status != "cancellata", b.struttura == s.rawValue,
-                  let ci = day(b.checkin), let co = day(b.checkout), ci <= d, d < co else { return false }
-            if let cam = b.camera { return cam == room || cam.lowercased().contains("inter") }
-            return false
+        guard let idx = roomsFor(s).firstIndex(of: room) else { return nil }
+        return (gridAssignment[s.rawValue]?[idx] ?? []).first { b in
+            guard let ci = day(b.checkin), let co = day(b.checkout) else { return false }
+            return ci <= d && d < co
         }
     }
     private func freeInGrid(_ s: Struttura, _ d: Date) -> Int { roomsFor(s).filter { bookingFor(s, $0, d) == nil }.count }
@@ -211,14 +247,19 @@ struct CamerePSEDashboard: View {
         ZStack(alignment: .trailing) {
             VStack(alignment: .leading, spacing: 16) {
                 header
-                kpiBar
+                viewSwitcher
                 strutturaChips
-                if loading {
-                    HStack { Spacer(); ProgressView().controlSize(.large); Spacer() }.padding(.top, 40)
+                if viewMode == .tesoreria {
+                    TesoreriaView(prenotazioni: items, struttura: strutturaFilter)
                 } else {
-                    calendarStrip
-                    daySection
-                    planningSection
+                    kpiBar
+                    if loading {
+                        HStack { Spacer(); ProgressView().controlSize(.large); Spacer() }.padding(.top, 40)
+                    } else {
+                        calendarStrip
+                        daySection
+                        planningSection
+                    }
                 }
                 Spacer(minLength: 0)
             }
@@ -252,15 +293,25 @@ struct CamerePSEDashboard: View {
                 Text("Camere PSE · Porto Sant'Elpidio").font(.system(size: 11)).foregroundStyle(PSE.dim)
             }
             Spacer()
-            Button { editing = nil; showForm = true } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "plus").font(.system(size: 11, weight: .bold))
-                    Text("Nuova prenotazione").font(.system(size: 12.5, weight: .semibold))
-                }
-                .foregroundStyle(PSE.ink).padding(.horizontal, 14).padding(.vertical, 8)
-                .background(Capsule().fill(PSE.accent.opacity(0.9)))
-            }.buttonStyle(.plain)
+            if viewMode == .prenotazioni {
+                Button { editing = nil; showForm = true } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus").font(.system(size: 11, weight: .bold))
+                        Text("Nuova prenotazione").font(.system(size: 12.5, weight: .semibold))
+                    }
+                    .foregroundStyle(PSE.ink).padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(Capsule().fill(PSE.warn.opacity(0.95)))
+                }.buttonStyle(.plain)
+            }
         }
+    }
+
+    private var viewSwitcher: some View {
+        Picker("", selection: $viewMode) {
+            Text("Prenotazioni").tag(PSEViewMode.prenotazioni)
+            Text("Tesoreria").tag(PSEViewMode.tesoreria)
+        }
+        .pickerStyle(.segmented).frame(width: 260).labelsHidden()
     }
 
     private var kpiBar: some View {
@@ -377,6 +428,7 @@ struct CamerePSEDashboard: View {
     }
     private func dayRow(_ b: Prenotazione, _ d: Date) -> some View {
         let st = BookingStatus.from(b.status)
+        let toConfirm = st == .in_attesa
         let str = Struttura.from(b.struttura)
         let pay = payState(amount: b.amount_cents, paid: b.paid_cents)
         let (roleLabel, _) = role(b, d)
@@ -396,9 +448,11 @@ struct CamerePSEDashboard: View {
                 Text(eur(b.amount_cents)).font(.system(size: 13, weight: .bold)).foregroundStyle(PSE.text)
                     .monospacedDigit().frame(width: 70, alignment: .trailing)
                 dot(pay.label, PSE.payment(pay))
-                dot(st.label, PSE.status(st)).frame(width: 96, alignment: .leading)
+                statusBadge(st).frame(width: 132, alignment: .leading)
             }
             .padding(.horizontal, 16).padding(.vertical, 11)
+            .background(toConfirm ? PSE.warn.opacity(0.09) : Color.clear)
+            .overlay(alignment: .leading) { Rectangle().fill(toConfirm ? PSE.warn : Color.clear).frame(width: 3) }
             .contentShape(Rectangle())
         }.buttonStyle(.plain)
     }
@@ -408,6 +462,18 @@ struct CamerePSEDashboard: View {
             Circle().fill(c).frame(width: 6, height: 6)
             Text(t).font(.system(size: 10.5, weight: .medium)).foregroundStyle(PSE.text).lineLimit(1)
         }
+    }
+    // badge stato ben visibile: pill piena; "in attesa" (da confermare) in arancio, con enfasi
+    private func statusBadge(_ st: BookingStatus) -> some View {
+        let toConfirm = st == .in_attesa
+        let c = toConfirm ? PSE.warn : PSE.status(st)
+        return HStack(spacing: 6) {
+            Circle().fill(c).frame(width: 7, height: 7)
+            Text(st.label).font(.system(size: 11, weight: toConfirm ? .bold : .semibold)).foregroundStyle(c).lineLimit(1)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 4.5)
+        .background(Capsule().fill(c.opacity(toConfirm ? 0.20 : 0.13)))
+        .overlay(Capsule().strokeBorder(c.opacity(toConfirm ? 0.65 : 0.28), lineWidth: 1))
     }
 
     // ── planning mensile: camere (righe) × giorni (colonne) ──
@@ -447,7 +513,7 @@ struct CamerePSEDashboard: View {
             }
             HStack(alignment: .top, spacing: 0) {
                 VStack(spacing: 0) { ForEach(gridRows, id: \.self) { leftCell($0) } }.frame(width: labelW)
-                ScrollView(.horizontal, showsIndicators: true) {
+                ScrollView(.horizontal, showsIndicators: false) {
                     VStack(spacing: 0) {
                         ForEach(gridRows, id: \.self) { row in
                             HStack(spacing: 0) { ForEach(monthDays, id: \.self) { d in cell(row, d) } }
@@ -702,7 +768,7 @@ private struct BookingForm: View {
     @State private var saving = false
 
     var body: some View {
-        ScrollView {
+        ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 14) {
                 Text(existing == nil ? "NUOVA PRENOTAZIONE" : "MODIFICA PRENOTAZIONE")
                     .font(.system(size: 15, weight: .heavy)).tracking(2).foregroundStyle(Holo.titleText)

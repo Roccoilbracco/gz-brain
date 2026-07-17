@@ -69,7 +69,7 @@ struct ExportView: View {
     private var totSpese: Int { filteredSpese.reduce(0) { $0 + $1.importo_cents } }
 
     var body: some View {
-        ScrollView {
+        ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 18) {
                 Text("EXPORT COMMERCIALISTA").font(.system(size: 15, weight: .heavy)).tracking(2)
                     .foregroundStyle(Holo.titleText)

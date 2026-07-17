@@ -280,7 +280,7 @@ struct ProprietaView: View {
     }
 
     var body: some View {
-        ScrollView {
+        ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(spacing: 10) {
                     Text("PROPRIETÀ").font(.system(size: 19, weight: .heavy)).tracking(5)
@@ -442,7 +442,7 @@ struct ProprietaDetailView: View {
     private var st: PropertyStatus { .from(p?.status) }
 
     var body: some View {
-        ScrollView {
+        ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
                 Button { AppState.shared.clientiTab = .proprieta; AppState.shared.route = .clienti } label: {
                     Text("← PROPRIETÀ").font(.system(size: 11)).tracking(1.5)
@@ -640,7 +640,7 @@ struct ProprietaFormView: View {
     @State private var newPhotos: [URL] = []
 
     var body: some View {
-        ScrollView {
+        ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 14) {
                 Text(existing == nil ? "NUOVA PROPRIETÀ" : "MODIFICA PROPRIETÀ")
                     .font(.system(size: 15, weight: .heavy)).tracking(2).foregroundStyle(Holo.titleText)
@@ -773,7 +773,7 @@ struct StoricoFormView: View {
     @State private var saving = false
 
     var body: some View {
-        ScrollView {
+        ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 14) {
                 Text("NUOVO EVENTO").font(.system(size: 15, weight: .heavy)).tracking(2).foregroundStyle(Holo.titleText)
                 HStack(spacing: 12) {

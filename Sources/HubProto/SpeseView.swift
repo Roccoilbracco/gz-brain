@@ -41,7 +41,7 @@ struct SpeseView: View {
     }
 
     var body: some View {
-        ScrollView {
+        ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(spacing: 10) {
                     if !model.spese.isEmpty {
@@ -227,7 +227,7 @@ struct SpesaEditView: View {
     }
 
     var body: some View {
-        ScrollView {
+        ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("MODIFICA SPESA").font(.system(size: 15, weight: .heavy)).tracking(2).foregroundStyle(Holo.titleText)
                 HoloField(label: "Fornitore *", text: $fornitore)
@@ -319,7 +319,7 @@ struct SpesaFormView: View {
     private let categorie = SPESA_CATEGORIE
 
     var body: some View {
-        ScrollView {
+        ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("CARICA SPESA").font(.system(size: 15, weight: .heavy)).tracking(2).foregroundStyle(Holo.titleText)
 

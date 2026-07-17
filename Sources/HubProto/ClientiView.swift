@@ -83,7 +83,7 @@ struct ClientiView: View {
     var body: some View {
         GeometryReader { geo in
             let inner = max(minTableWidth, geo.size.width - 60)   // 60 = padding orizzontale (30+30)
-            ScrollView {
+            ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 16) {
                     HStack(spacing: 10) {
                         Spacer()

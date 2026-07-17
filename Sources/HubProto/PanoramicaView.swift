@@ -211,7 +211,7 @@ struct PanoramicaView: View {
     @ObservedObject var model: PanoramicaModel
 
     var body: some View {
-            ScrollView {
+            ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 18) {
                     Text("PANORAMICA")
                         .font(.system(size: 19, weight: .heavy))

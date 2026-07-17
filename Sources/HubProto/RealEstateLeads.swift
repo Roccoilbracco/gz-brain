@@ -756,7 +756,7 @@ private struct LeadFormView: View {
             Text(existing == nil ? "NUOVO LEAD" : "MODIFICA LEAD")
                 .font(.system(size: 15, weight: .heavy)).tracking(3).foregroundStyle(Holo.titleText)
                 .padding(EdgeInsets(top: 22, leading: 24, bottom: 14, trailing: 24))
-            ScrollView {
+            ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 14) {
                     field("Nome / contatto", $name, "Es. Marco Rossi")
                     HStack(spacing: 12) { field("Telefono", $phone, "+34 …"); field("Email", $email, "nome@email.com") }

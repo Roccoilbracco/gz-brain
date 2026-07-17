@@ -209,7 +209,7 @@ struct FattureView: View {
     }
 
     var body: some View {
-        ScrollView {
+        ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(spacing: 10) {
                     Spacer()
@@ -369,7 +369,7 @@ struct FatturaEditView: View {
     private var totaleC: Int { (Money.parse(imponibile) ?? 0) + (Money.parse(iva) ?? 0) }
 
     var body: some View {
-        ScrollView {
+        ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("MODIFICA FATTURA").font(.system(size: 15, weight: .heavy)).tracking(2).foregroundStyle(Holo.titleText)
                 Text("Cliente: \(clienteNome)").font(.system(size: 12)).foregroundStyle(Holo.subDim)

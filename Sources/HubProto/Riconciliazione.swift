@@ -163,7 +163,7 @@ struct RiconciliazioneView: View {
             .padding(EdgeInsets(top: 18, leading: 22, bottom: 14, trailing: 22))
             Divider().overlay(Color.white.opacity(0.08))
 
-            ScrollView {
+            ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 16) {
                     if loading {
                         Text("Leggo l'estratto…").font(.system(size: 13)).foregroundStyle(Holo.subDim)

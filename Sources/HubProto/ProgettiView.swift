@@ -7,7 +7,7 @@ struct ProgettiView: View {
     @ObservedObject var model: PanoramicaModel
 
     var body: some View {
-        ScrollView {
+        ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 22) {
                 Text("PROGETTI")
                     .font(.system(size: 19, weight: .heavy)).tracking(5)

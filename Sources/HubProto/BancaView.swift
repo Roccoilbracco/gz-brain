@@ -34,7 +34,7 @@ struct BancaView: View {
     @State private var msg: String?
 
     var body: some View {
-        ScrollView {
+        ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
                     Text("Carica gli estratti conto mese per mese: l'app li confronta con fatture e spese e segnala cosa manca.")
@@ -156,7 +156,7 @@ struct EstrattoFormView: View {
     @State private var err: String?
 
     var body: some View {
-        ScrollView {
+        ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("CARICA ESTRATTO CONTO").font(.system(size: 15, weight: .heavy)).tracking(2).foregroundStyle(Holo.titleText)
                 filePicker
