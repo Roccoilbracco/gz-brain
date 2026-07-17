@@ -81,6 +81,9 @@ struct ProgettoDettaglioView: View {
                 if model.project.slug == "camere-pse" {
                     // dash dedicata Camere PSE: pannello prenotazioni camere
                     CamerePSEDashboard()
+                } else if model.project.slug == "wallis-57" {
+                    // dash dedicata Wallis 57: richieste dal form del sito
+                    WallisDashboard()
                 } else if model.project.slug == "easyact" {
                     // dash dedicata EasyAct (legge il suo Supabase dal .env.local)
                     EasyActLayout(project: model.project)
