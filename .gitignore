@@ -4,3 +4,4 @@
 
 # bundle .app generato (artefatto di build)
 build/
+config.json
