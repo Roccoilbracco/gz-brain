@@ -99,7 +99,7 @@ enum LeadStage: String, CaseIterable, Identifiable {
 }
 
 enum LeadInterest: String, CaseIterable, Identifiable {
-    case acquisto, affitto, vendita
+    case acquisto, affitto, vendita, traspaso
     var id: String { rawValue }
     var label: String { rawValue.capitalized }
 }
@@ -242,12 +242,14 @@ struct LeadsHubView: View {
 
     // conteggi su TUTTI i lead (overview, indipendente da filtri)
     private func countStage(_ s: LeadStage) -> Int { leads.filter { $0.stage == s.rawValue }.count }
-    private var interest: (acq: Int, aff: Int, ven: Int, total: Int) {
-        var a = 0, f = 0, v = 0
+    private var interest: (acq: Int, aff: Int, ven: Int, tra: Int, total: Int) {
+        var a = 0, f = 0, v = 0, t = 0
         for l in leads {
-            switch l.interest { case "acquisto": a += 1; case "affitto": f += 1; case "vendita": v += 1; default: break }
+            switch l.interest {
+            case "acquisto": a += 1; case "affitto": f += 1; case "vendita": v += 1; case "traspaso": t += 1; default: break
+            }
         }
-        return (a, f, v, a + f + v)
+        return (a, f, v, t, a + f + v + t)
     }
     private var activityValues: [Int] { bucketISODatesByDay(leads.map { $0.created_at }, days: 14) }
 
@@ -281,7 +283,7 @@ struct LeadsHubView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Holo.hsl(150, 85, 62).opacity(0.4), lineWidth: 1))
 
-                InterestPanel(acq: interest.acq, aff: interest.aff, ven: interest.ven, total: interest.total)
+                InterestPanel(acq: interest.acq, aff: interest.aff, ven: interest.ven, tra: interest.tra, total: interest.total)
             }
             LeadFunnel(total: leads.count, count: { countStage($0) })
         }
@@ -449,20 +451,25 @@ private struct LeadCard: View {
 
 // ── Pannello 3 categorie: Acquisto / Affitto / Vendita (stile ServicePanel) ──
 private struct InterestPanel: View {
-    let acq: Int, aff: Int, ven: Int, total: Int
+    let acq: Int, aff: Int, ven: Int, tra: Int, total: Int
     private func pct(_ n: Int) -> Int { total > 0 ? Int((Double(n) / Double(total) * 100).rounded()) : 0 }
     var body: some View {
         GlassCard {
             VStack(spacing: 10) {
-                HStack(spacing: 14) {
+                HStack(spacing: 12) {
                     StatCap(label: "Acquisto", n: acq, pct: pct(acq), hue: 150)
                     StatCap(label: "Affitto", n: aff, pct: pct(aff), hue: 210)
                     StatCap(label: "Vendita", n: ven, pct: pct(ven), hue: 30)
+                    StatCap(label: "Traspaso", n: tra, pct: pct(tra), hue: 280)
                 }
                 WaveEqualizer(hueAt: { f in
-                    let a = total > 0 ? CGFloat(acq) / CGFloat(total) : 0.34
-                    let b = total > 0 ? CGFloat(aff) / CGFloat(total) : 0.33
-                    return f < a ? 150 : (f < a + b ? 210 : 30)
+                    let a = total > 0 ? CGFloat(acq) / CGFloat(total) : 0.25
+                    let b = total > 0 ? CGFloat(aff) / CGFloat(total) : 0.25
+                    let c = total > 0 ? CGFloat(ven) / CGFloat(total) : 0.25
+                    if f < a { return 150 }
+                    if f < a + b { return 210 }
+                    if f < a + b + c { return 30 }
+                    return 280
                 })
                 .frame(height: 36)
             }
