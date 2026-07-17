@@ -143,6 +143,7 @@ struct CamerePSEDashboard: View {
     @State private var loading = true
     @State private var strutturaFilter: Struttura? = nil
     @State private var selectedDay = Calendar.current.startOfDay(for: Date())
+    @State private var monthAnchor = { let c = Calendar.current; return c.date(from: c.dateComponents([.year, .month], from: Date()))! }()
     @State private var selected: Prenotazione? = nil
     @State private var editing: Prenotazione? = nil
     @State private var showForm = false
@@ -183,6 +184,25 @@ struct CamerePSEDashboard: View {
         if day(b.checkout) == d { return ("Partenza", 30) }
         return ("In casa", 210)
     }
+
+    // ── planning mensile ──
+    private var strutture: [Struttura] { strutturaFilter.map { [$0] } ?? Struttura.allCases }
+    private var monthDays: [Date] {
+        let c = Calendar.current
+        guard let r = c.range(of: .day, in: .month, for: monthAnchor) else { return [] }
+        return r.compactMap { c.date(byAdding: .day, value: $0 - 1, to: monthAnchor) }
+    }
+    private func roomsFor(_ s: Struttura) -> [String] { s.rooms.filter { !$0.lowercased().contains("inter") } }
+    private func firstName(_ n: String) -> String { n.split(separator: " ").first.map(String.init) ?? n }
+    private func bookingFor(_ s: Struttura, _ room: String, _ d: Date) -> Prenotazione? {
+        items.first { b in
+            guard b.status != "cancellata", b.struttura == s.rawValue,
+                  let ci = day(b.checkin), let co = day(b.checkout), ci <= d, d < co else { return false }
+            if let cam = b.camera { return cam == room || cam.lowercased().contains("inter") }
+            return false
+        }
+    }
+    private func freeInGrid(_ s: Struttura, _ d: Date) -> Int { roomsFor(s).filter { bookingFor(s, $0, d) == nil }.count }
     private func isToday(_ s: String?) -> Bool { s.map { String($0.prefix(10)) } == ymdBk.string(from: Date()) }
     private var incassato: Int { items.filter { $0.status != "cancellata" }.map { $0.paid_cents }.reduce(0, +) }
     private var daIncassare: Int { attive.map { max(0, $0.amount_cents - $0.paid_cents) }.reduce(0, +) }
@@ -198,6 +218,7 @@ struct CamerePSEDashboard: View {
                 } else {
                     calendarStrip
                     daySection
+                    planningSection
                 }
                 Spacer(minLength: 0)
             }
@@ -386,6 +407,118 @@ struct CamerePSEDashboard: View {
         HStack(spacing: 6) {
             Circle().fill(c).frame(width: 6, height: 6)
             Text(t).font(.system(size: 10.5, weight: .medium)).foregroundStyle(PSE.text).lineLimit(1)
+        }
+    }
+
+    // ── planning mensile: camere (righe) × giorni (colonne) ──
+    private enum GRow: Hashable { case header, title(Struttura), room(Struttura, String), free(Struttura) }
+    private var gridRows: [GRow] {
+        var r: [GRow] = [.header]
+        for s in strutture { r.append(.title(s)); for rm in roomsFor(s) { r.append(.room(s, rm)) }; r.append(.free(s)) }
+        return r
+    }
+    private var rowH: CGFloat { 27 }
+    private var dayW: CGFloat { 34 }
+    private var labelW: CGFloat { 210 }
+    private var occFill: Color { Color(hue: 5/360, saturation: 0.34, brightness: 0.48).opacity(0.34) }
+    private var freeFill: Color { Color(hue: 150/360, saturation: 0.30, brightness: 0.42).opacity(0.20) }
+    private var gLine: Color { Color.white.opacity(0.06) }
+
+    private var planningSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Text("PLANNING · \(fmt("MMMM yyyy").string(from: monthAnchor).uppercased())")
+                    .font(.system(size: 13.5, weight: .bold)).foregroundStyle(PSE.ink)
+                HStack(spacing: 10) {
+                    legendItem(freeFill, "Libera"); legendItem(occFill, "Occupata")
+                }
+                Spacer()
+                HStack(spacing: 6) {
+                    Button { shiftMonth(-1) } label: { Image(systemName: "chevron.left") }.buttonStyle(.plain).foregroundStyle(PSE.dim)
+                    Button { shiftMonth(1) } label: { Image(systemName: "chevron.right") }.buttonStyle(.plain).foregroundStyle(PSE.dim)
+                }.font(.system(size: 12, weight: .bold))
+            }
+            HStack(alignment: .top, spacing: 0) {
+                VStack(spacing: 0) { ForEach(gridRows, id: \.self) { leftCell($0) } }.frame(width: labelW)
+                ScrollView(.horizontal, showsIndicators: true) {
+                    VStack(spacing: 0) {
+                        ForEach(gridRows, id: \.self) { row in
+                            HStack(spacing: 0) { ForEach(monthDays, id: \.self) { d in cell(row, d) } }
+                        }
+                    }
+                }
+            }
+            .background(RoundedRectangle(cornerRadius: 12).fill(PSE.panel))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(PSE.line, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+    }
+    private func legendItem(_ c: Color, _ t: String) -> some View {
+        HStack(spacing: 4) { RoundedRectangle(cornerRadius: 2).fill(c).frame(width: 12, height: 10); Text(t).font(.system(size: 10)).foregroundStyle(PSE.faint) }
+    }
+    private func shiftMonth(_ n: Int) {
+        if let d = Calendar.current.date(byAdding: .month, value: n, to: monthAnchor) { withAnimation(.easeOut(duration: 0.15)) { monthAnchor = d } }
+    }
+
+    @ViewBuilder private func leftCell(_ row: GRow) -> some View {
+        switch row {
+        case .header:
+            Text("CAMERA").font(.system(size: 8.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint)
+                .frame(width: labelW, height: rowH, alignment: .leading).padding(.leading, 12)
+                .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
+        case .title(let s):
+            Text(s.label.uppercased()).font(.system(size: 10, weight: .heavy)).tracking(0.5).foregroundStyle(PSE.ink)
+                .frame(width: labelW, height: rowH, alignment: .leading).padding(.leading, 12)
+                .background(PSE.accent.opacity(0.14))
+        case .room(_, let rm):
+            Text(rm).font(.system(size: 10.5)).foregroundStyle(PSE.text).lineLimit(1)
+                .frame(width: labelW, height: rowH, alignment: .leading).padding(.leading, 14)
+                .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
+        case .free:
+            Text("Camere libere").font(.system(size: 9.5, weight: .heavy)).foregroundStyle(PSE.dim)
+                .frame(width: labelW, height: rowH, alignment: .leading).padding(.leading, 14)
+                .background(PSE.surface)
+                .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
+        }
+    }
+
+    @ViewBuilder private func cell(_ row: GRow, _ d: Date) -> some View {
+        switch row {
+        case .header:
+            let today = Calendar.current.isDateInToday(d)
+            VStack(spacing: 0) {
+                Text(String(wdFmt.string(from: d).prefix(1)).uppercased()).font(.system(size: 7.5, weight: .semibold)).foregroundStyle(PSE.faint)
+                Text(dNumFmt.string(from: d)).font(.system(size: 11, weight: .bold)).foregroundStyle(today ? PSE.accent : PSE.text).monospacedDigit()
+            }
+            .frame(width: dayW, height: rowH)
+            .background(today ? PSE.accent.opacity(0.14) : Color.clear)
+            .overlay(Rectangle().fill(gLine).frame(width: 1), alignment: .trailing)
+            .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
+        case .title:
+            Rectangle().fill(PSE.accent.opacity(0.14)).frame(width: dayW, height: rowH)
+                .overlay(Rectangle().fill(gLine).frame(width: 1), alignment: .trailing)
+        case .room(let s, let rm):
+            let b = bookingFor(s, rm, d)
+            Button {
+                if let b { withAnimation(.easeInOut(duration: 0.2)) { selected = b } }
+                else { withAnimation(.easeOut(duration: 0.15)) { selectedDay = d } }
+            } label: {
+                Text(b.map { firstName($0.guest_name) } ?? "")
+                    .font(.system(size: 8.5, weight: .medium)).foregroundStyle(PSE.text).lineLimit(1).minimumScaleFactor(0.7)
+                    .frame(width: dayW, height: rowH)
+                    .background(b != nil ? occFill : freeFill)
+                    .overlay(Rectangle().fill(gLine).frame(width: 1), alignment: .trailing)
+                    .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
+                    .contentShape(Rectangle())
+            }.buttonStyle(.plain)
+        case .free(let s):
+            let n = freeInGrid(s, d)
+            Text("\(n)").font(.system(size: 10, weight: .bold)).monospacedDigit()
+                .foregroundStyle(n == 0 ? PSE.faint : PSE.text)
+                .frame(width: dayW, height: rowH)
+                .background(PSE.surface)
+                .overlay(Rectangle().fill(gLine).frame(width: 1), alignment: .trailing)
+                .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
         }
     }
 
