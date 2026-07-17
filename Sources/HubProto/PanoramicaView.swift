@@ -199,7 +199,7 @@ final class PanoramicaModel: ObservableObject {
         do {
             async let p = HubAPI.listProjects()
             async let e = HubAPI.listRecentEvents()
-            async let c = HubAPI.leadsTotal()
+            async let c = HubAPI.reLeadsTotal()
             (projects, events, leadsTotal) = try await (p, e, c)
         } catch {
             self.error = error.localizedDescription
@@ -232,7 +232,7 @@ struct PanoramicaView: View {
                                 sub: "\(model.events.count) negli ultimi 14 giorni", hue: 270)
                         KpiCard(label: "Leads in pipeline",
                                 value: model.leadsTotal.map(String.init) ?? "—",
-                                sub: "dentro Energizzo", hue: 25)
+                                sub: "GZ Ibiza Properties", hue: 25)
                     }
 
                     GlassCard {

@@ -118,6 +118,9 @@ extension HubAPI {
     static func listReLeads() async throws -> [RELead] {
         try await sb.fetch("re_leads?select=*&order=created_at.desc&limit=2000")
     }
+    static func reLeadsTotal() async throws -> Int {
+        try await sb.count("re_leads?select=id")
+    }
     @discardableResult
     static func createReLead(_ fields: [String: Any?]) async throws -> RELead {
         try await sb.insertReturning("re_leads", body: fields)

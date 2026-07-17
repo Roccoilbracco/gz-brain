@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 // Creazione ed eliminazione progetti avvengono via IL DIRETTORE (chat/MCP),
 // non dalla UI — stessa decisione della versione Tauri (2026-06-10).
@@ -70,7 +71,32 @@ struct ProjectCreateModalView: View {
                 field("Slug", text: $slug).onChange(of: slug) { _, _ in slugEdited = true }
             }
             field("Repo GitHub", text: $repo, placeholder: "https://github.com/utente/repo")
-            field("Cartella locale sul Mac", text: $localPath, placeholder: "/Users/tuonome/Developer/repo")
+            VStack(alignment: .leading, spacing: 5) {
+                fieldLabel("Cartella locale sul Mac")
+                HStack(spacing: 8) {
+                    Text(localPath.isEmpty ? "Nessuna cartella scelta" : localPath)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(localPath.isEmpty ? Holo.labelDim : Holo.text)
+                        .lineLimit(1).truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10).padding(.vertical, 7)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Color(red: 10/255, green: 16/255, blue: 34/255).opacity(0.8)))
+                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color(red: 130/255, green: 180/255, blue: 1).opacity(0.35), lineWidth: 1))
+                    Button {
+                        pickFolder()
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "folder").font(.system(size: 11))
+                            Text("Scegli…").font(.system(size: 12, weight: .semibold))
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    if !localPath.isEmpty {
+                        Button { localPath = "" } label: { Image(systemName: "xmark.circle.fill") }
+                            .buttonStyle(.plain).foregroundStyle(Holo.labelDim)
+                    }
+                }
+            }
             Text("Serve per il tab Code (terminale Claude) e la Preview: la cartella dove hai clonato il repo.")
                 .font(.system(size: 10.5)).foregroundStyle(Holo.labelDim)
 
@@ -116,6 +142,17 @@ struct ProjectCreateModalView: View {
             fieldLabel(label)
             TextField(placeholder, text: text).textFieldStyle(.roundedBorder)
         }
+    }
+
+    private func pickFolder() {
+        let p = NSOpenPanel()
+        p.canChooseDirectories = true
+        p.canChooseFiles = false
+        p.allowsMultipleSelection = false
+        p.prompt = "Scegli"
+        p.message = "Scegli la cartella locale dove hai clonato il repo"
+        p.directoryURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Developer")
+        if p.runModal() == .OK, let url = p.url { localPath = url.path }
     }
 
     private func save() async {
