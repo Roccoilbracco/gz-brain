@@ -63,7 +63,7 @@ enum Struttura: String, CaseIterable, Identifiable {
     static func from(_ s: String?) -> Struttura { Struttura(rawValue: s ?? "") ?? .esVedra }
 }
 
-let bookingSources = ["sito", "whatsapp", "booking", "telefono", "email"]
+let bookingSources = ["sito", "whatsapp", "booking", "airbnb", "telefono", "email"]
 
 enum PayState { case daPagare, acconto, pagato
     var label: String { switch self { case .daPagare: return "Da pagare"; case .acconto: return "Acconto"; case .pagato: return "Saldato" } }
@@ -421,8 +421,14 @@ struct CamerePSEDashboard: View {
     private var dayW: CGFloat { 34 }
     private var labelW: CGFloat { 210 }
     private var occFill: Color { Color(hue: 5/360, saturation: 0.34, brightness: 0.48).opacity(0.34) }
+    private var bookingFill: Color { Color(hue: 45/360, saturation: 0.44, brightness: 0.52).opacity(0.34) }
+    private var airbnbFill: Color { Color(hue: 22/360, saturation: 0.50, brightness: 0.56).opacity(0.34) }
     private var freeFill: Color { Color(hue: 150/360, saturation: 0.30, brightness: 0.42).opacity(0.20) }
     private var gLine: Color { Color.white.opacity(0.06) }
+    // tinta cella occupata in base alla fonte (Booking giallo, Airbnb arancio, resto rosa)
+    private func sourceFill(_ s: String?) -> Color {
+        switch s { case "booking": return bookingFill; case "airbnb": return airbnbFill; default: return occFill }
+    }
 
     private var planningSection: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -430,7 +436,8 @@ struct CamerePSEDashboard: View {
                 Text("PLANNING · \(fmt("MMMM yyyy").string(from: monthAnchor).uppercased())")
                     .font(.system(size: 13.5, weight: .bold)).foregroundStyle(PSE.ink)
                 HStack(spacing: 10) {
-                    legendItem(freeFill, "Libera"); legendItem(occFill, "Occupata")
+                    legendItem(freeFill, "Libera"); legendItem(occFill, "Diretta")
+                    legendItem(bookingFill, "Booking"); legendItem(airbnbFill, "Airbnb")
                 }
                 Spacer()
                 HStack(spacing: 6) {
@@ -506,7 +513,7 @@ struct CamerePSEDashboard: View {
                 Text(b.map { firstName($0.guest_name) } ?? "")
                     .font(.system(size: 8.5, weight: .medium)).foregroundStyle(PSE.text).lineLimit(1).minimumScaleFactor(0.7)
                     .frame(width: dayW, height: rowH)
-                    .background(b != nil ? occFill : freeFill)
+                    .background(b != nil ? sourceFill(b?.source) : freeFill)
                     .overlay(Rectangle().fill(gLine).frame(width: 1), alignment: .trailing)
                     .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
                     .contentShape(Rectangle())
