@@ -1,7 +1,8 @@
-# UNVRS Hub Swift
+# GZ Brain
 
-Riscrittura nativa macOS (SwiftUI + AppKit) di UNVRS Hub — stesso Supabase della versione Tauri
-(config condivisa: `~/Library/Application Support/dev.unvrslabs.hub/config.json`).
+App nativa macOS (SwiftUI + AppKit): centro di controllo per progetti, leads/CRM e fatturazione.
+Config Supabase in `~/Library/Application Support/dev.gz.brain/config.json`
+(chiavi: `supabase_url`, `supabase_secret_key`).
 
 ## Cosa contiene
 
@@ -19,7 +20,7 @@ Riscrittura nativa macOS (SwiftUI + AppKit) di UNVRS Hub — stesso Supabase del
 ## Comandi
 
 - `swift run` — avvio dev
-- `scripts/bundle.sh` — build release + bundle + installazione in `/Applications/UNVRS Hub Swift.app`
+- `scripts/bundle.sh` — build release + bundle + installazione in `/Applications/GZ Brain.app`
 
 ## Note
 

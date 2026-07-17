@@ -41,7 +41,7 @@ cat > "$BUNDLE/Contents/Info.plist" <<PLIST
 <dict>
   <key>CFBundleName</key><string>$APP_NAME</string>
   <key>CFBundleDisplayName</key><string>$APP_NAME</string>
-  <key>CFBundleIdentifier</key><string>dev.unvrslabs.hub-swift</string>
+  <key>CFBundleIdentifier</key><string>dev.gz.brain</string>
   <key>CFBundleVersion</key><string>0.1.0</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleExecutable</key><string>$APP_NAME</string>

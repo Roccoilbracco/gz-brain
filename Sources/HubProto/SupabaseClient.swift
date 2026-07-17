@@ -1,7 +1,7 @@
 import Foundation
 import UniformTypeIdentifiers
 
-/// Mini client PostgREST — legge la stessa config.json di UNVRS Hub (Tauri).
+/// Mini client PostgREST — legge la config.json di GZ Brain.
 /// Contesto nativo (no browser/webview): ok usare la secret key.
 struct SupabaseClient {
     let baseURL: URL
@@ -11,7 +11,7 @@ struct SupabaseClient {
 
     static func fromHubConfig() throws -> SupabaseClient {
         let path = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/dev.unvrslabs.hub/config.json")
+            .appendingPathComponent("Library/Application Support/dev.gz.brain/config.json")
         let data = try Data(contentsOf: path)
         struct Cfg: Decodable { let supabase_url: String; let supabase_secret_key: String }
         let cfg = try JSONDecoder().decode(Cfg.self, from: data)
@@ -131,7 +131,7 @@ enum HubAPI {
         get throws {
             guard let c = SupabaseClient.shared else {
                 throw NSError(domain: "HubProto", code: 3, userInfo: [
-                    NSLocalizedDescriptionKey: "config.json mancante — esegui scripts/setup-config.sh di unvrs-hub"])
+                    NSLocalizedDescriptionKey: "config.json mancante — crea ~/Library/Application Support/dev.gz.brain/config.json"])
             }
             return c
         }

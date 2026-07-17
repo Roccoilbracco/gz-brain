@@ -1,4 +1,4 @@
-// Proxy Preview per UNVRS Hub (ispirato a unvrs-code/preview-proxy.mjs).
+// Proxy Preview per GZ Brain (ispirato a unvrs-code/preview-proxy.mjs).
 // Inoltra tutto al dev server locale togliendo gli header che bloccano
 // l'embedding in WKWebView (X-Frame-Options / CSP) e inoltrando il WebSocket (HMR).
 // Uso: node preview-proxy.mjs <proxyPort> <devPort>

@@ -4,7 +4,7 @@ import SwiftUI
 struct ImpostazioniView: View {
     private var configPath: String {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/dev.unvrslabs.hub/config.json").path
+            .appendingPathComponent("Library/Application Support/dev.gz.brain/config.json").path
     }
 
     var body: some View {
