@@ -9,12 +9,13 @@ enum PreviewServer {
 
     private static let node = firstExisting(["/opt/homebrew/bin/node", "/usr/local/bin/node"]) ?? "/usr/bin/env"
     private static let npm = firstExisting(["/opt/homebrew/bin/npm", "/usr/local/bin/npm"]) ?? "/usr/bin/env"
+    private static let python = firstExisting(["/usr/bin/python3", "/opt/homebrew/bin/python3"]) ?? "/usr/bin/python3"
 
     enum PreviewError: LocalizedError {
         case noDevScript, installFailed(String), timeout
         var errorDescription: String? {
             switch self {
-            case .noDevScript: return "Il progetto non ha uno script \"dev\" in package.json."
+            case .noDevScript: return "Nessuna anteprima: manca uno script \"dev\" in package.json e non c'è un index.html (sito statico)."
             case .installFailed(let m): return "npm install fallito.\n\(m)"
             case .timeout: return "Il dev server non è partito in tempo. Controlla i log in ~/Library/Logs o avvialo dal terminale CODE."
             }
@@ -35,20 +36,29 @@ enum PreviewServer {
 
     /// Avvia (se serve) deps + dev server + proxy e ritorna l'URL del proxy pronto.
     static func start(projectId: String, dir: String, onStatus: @escaping (String) -> Void) async throws -> URL {
-        guard hasDevScript(dir: dir) else { throw PreviewError.noDevScript }
+        let hasDev = hasDevScript(dir: dir)
+        let isStatic = !hasDev && FileManager.default.fileExists(atPath: dir + "/index.html")
+        guard hasDev || isStatic else { throw PreviewError.noDevScript }
         let (dev, proxy) = ports(for: projectId)
 
-        // dipendenze: se manca node_modules, npm install (può richiedere 1-2 min)
-        if !FileManager.default.fileExists(atPath: dir + "/node_modules") {
+        // dipendenze: solo per progetti node con script dev; se manca node_modules, npm install
+        if hasDev, !FileManager.default.fileExists(atPath: dir + "/node_modules") {
             onStatus("Installazione dipendenze (npm install)… può richiedere 1-2 min")
             let (code, out) = try await runWait(npm, ["install"], cwd: dir)
             if code != 0 { throw PreviewError.installFailed(String(out.suffix(400))) }
         }
 
         if !isListening(dev) {
-            onStatus("Avvio dev server…")
-            spawn(npm, ["run", "dev", "--", "--port", "\(dev)", "--host", "127.0.0.1"],
-                  cwd: dir, env: ["PORT": "\(dev)"], logName: "unvrs-hub-dev-\(dev)")
+            if hasDev {
+                onStatus("Avvio dev server…")
+                spawn(npm, ["run", "dev", "--", "--port", "\(dev)", "--host", "127.0.0.1"],
+                      cwd: dir, env: ["PORT": "\(dev)"], logName: "unvrs-hub-dev-\(dev)")
+            } else {
+                // sito statico (HTML/CSS): server file locale, nessuna dipendenza richiesta
+                onStatus("Avvio server statico…")
+                spawn(python, ["-m", "http.server", "\(dev)", "--bind", "127.0.0.1"],
+                      cwd: dir, logName: "unvrs-hub-static-\(dev)")
+            }
             rememberPort(dev)
         }
         if !isListening(proxy) {
