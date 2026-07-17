@@ -290,6 +290,7 @@ create table if not exists public.proprieta (
   zone          text,
   city          text,
   category      text,                            -- residenziale|commerciale
+  listing_type  text,                            -- vendita|affitto|traspaso
   property_type text,                            -- villa|appartamento|attico|casale|terreno|commerciale
   bedrooms      smallint,
   bathrooms     smallint,

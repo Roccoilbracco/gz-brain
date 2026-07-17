@@ -16,6 +16,7 @@ struct Proprieta: Decodable, Identifiable {
     var zone: String?
     var city: String?
     var category: String?
+    var listing_type: String?
     var property_type: String?
     var bedrooms: Int?
     var bathrooms: Int?
@@ -289,6 +290,16 @@ struct ProprietaView: View {
     }
 }
 
+// operazione: label + tinta (coerente col pannello leads: vendita ambra, affitto blu, traspaso viola)
+func operationInfo(_ s: String?) -> (label: String, hue: Double)? {
+    switch s {
+    case "vendita": return ("Vendita", 30)
+    case "affitto": return ("Affitto", 210)
+    case "traspaso": return ("Traspaso", 280)
+    default: return nil
+    }
+}
+
 private struct PropertyCard: View {
     let p: Proprieta
     @State private var hover = false
@@ -323,7 +334,13 @@ private struct PropertyCard: View {
                           p.size_sqm.map { "\($0) m²" }, p.bedrooms.map { "\($0) cam" }]
                         .compactMap { $0 }.joined(separator: " · "))
                         .font(.system(size: 10.5)).foregroundStyle(Holo.labelDim).lineLimit(1)
-                    HStack {
+                    HStack(spacing: 8) {
+                        if let op = operationInfo(p.listing_type) {
+                            Text(op.label.uppercased()).font(.system(size: 8.5, weight: .heavy)).tracking(0.6)
+                                .foregroundStyle(Holo.hsl(op.hue, 85, 74))
+                                .padding(.horizontal, 7).padding(.vertical, 2.5)
+                                .background(Capsule().fill(Holo.hsl(op.hue, 70, 45).opacity(0.18)))
+                        }
                         if let pr = p.price { Text(LeadFmt.euro(pr)).font(.system(size: 14, weight: .bold))
                             .foregroundStyle(Holo.hsl(150, 70, 68)) }
                         Spacer()
@@ -432,6 +449,8 @@ struct ProprietaDetailView: View {
             defRow("INDIRIZZO", [p.address, p.zone, p.city].compactMap { $0 }.joined(separator: ", ").ifEmpty("—"))
             divider
             defRow("TIPOLOGIA", [p.category?.capitalized, p.property_type].compactMap { $0 }.joined(separator: " · ").ifEmpty("—"))
+            divider
+            defRow("OPERAZIONE", operationInfo(p.listing_type)?.label ?? "—")
             divider
             defRow("DETTAGLI", [p.size_sqm.map { "\($0) m²" }, p.bedrooms.map { "\($0) camere" }, p.bathrooms.map { "\($0) bagni" }]
                 .compactMap { $0 }.joined(separator: " · ").ifEmpty("—"))
@@ -543,7 +562,7 @@ struct ProprietaFormView: View {
 
     @State private var title = ""; @State private var reference = ""
     @State private var address = ""; @State private var zone = ""; @State private var city = ""
-    @State private var category = ""; @State private var propertyType = ""
+    @State private var category = ""; @State private var listingType = ""; @State private var propertyType = ""
     @State private var bedrooms = ""; @State private var bathrooms = ""; @State private var sqm = ""
     @State private var price = ""; @State private var status = PropertyStatus.disponibile
     @State private var notes = ""; @State private var saving = false
@@ -558,6 +577,7 @@ struct ProprietaFormView: View {
                 HoloField(label: "Riferimento", text: $reference, placeholder: "Es. GZ-0012")
                 HoloField(label: "Indirizzo", text: $address, placeholder: "Es. Carrer de …")
                 HStack(spacing: 12) { HoloField(label: "Zona", text: $zone); HoloField(label: "Città", text: $city) }
+                holoPicker("Operazione", [("", "—")] + LeadInterest.allCases.map { ($0.rawValue, $0.label) }, listingType) { listingType = $0 }
                 HStack(spacing: 12) {
                     holoPicker("Categoria", [("", "—")] + LeadCategory.allCases.map { ($0.rawValue, $0.label) }, category) { category = $0 }
                     holoPicker("Tipo immobile", [("", "—")] + propertyTypes.map { ($0, $0) }, propertyType) { propertyType = $0 }
@@ -635,7 +655,8 @@ struct ProprietaFormView: View {
     private func prefill() {
         guard let e = existing else { return }
         title = e.title; reference = e.reference ?? ""; address = e.address ?? ""
-        zone = e.zone ?? ""; city = e.city ?? ""; category = e.category ?? ""; propertyType = e.property_type ?? ""
+        zone = e.zone ?? ""; city = e.city ?? ""; category = e.category ?? ""
+        listingType = e.listing_type ?? ""; propertyType = e.property_type ?? ""
         bedrooms = e.bedrooms.map(String.init) ?? ""; bathrooms = e.bathrooms.map(String.init) ?? ""
         sqm = e.size_sqm.map(String.init) ?? ""; price = e.price.map(String.init) ?? ""
         status = .from(e.status); notes = e.notes ?? ""
@@ -646,7 +667,7 @@ struct ProprietaFormView: View {
         let body: [String: Any?] = [
             "title": title.trimmingCharacters(in: .whitespaces), "reference": s(reference),
             "address": s(address), "zone": s(zone), "city": s(city),
-            "category": s(category), "property_type": s(propertyType),
+            "category": s(category), "listing_type": s(listingType), "property_type": s(propertyType),
             "bedrooms": Int(bedrooms), "bathrooms": Int(bathrooms), "size_sqm": Int(sqm),
             "price": Int(price), "status": status.rawValue, "notes": s(notes),
         ]
