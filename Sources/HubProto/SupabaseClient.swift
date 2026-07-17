@@ -170,6 +170,14 @@ enum HubAPI {
                              body: ["project_id": projectId, "kind": kind, "message": message])
     }
 
+    /// Crea un nuovo progetto e ritorna la riga creata.
+    @discardableResult
+    static func createProject(_ fields: [String: Any?]) async throws -> Project {
+        let p: Project = try await sb.insertReturning("projects", body: fields)
+        await logEvent(projectId: p.id, kind: "project_created", message: "Creato progetto \(p.name)")
+        return p
+    }
+
     static func updateProject(id: String, fields: [String: Any?], name: String) async throws {
         var body = fields
         body["updated_at"] = isoNow()

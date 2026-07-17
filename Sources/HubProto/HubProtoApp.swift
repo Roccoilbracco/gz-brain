@@ -68,7 +68,7 @@ struct ContentView: View {
 
             HStack(spacing: 0) {
                 if !state.navClosed {
-                    SidebarView(projects: model.projects)
+                    SidebarView(projects: model.projects, reload: { await model.load() })
                         .frame(width: 304 - 18)
                         // il pannello parte SOTTO i semafori (44px liberi in alto)
                         .padding(EdgeInsets(top: 44, leading: 12, bottom: 14, trailing: 6))

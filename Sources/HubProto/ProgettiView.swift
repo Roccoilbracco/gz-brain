@@ -31,6 +31,114 @@ struct ProgettiView: View {
 }
 
 // ─── Modal modifica progetto (port di ProjectModal.tsx, come sheet) ───
+// ─── Form: nuovo progetto (nome, repo, cartella locale) ───
+struct ProjectCreateModalView: View {
+    let sortOrder: Int
+    let onSaved: () async -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var name = ""
+    @State private var slug = ""
+    @State private var repo = ""
+    @State private var localPath = ""
+    @State private var status = "dev"
+    @State private var hue: Double = 205
+    @State private var slugEdited = false
+    @State private var errors: [String] = []
+    @State private var saving = false
+
+    // slug auto dal nome finché l'utente non lo modifica a mano
+    private func slugify(_ s: String) -> String {
+        let lowered = s.lowercased().folding(options: .diacriticInsensitive, locale: .current)
+        let mapped = lowered.map { ch -> Character in
+            (ch.isLetter || ch.isNumber) ? ch : "-"
+        }
+        let joined = String(mapped)
+        let parts = joined.split(separator: "-").map(String.init)
+        return parts.joined(separator: "-")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("NUOVO PROGETTO")
+                .font(.system(size: 14, weight: .heavy)).tracking(2.5)
+                .foregroundStyle(Holo.hsl(217, 90, 70)).padding(.bottom, 4)
+
+            HStack(spacing: 12) {
+                field("Nome", text: $name)
+                    .onChange(of: name) { _, v in if !slugEdited { slug = slugify(v) } }
+                field("Slug", text: $slug).onChange(of: slug) { _, _ in slugEdited = true }
+            }
+            field("Repo GitHub", text: $repo, placeholder: "https://github.com/utente/repo")
+            field("Cartella locale sul Mac", text: $localPath, placeholder: "/Users/tuonome/Developer/repo")
+            Text("Serve per il tab Code (terminale Claude) e la Preview: la cartella dove hai clonato il repo.")
+                .font(.system(size: 10.5)).foregroundStyle(Holo.labelDim)
+
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 5) {
+                    fieldLabel("Stato")
+                    Picker("", selection: $status) {
+                        ForEach(PROJECT_STATUSES, id: \.self) { Text($0).tag($0) }
+                    }.labelsHidden()
+                }
+                VStack(alignment: .leading, spacing: 5) {
+                    fieldLabel("Colore (hue 0-360)")
+                    HStack {
+                        TextField("", value: $hue, format: .number).textFieldStyle(.roundedBorder)
+                        Circle().fill(Holo.hsl(hue, 85, 60)).frame(width: 16, height: 16)
+                    }
+                }
+            }
+
+            ForEach(errors, id: \.self) { e in
+                Text("● \(e)").font(.system(size: 12)).foregroundStyle(Color(hex: 0xffb3ad))
+            }
+            HStack {
+                Spacer()
+                Button("Annulla") { dismiss() }
+                Button(saving ? "Creazione…" : "Crea progetto") { Task { await save() } }
+                    .buttonStyle(.borderedProminent).disabled(saving)
+            }
+            .padding(.top, 4)
+        }
+        .padding(22).frame(width: 480)
+        .background(LinearGradient(
+            colors: [Color(red: 18/255, green: 28/255, blue: 58/255), Color(red: 10/255, green: 16/255, blue: 34/255)],
+            startPoint: .topLeading, endPoint: .bottomTrailing))
+        .preferredColorScheme(.dark)
+    }
+
+    private func fieldLabel(_ t: String) -> some View {
+        Text(t.uppercased()).font(.system(size: 9.5, weight: .heavy)).tracking(2).foregroundStyle(Holo.labelDim)
+    }
+    private func field(_ label: String, text: Binding<String>, placeholder: String = "") -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            fieldLabel(label)
+            TextField(placeholder, text: text).textFieldStyle(.roundedBorder)
+        }
+    }
+
+    private func save() async {
+        let errs = validateProject(name: name, slug: slug, status: status, hue: hue)
+        if !errs.isEmpty { errors = errs; return }
+        saving = true
+        func nz(_ s: String) -> String? { let t = s.trimmingCharacters(in: .whitespaces); return t.isEmpty ? nil : t }
+        do {
+            try await HubAPI.createProject([
+                "name": name.trimmingCharacters(in: .whitespaces), "slug": slug, "status": status, "hue": hue,
+                "local_path": nz(localPath),
+                "notes": nz(repo).map { "Repo: \($0)" },
+                "description": nz(repo),
+                "sort_order": sortOrder,
+            ])
+            await onSaved()
+            dismiss()
+        } catch {
+            errors = [error.localizedDescription]; saving = false
+        }
+    }
+}
+
 struct ProjectModalView: View {
     let project: Project
     let onSaved: () -> Void

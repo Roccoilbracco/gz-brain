@@ -19,8 +19,10 @@ enum Csb {
 
 struct SidebarView: View {
     let projects: [Project]
+    var reload: () async -> Void = {}
     @ObservedObject private var state = AppState.shared
     @State private var ordered: [Project] = []
+    @State private var showAddProject = false
 
     /// Sposta il progetto trascinato (slug) prima di quello di destinazione e salva l'ordine.
     private func moveProject(_ slug: String, before targetSlug: String) {
@@ -101,6 +103,22 @@ struct SidebarView: View {
             .onAppear { ordered = projects }
             .onChange(of: projects) { _, new in ordered = new }
 
+            // aggiungi progetto (nome, repo, cartella locale)
+            Button { showAddProject = true } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "plus").font(.system(size: 11, weight: .bold))
+                    Text("Aggiungi progetto").font(.system(size: 12, weight: .semibold))
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(Csb.tagFg)
+                .padding(.horizontal, 10).padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: 10).strokeBorder(
+                    style: StrokeStyle(lineWidth: 1, dash: [4, 3])).foregroundStyle(Color.white.opacity(0.12)))
+                .contentShape(RoundedRectangle(cornerRadius: 10))
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 6)
+
             Spacer(minLength: 0)
 
             // separatore sopra il profilo
@@ -113,6 +131,9 @@ struct SidebarView: View {
         .background(RoundedRectangle(cornerRadius: 14).fill(Csb.panel))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Csb.panelBorder, lineWidth: 1))
         .shadow(color: .black.opacity(0.5), radius: 19, y: 14)
+        .sheet(isPresented: $showAddProject) {
+            ProjectCreateModalView(sortOrder: ordered.count) { await reload() }
+        }
     }
 
     private var profileFooter: some View {
