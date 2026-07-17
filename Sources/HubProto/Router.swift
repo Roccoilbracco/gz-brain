@@ -30,6 +30,9 @@ struct MainRouter: View {
         case .cliente(let id):
             ClienteDetailView(clienteId: id)
                 .id(id)
+        case .proprieta(let id):
+            ProprietaDetailView(proprietaId: id)
+                .id(id)
         case .codeGeneric:
             ProgettoCodeView(project: nil)
         }

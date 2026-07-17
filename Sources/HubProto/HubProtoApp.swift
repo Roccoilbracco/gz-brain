@@ -28,11 +28,11 @@ final class AppState: ObservableObject {
     @Published var clientiPanelOpen = true
 
     var isClientiArea: Bool {
-        switch route { case .clienti, .cliente: return true; default: return false }
+        switch route { case .clienti, .cliente, .proprieta: return true; default: return false }
     }
 }
 
-enum ClientiTab: String, CaseIterable { case clienti, fatture, spese, banca, export }
+enum ClientiTab: String, CaseIterable { case clienti, proprieta, fatture, spese, banca, export }
 
 enum Route: Equatable {
     case panoramica
@@ -43,6 +43,7 @@ enum Route: Equatable {
     case progetto(slug: String, tab: ProjectTab)
     case lead(slug: String, leadId: String)
     case cliente(id: String)
+    case proprieta(id: String)
     case codeGeneric            // terminale Claude generico, senza progetto
 }
 

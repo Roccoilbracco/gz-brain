@@ -281,6 +281,39 @@ create index if not exists re_leads_stage_idx   on public.re_leads using btree (
 create index if not exists re_leads_source_idx  on public.re_leads using btree (source);
 create index if not exists re_leads_created_idx on public.re_leads using btree (created_at desc);
 
+-- ── proprieta (registro immobili) + storico (una proprietà venduta/affittata più volte nel tempo) ──
+create table if not exists public.proprieta (
+  id            uuid primary key default gen_random_uuid(),
+  title         text not null,
+  reference     text,                            -- rif interno / codice
+  address       text,
+  zone          text,
+  city          text,
+  category      text,                            -- residenziale|commerciale
+  property_type text,                            -- villa|appartamento|attico|casale|terreno|commerciale
+  bedrooms      smallint,
+  bathrooms     smallint,
+  size_sqm      integer,
+  price         integer,                         -- prezzo/richiesta attuale (€)
+  status        text not null default 'disponibile', -- disponibile|riservata|venduta|affittata|ritirata
+  notes         text,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+create table if not exists public.proprieta_storico (
+  id            uuid primary key default gen_random_uuid(),
+  proprieta_id  uuid not null references public.proprieta(id) on delete cascade,
+  event_type    text not null default 'vendita', -- acquisizione|vendita|affitto|traspaso|variazione_prezzo|ritiro
+  event_date    date not null default current_date,
+  price         integer,
+  counterparty  text,                            -- acquirente / inquilino / venditore
+  agent         text,
+  notes         text,
+  created_at    timestamptz not null default now()
+);
+create index if not exists proprieta_storico_prop_idx on public.proprieta_storico using btree (proprieta_id, event_date desc);
+create index if not exists proprieta_status_idx on public.proprieta using btree (status);
+
 -- ── funzione + trigger: lead chiuso_vinto → crea/aggiorna cliente ─────────
 create or replace function public.sync_lead_cliente()
 returns trigger
@@ -331,3 +364,5 @@ alter table public.spese             enable row level security;
 alter table public.estratti_conto    enable row level security;
 alter table public.mov_match         enable row level security;
 alter table public.re_leads          enable row level security;
+alter table public.proprieta         enable row level security;
+alter table public.proprieta_storico enable row level security;

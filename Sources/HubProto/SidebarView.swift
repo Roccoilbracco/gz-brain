@@ -42,7 +42,7 @@ struct SidebarView: View {
     }
     // tab segmentate top-level: Dash · Code (modalità del click sui progetti) · Clienti
     private var isClienti: Bool {
-        switch state.route { case .clienti, .cliente: return true; default: return false }
+        switch state.route { case .clienti, .cliente, .proprieta: return true; default: return false }
     }
     private var isImpostazioni: Bool { state.route == .impostazioni }
     private var isDash: Bool { !isClienti && !isImpostazioni && state.sidebarMode == .dash }

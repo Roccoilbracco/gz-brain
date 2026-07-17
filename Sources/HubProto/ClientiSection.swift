@@ -8,6 +8,7 @@ struct ClientiSubnavView: View {
         VStack(alignment: .leading, spacing: 2) {
             Color.clear.frame(height: 10)
             item("Clienti", "person.2", .clienti)
+            item("Proprietà", "house", .proprieta)
             item("Fatture", "doc.text", .fatture)
             item("Spese", "tray.and.arrow.down", .spese)
             item("Banca", "building.columns", .banca)
@@ -50,6 +51,7 @@ struct ClientiSectionView: View {
     var body: some View {
         switch state.clientiTab {
         case .clienti: ClientiView(model: model)
+        case .proprieta: ProprietaView()
         case .fatture: FattureView()
         case .spese:   SpeseView()
         case .banca:   BancaView()
