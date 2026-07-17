@@ -77,6 +77,40 @@ func payState(amount: Int, paid: Int) -> PayState {
 // cents → "€X"
 func eur(_ cents: Int) -> String { LeadFmt.euro(cents / 100) }
 
+// ── Tema sobrio e professionale (poco colore, tinte desaturate) ──
+enum PSE {
+    static let ink = Holo.titleText                                   // testo forte
+    static let text = Color(red: 210/255, green: 220/255, blue: 236/255)
+    static let dim = Color(red: 190/255, green: 202/255, blue: 224/255).opacity(0.62)
+    static let faint = Color(red: 150/255, green: 165/255, blue: 190/255).opacity(0.55)
+    static let line = Color.white.opacity(0.09)
+    static let surface = Color.white.opacity(0.035)
+    static let accent = Color(red: 0.44, green: 0.56, blue: 0.74)     // slate blue sobrio
+    static let panel = Color(hex: 0x0f141e)
+
+    // tinte di stato desaturate (professionali, non fluo)
+    static func status(_ s: BookingStatus) -> Color {
+        switch s {
+        case .in_attesa:  return Color(hue: 40/360,  saturation: 0.42, brightness: 0.68)
+        case .confermata: return Color(hue: 210/360, saturation: 0.36, brightness: 0.70)
+        case .in_casa:    return Color(hue: 150/360, saturation: 0.34, brightness: 0.60)
+        case .partita:    return Color(hue: 220/360, saturation: 0.08, brightness: 0.60)
+        case .cancellata: return Color(hue: 5/360,   saturation: 0.42, brightness: 0.60)
+        }
+    }
+    static func payment(_ p: PayState) -> Color {
+        switch p {
+        case .daPagare: return Color(hue: 5/360,   saturation: 0.40, brightness: 0.60)
+        case .acconto:  return Color(hue: 40/360,  saturation: 0.40, brightness: 0.66)
+        case .pagato:   return Color(hue: 150/360, saturation: 0.32, brightness: 0.58)
+        }
+    }
+}
+
+private let itLoc = Locale(identifier: "it_IT")
+private func fmt(_ pattern: String) -> DateFormatter { let f = DateFormatter(); f.locale = itLoc; f.dateFormat = pattern; return f }
+private let wdFmt = fmt("EEE"), dNumFmt = fmt("d"), moFmt = fmt("MMM"), fullFmt = fmt("EEEE d MMMM")
+
 // notti tra due date ISO
 private let ymdBk: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f }()
 func nights(_ ci: String?, _ co: String?) -> Int? {
@@ -108,18 +142,47 @@ struct CamerePSEDashboard: View {
     @State private var items: [Prenotazione] = []
     @State private var loading = true
     @State private var strutturaFilter: Struttura? = nil
-    @State private var statusFilter: BookingStatus? = nil
+    @State private var selectedDay = Calendar.current.startOfDay(for: Date())
     @State private var selected: Prenotazione? = nil
     @State private var editing: Prenotazione? = nil
     @State private var showForm = false
 
-    private var filtered: [Prenotazione] {
-        items.filter {
-            (strutturaFilter == nil || $0.struttura == strutturaFilter!.rawValue) &&
-            (statusFilter == nil || $0.status == statusFilter!.rawValue)
-        }
-    }
     private var attive: [Prenotazione] { items.filter { BookingStatus.from($0.status).active } }
+
+    // ── date helper ──
+    private func day(_ s: String?) -> Date? {
+        s.flatMap { ymdBk.date(from: String($0.prefix(10))) }.map { Calendar.current.startOfDay(for: $0) }
+    }
+    private var dayRange: [Date] {
+        let cal = Calendar.current
+        let start = cal.date(byAdding: .day, value: -3, to: cal.startOfDay(for: Date()))!
+        return (0..<52).compactMap { cal.date(byAdding: .day, value: $0, to: start) }
+    }
+    private func matchesStruttura(_ b: Prenotazione) -> Bool {
+        strutturaFilter == nil || b.struttura == strutturaFilter!.rawValue
+    }
+    // camere occupate quella notte (checkin <= d < checkout)
+    private func occupancy(_ d: Date) -> Int {
+        items.filter { b in
+            guard b.status != "cancellata", matchesStruttura(b), let ci = day(b.checkin), let co = day(b.checkout) else { return false }
+            return ci <= d && d < co
+        }.count
+    }
+    private var capacity: Int {
+        switch strutturaFilter { case .esVedra: return 4; case .viaRomagna: return 6; case nil: return 10 }
+    }
+    // prenotazioni rilevanti per il giorno (arrivo, in casa, partenza)
+    private func bookingsOn(_ d: Date) -> [Prenotazione] {
+        items.filter { b in
+            guard b.status != "cancellata", matchesStruttura(b), let ci = day(b.checkin), let co = day(b.checkout) else { return false }
+            return ci <= d && d <= co
+        }.sorted { ($0.checkin ?? "") < ($1.checkin ?? "") }
+    }
+    private func role(_ b: Prenotazione, _ d: Date) -> (String, Double) {
+        if day(b.checkin) == d { return ("Arrivo", 150) }
+        if day(b.checkout) == d { return ("Partenza", 30) }
+        return ("In casa", 210)
+    }
     private func isToday(_ s: String?) -> Bool { s.map { String($0.prefix(10)) } == ymdBk.string(from: Date()) }
     private var incassato: Int { items.filter { $0.status != "cancellata" }.map { $0.paid_cents }.reduce(0, +) }
     private var daIncassare: Int { attive.map { max(0, $0.amount_cents - $0.paid_cents) }.reduce(0, +) }
@@ -129,21 +192,14 @@ struct CamerePSEDashboard: View {
             VStack(alignment: .leading, spacing: 16) {
                 header
                 kpiBar
-                filters
+                strutturaChips
                 if loading {
                     HStack { Spacer(); ProgressView().controlSize(.large); Spacer() }.padding(.top, 40)
-                } else if filtered.isEmpty {
-                    EmptyStateCard(icon: "calendar", text: "Nessuna prenotazione.\nAggiungine una con “+ Nuova prenotazione”.")
                 } else {
-                    GlassCard {
-                        VStack(spacing: 0) {
-                            ForEach(Array(filtered.enumerated()), id: \.element.id) { i, b in
-                                bookingRow(b)
-                                if i < filtered.count - 1 { Divider().overlay(Color.white.opacity(0.06)).padding(.leading, 16) }
-                            }
-                        }.padding(.vertical, 4)
-                    }
+                    calendarStrip
+                    daySection
                 }
+                Spacer(minLength: 0)
             }
             .blur(radius: selected != nil ? 2 : 0).disabled(selected != nil)
 
@@ -171,9 +227,8 @@ struct CamerePSEDashboard: View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text("PRENOTAZIONI").font(.system(size: 19, weight: .heavy)).tracking(5)
-                    .foregroundStyle(Holo.titleText)
-                    .shadow(color: Color(red: 110/255, green: 180/255, blue: 1).opacity(0.7), radius: 9)
-                Text("Camere PSE · Porto Sant'Elpidio").font(.system(size: 11)).foregroundStyle(Holo.subDim)
+                    .foregroundStyle(PSE.ink)
+                Text("Camere PSE · Porto Sant'Elpidio").font(.system(size: 11)).foregroundStyle(PSE.dim)
             }
             Spacer()
             Button { editing = nil; showForm = true } label: {
@@ -181,93 +236,157 @@ struct CamerePSEDashboard: View {
                     Image(systemName: "plus").font(.system(size: 11, weight: .bold))
                     Text("Nuova prenotazione").font(.system(size: 12.5, weight: .semibold))
                 }
-                .foregroundStyle(Color(hex: 0x0b1220)).padding(.horizontal, 14).padding(.vertical, 8)
-                .background(Capsule().fill(Holo.hsl(210, 90, 66)))
+                .foregroundStyle(PSE.ink).padding(.horizontal, 14).padding(.vertical, 8)
+                .background(Capsule().fill(PSE.accent.opacity(0.9)))
             }.buttonStyle(.plain)
         }
     }
 
     private var kpiBar: some View {
         HStack(spacing: 12) {
-            kpi("IN CASA", "\(items.filter { $0.status == "in_casa" }.count)", 150)
-            kpi("CHECK-IN OGGI", "\(attive.filter { isToday($0.checkin) }.count)", 45)
-            kpi("ATTIVE", "\(attive.count)", 210)
-            kpi("INCASSATO", eur(incassato), 150)
-            kpi("DA INCASSARE", eur(daIncassare), 30)
+            kpi("IN CASA", "\(items.filter { $0.status == "in_casa" }.count)")
+            kpi("CHECK-IN OGGI", "\(attive.filter { isToday($0.checkin) }.count)")
+            kpi("ATTIVE", "\(attive.count)")
+            kpi("INCASSATO", eur(incassato))
+            kpi("DA INCASSARE", eur(daIncassare))
         }
     }
-    private func kpi(_ label: String, _ value: String, _ hue: Double) -> some View {
+    private func kpi(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(label).font(.system(size: 9, weight: .heavy)).tracking(1).foregroundStyle(Holo.hsl(hue, 70, 68))
-            Text(value).font(.system(size: 21, weight: .bold)).foregroundStyle(Holo.titleText).monospacedDigit()
+            Text(label).font(.system(size: 9, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint)
+            Text(value).font(.system(size: 21, weight: .bold)).foregroundStyle(PSE.ink).monospacedDigit()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.03)))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Holo.hsl(hue, 60, 55).opacity(0.28), lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 12).fill(PSE.surface))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(PSE.line, lineWidth: 1))
     }
 
-    private var filters: some View {
+    private var strutturaChips: some View {
         HStack(spacing: 7) {
-            chip(strutturaFilter == nil && statusFilter == nil, "Tutte") { strutturaFilter = nil; statusFilter = nil }
+            chip(strutturaFilter == nil, "Tutte") { strutturaFilter = nil }
             ForEach(Struttura.allCases) { s in
-                chip(strutturaFilter == s, s.label, hue: s.hue) { strutturaFilter = strutturaFilter == s ? nil : s }
-            }
-            Divider().frame(height: 16).overlay(Color.white.opacity(0.15))
-            ForEach(BookingStatus.allCases) { st in
-                chip(statusFilter == st, st.label, hue: st.hue) { statusFilter = statusFilter == st ? nil : st }
+                chip(strutturaFilter == s, s.label) { strutturaFilter = strutturaFilter == s ? nil : s }
             }
             Spacer()
         }
     }
-    private func chip(_ on: Bool, _ label: String, hue: Double = 210, _ act: @escaping () -> Void) -> some View {
+    private func chip(_ on: Bool, _ label: String, _ act: @escaping () -> Void) -> some View {
         Button { withAnimation(.easeOut(duration: 0.15)) { act() } } label: {
             Text(label).font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(on ? Color(hex: 0x0b1220) : Holo.hsl(hue, 60, 72))
-                .padding(.horizontal, 10).padding(.vertical, 5)
-                .background(Capsule().fill(on ? Holo.hsl(hue, 75, 62) : Holo.hsl(hue, 55, 45).opacity(0.14)))
-                .overlay(Capsule().strokeBorder(Holo.hsl(hue, 60, 55).opacity(on ? 0 : 0.4), lineWidth: 1))
+                .foregroundStyle(on ? PSE.ink : PSE.dim)
+                .padding(.horizontal, 11).padding(.vertical, 5)
+                .background(Capsule().fill(on ? PSE.accent.opacity(0.85) : PSE.surface))
+                .overlay(Capsule().strokeBorder(on ? .clear : PSE.line, lineWidth: 1))
         }.buttonStyle(.plain)
     }
 
-    private func bookingRow(_ b: Prenotazione) -> some View {
+    // ── barra calendario scorrevole ──
+    private var calendarStrip: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(dayRange, id: \.self) { d in dayCard(d) }
+                }
+                .padding(.vertical, 2).padding(.horizontal, 1)
+            }
+            .onAppear { proxy.scrollTo(Calendar.current.startOfDay(for: Date()), anchor: .leading) }
+        }
+    }
+    private func dayCard(_ d: Date) -> some View {
+        let occ = occupancy(d)
+        let isSel = Calendar.current.isDate(d, inSameDayAs: selectedDay)
+        let isToday = Calendar.current.isDateInToday(d)
+        let frac = capacity > 0 ? min(1, CGFloat(occ) / CGFloat(capacity)) : 0
+        return Button { withAnimation(.easeOut(duration: 0.15)) { selectedDay = d } } label: {
+            VStack(spacing: 4) {
+                Text(wdFmt.string(from: d).uppercased()).font(.system(size: 8.5, weight: .heavy)).tracking(0.5)
+                    .foregroundStyle(isSel ? PSE.ink : PSE.faint)
+                Text(dNumFmt.string(from: d)).font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(isSel ? PSE.ink : PSE.text).monospacedDigit()
+                Text(moFmt.string(from: d).uppercased()).font(.system(size: 7.5, weight: .semibold)).tracking(0.5)
+                    .foregroundStyle(PSE.faint)
+                GeometryReader { g in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.white.opacity(0.08))
+                        Capsule().fill(PSE.accent.opacity(0.85)).frame(width: g.size.width * frac)
+                    }
+                }.frame(height: 3)
+                Text(occ > 0 ? "\(occ)/\(capacity)" : "libero").font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(occ > 0 ? PSE.dim : PSE.faint.opacity(0.7))
+            }
+            .frame(width: 58)
+            .padding(.vertical, 9).padding(.horizontal, 4)
+            .background(RoundedRectangle(cornerRadius: 10).fill(isSel ? PSE.accent.opacity(0.16) : PSE.surface))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(
+                isSel ? PSE.accent.opacity(0.7) : (isToday ? PSE.accent.opacity(0.45) : PSE.line),
+                lineWidth: (isSel || isToday) ? 1.2 : 1))
+        }
+        .buttonStyle(.plain)
+        .id(d)
+    }
+
+    // ── prenotazioni del giorno selezionato ──
+    private var daySection: some View {
+        let list = bookingsOn(selectedDay)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(fullFmt.string(from: selectedDay).capitalized).font(.system(size: 13.5, weight: .bold)).foregroundStyle(PSE.ink)
+                Text("· \(list.count) prenotazioni").font(.system(size: 11)).foregroundStyle(PSE.faint)
+                Spacer()
+                if Calendar.current.isDateInToday(selectedDay) == false {
+                    Button("Oggi") { withAnimation { selectedDay = Calendar.current.startOfDay(for: Date()) } }
+                        .buttonStyle(.plain).font(.system(size: 11, weight: .semibold)).foregroundStyle(PSE.accent)
+                }
+            }
+            if list.isEmpty {
+                EmptyStateCard(icon: "moon.zzz", text: "Nessuna prenotazione per questo giorno.")
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(list.enumerated()), id: \.element.id) { i, b in
+                        dayRow(b, selectedDay)
+                        if i < list.count - 1 { Divider().overlay(PSE.line).padding(.leading, 16) }
+                    }
+                }
+                .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
+                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+            }
+        }
+    }
+    private func dayRow(_ b: Prenotazione, _ d: Date) -> some View {
         let st = BookingStatus.from(b.status)
         let str = Struttura.from(b.struttura)
         let pay = payState(amount: b.amount_cents, paid: b.paid_cents)
+        let (roleLabel, _) = role(b, d)
         return Button { withAnimation(.easeInOut(duration: 0.2)) { selected = b } } label: {
             HStack(spacing: 14) {
-                // struttura + guest
+                // ruolo del giorno (arrivo/in casa/partenza)
+                Text(roleLabel.uppercased()).font(.system(size: 8, weight: .heavy)).tracking(0.5)
+                    .foregroundStyle(PSE.dim).frame(width: 62, alignment: .leading)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(b.guest_name).font(.system(size: 13.5, weight: .semibold)).foregroundStyle(Holo.titleText).lineLimit(1)
+                    Text(b.guest_name).font(.system(size: 13, weight: .semibold)).foregroundStyle(PSE.ink).lineLimit(1)
                     Text([str.label, b.camera].compactMap { $0 }.joined(separator: " · "))
-                        .font(.system(size: 10.5)).foregroundStyle(Holo.labelDim).lineLimit(1)
+                        .font(.system(size: 10.5)).foregroundStyle(PSE.dim).lineLimit(1)
                 }
-                .frame(width: 220, alignment: .leading)
-                // date
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(prettyDate(b.checkin)) → \(prettyDate(b.checkout))").font(.system(size: 11)).foregroundStyle(Holo.subDim)
-                    if let n = nights(b.checkin, b.checkout) { Text("\(n) notti\(b.guests.map { " · \($0) osp." } ?? "")").font(.system(size: 9.5)).foregroundStyle(Csb.secFg) }
-                }
-                .frame(width: 190, alignment: .leading)
-                Spacer(minLength: 8)
-                // importo + pagamento
-                VStack(alignment: .trailing, spacing: 3) {
-                    Text(eur(b.amount_cents)).font(.system(size: 13.5, weight: .bold)).foregroundStyle(Holo.text).monospacedDigit()
-                    badge(pay.label, pay.hue)
-                }
-                // stato
-                badge(st.label, st.hue).frame(width: 92, alignment: .trailing)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Text("\(prettyDate(b.checkin)) → \(prettyDate(b.checkout))")
+                    .font(.system(size: 10.5)).foregroundStyle(PSE.faint).frame(width: 170, alignment: .leading)
+                Text(eur(b.amount_cents)).font(.system(size: 13, weight: .bold)).foregroundStyle(PSE.text)
+                    .monospacedDigit().frame(width: 70, alignment: .trailing)
+                dot(pay.label, PSE.payment(pay))
+                dot(st.label, PSE.status(st)).frame(width: 96, alignment: .leading)
             }
             .padding(.horizontal, 16).padding(.vertical, 11)
             .contentShape(Rectangle())
         }.buttonStyle(.plain)
     }
-    private func badge(_ t: String, _ hue: Double) -> some View {
-        Text(t.uppercased()).font(.system(size: 8.5, weight: .heavy)).tracking(0.5)
-            .foregroundStyle(Holo.hsl(hue, 85, 76))
-            .padding(.horizontal, 8).padding(.vertical, 2.5)
-            .background(Capsule().fill(Holo.hsl(hue, 70, 45).opacity(0.18)))
-            .overlay(Capsule().strokeBorder(Holo.hsl(hue, 70, 55).opacity(0.35), lineWidth: 1))
+    // badge sobrio: pallino tinta desaturata + testo neutro
+    private func dot(_ t: String, _ c: Color) -> some View {
+        HStack(spacing: 6) {
+            Circle().fill(c).frame(width: 6, height: 6)
+            Text(t).font(.system(size: 10.5, weight: .medium)).foregroundStyle(PSE.text).lineLimit(1)
+        }
     }
 
     // azioni
@@ -309,12 +428,12 @@ private struct BookingDrawer: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(booking.guest_name).font(.system(size: 18, weight: .bold)).foregroundStyle(Holo.titleText)
-                    Text("\(str.label) · \(str.address)").font(.system(size: 11)).foregroundStyle(Holo.subDim)
+                    Text(booking.guest_name).font(.system(size: 18, weight: .bold)).foregroundStyle(PSE.ink)
+                    Text("\(str.label) · \(str.address)").font(.system(size: 11)).foregroundStyle(PSE.dim)
                 }
                 Spacer()
                 Button(action: onClose) {
-                    Image(systemName: "xmark").font(.system(size: 13, weight: .semibold)).foregroundStyle(Csb.secFg)
+                    Image(systemName: "xmark").font(.system(size: 13, weight: .semibold)).foregroundStyle(PSE.faint)
                         .frame(width: 28, height: 28).background(Circle().fill(Color.white.opacity(0.05)))
                 }.buttonStyle(.plain)
             }
@@ -327,11 +446,13 @@ private struct BookingDrawer: View {
                             ForEach(BookingStatus.allCases) { s in
                                 let on = s == st
                                 Button { onStatus(s) } label: {
-                                    Text(s.label).font(.system(size: 10.5, weight: .semibold))
-                                        .foregroundStyle(on ? Color(hex: 0x0b1220) : s.hue == 0 ? Holo.text : Holo.hsl(s.hue, 80, 72))
-                                        .frame(maxWidth: .infinity).padding(.vertical, 6)
-                                        .background(RoundedRectangle(cornerRadius: 7).fill(on ? Holo.hsl(s.hue, 75, 60) : Holo.hsl(s.hue, 60, 45).opacity(0.14)))
-                                        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Holo.hsl(s.hue, 60, 55).opacity(on ? 0 : 0.35), lineWidth: 1))
+                                    HStack(spacing: 5) {
+                                        Circle().fill(PSE.status(s)).frame(width: 6, height: 6)
+                                        Text(s.label).font(.system(size: 10.5, weight: .medium)).foregroundStyle(on ? PSE.ink : PSE.dim)
+                                    }
+                                    .frame(maxWidth: .infinity).padding(.vertical, 6)
+                                    .background(RoundedRectangle(cornerRadius: 7).fill(on ? PSE.accent.opacity(0.18) : PSE.surface))
+                                    .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(on ? PSE.accent.opacity(0.6) : PSE.line, lineWidth: 1))
                                 }.buttonStyle(.plain)
                             }
                         }
@@ -353,30 +474,30 @@ private struct BookingDrawer: View {
                     section("PAGAMENTO") {
                         VStack(alignment: .leading, spacing: 10) {
                             HStack {
-                                Text("Totale").font(.system(size: 12)).foregroundStyle(Holo.subDim)
+                                Text("Totale").font(.system(size: 12)).foregroundStyle(PSE.dim)
                                 Spacer()
-                                Text(eur(booking.amount_cents)).font(.system(size: 14, weight: .bold)).foregroundStyle(Holo.text)
+                                Text(eur(booking.amount_cents)).font(.system(size: 14, weight: .bold)).foregroundStyle(PSE.ink)
                             }
                             HStack {
-                                Text("Incassato").font(.system(size: 12)).foregroundStyle(Holo.subDim)
+                                Text("Incassato").font(.system(size: 12)).foregroundStyle(PSE.dim)
                                 Spacer()
-                                Text(eur(booking.paid_cents)).font(.system(size: 14, weight: .bold)).foregroundStyle(Holo.hsl(150, 70, 68))
+                                Text(eur(booking.paid_cents)).font(.system(size: 14, weight: .bold)).foregroundStyle(PSE.text)
                             }
                             HStack {
-                                Text("Saldo").font(.system(size: 12)).foregroundStyle(Holo.subDim)
+                                Text("Saldo").font(.system(size: 12)).foregroundStyle(PSE.dim)
                                 Spacer()
                                 Text(eur(max(0, booking.amount_cents - booking.paid_cents)))
-                                    .font(.system(size: 14, weight: .bold)).foregroundStyle(Holo.hsl(30, 80, 70))
+                                    .font(.system(size: 14, weight: .bold)).foregroundStyle(PSE.payment(pay))
                             }
                             HStack(spacing: 8) {
                                 Button("Segna acconto 30%") { onPay(Int(Double(booking.amount_cents) * 0.3)) }
                                     .buttonStyle(.plain).font(.system(size: 11, weight: .semibold))
-                                    .foregroundStyle(Holo.hsl(45, 80, 74)).padding(.horizontal, 10).padding(.vertical, 6)
-                                    .background(Capsule().fill(Holo.hsl(45, 60, 45).opacity(0.16)))
+                                    .foregroundStyle(PSE.text).padding(.horizontal, 10).padding(.vertical, 6)
+                                    .background(Capsule().fill(PSE.surface)).overlay(Capsule().strokeBorder(PSE.line, lineWidth: 1))
                                 Button("Segna saldato") { onPay(booking.amount_cents) }
                                     .buttonStyle(.plain).font(.system(size: 11, weight: .semibold))
-                                    .foregroundStyle(Holo.hsl(150, 80, 74)).padding(.horizontal, 10).padding(.vertical, 6)
-                                    .background(Capsule().fill(Holo.hsl(150, 60, 45).opacity(0.16)))
+                                    .foregroundStyle(PSE.ink).padding(.horizontal, 10).padding(.vertical, 6)
+                                    .background(Capsule().fill(PSE.accent.opacity(0.85)))
                             }
                         }
                     }
@@ -390,15 +511,15 @@ private struct BookingDrawer: View {
             HStack(spacing: 10) {
                 Button(action: onEdit) {
                     Label("Modifica", systemImage: "pencil").font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(Holo.titleText).frame(maxWidth: .infinity).padding(.vertical, 9)
-                        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.06)))
-                        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+                        .foregroundStyle(PSE.ink).frame(maxWidth: .infinity).padding(.vertical, 9)
+                        .background(RoundedRectangle(cornerRadius: 9).fill(PSE.surface))
+                        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(PSE.line, lineWidth: 1))
                 }.buttonStyle(.plain)
                 Button(action: onDelete) {
-                    Image(systemName: "trash").font(.system(size: 13)).foregroundStyle(Holo.hsl(5, 75, 65))
+                    Image(systemName: "trash").font(.system(size: 13)).foregroundStyle(PSE.status(.cancellata))
                         .frame(width: 42, height: 36)
-                        .background(RoundedRectangle(cornerRadius: 9).fill(Holo.hsl(5, 70, 50).opacity(0.12)))
-                        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Holo.hsl(5, 70, 55).opacity(0.4), lineWidth: 1))
+                        .background(RoundedRectangle(cornerRadius: 9).fill(PSE.surface))
+                        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(PSE.line, lineWidth: 1))
                 }.buttonStyle(.plain)
             }
             .padding(EdgeInsets(top: 12, leading: 22, bottom: 18, trailing: 22))
@@ -410,14 +531,14 @@ private struct BookingDrawer: View {
     }
     private func section<C: View>(_ title: String, @ViewBuilder _ content: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text(title).font(.system(size: 9.5, weight: .heavy)).tracking(1.5).foregroundStyle(Holo.hsl(210, 60, 66))
+            Text(title).font(.system(size: 9.5, weight: .heavy)).tracking(1.5).foregroundStyle(PSE.faint)
             content()
         }
     }
     private func info(_ icon: String, _ text: String) -> some View {
         HStack(spacing: 9) {
-            Image(systemName: icon).font(.system(size: 11)).foregroundStyle(Csb.secFg).frame(width: 16)
-            Text(text).font(.system(size: 12.5)).foregroundStyle(Holo.text).textSelection(.enabled)
+            Image(systemName: icon).font(.system(size: 11)).foregroundStyle(PSE.faint).frame(width: 16)
+            Text(text).font(.system(size: 12.5)).foregroundStyle(PSE.text).textSelection(.enabled)
         }
     }
 }
