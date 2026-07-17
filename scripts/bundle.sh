@@ -1,9 +1,9 @@
 #!/bin/bash
-# Crea "Unvrs Brain.app" dalla build release e la installa in /Applications.
+# Crea "GZ Brain.app" dalla build release e la installa in /Applications.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-APP_NAME="Unvrs Brain"
+APP_NAME="GZ Brain"
 BUNDLE="build/$APP_NAME.app"
 ICON_SRC="${ICON_SRC:-$(pwd)/AppIconSource.png}"
 

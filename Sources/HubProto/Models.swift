@@ -130,7 +130,7 @@ func isoNowString(addingDays days: Int = 0) -> String {
 /// Cartella temp dedicata all'app (0700, svuotata all'uscita): i PDF di fatture
 /// ed estratti non restano nella temp condivisa con nomi prevedibili.
 func appTempDir() -> URL {
-    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("unvrs-brain", isDirectory: true)
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("gz-brain", isDirectory: true)
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
                                              attributes: [.posixPermissions: 0o700])
     return dir

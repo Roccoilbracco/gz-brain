@@ -10,7 +10,7 @@ final class QuickDashController {
         guard statusItem == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.title = "🧠"
-        item.button?.toolTip = "Mostra/nascondi Unvrs Brain"
+        item.button?.toolTip = "Mostra/nascondi GZ Brain"
         item.button?.target = self
         item.button?.action = #selector(toggle)
         statusItem = item

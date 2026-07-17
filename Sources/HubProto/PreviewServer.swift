@@ -84,7 +84,7 @@ enum PreviewServer {
             if FileManager.default.fileExists(atPath: bundled) { return bundled }
         }
         // fallback: sorgente nel repo
-        return NSHomeDirectory() + "/Developer/unvrs-brain/scripts/preview-proxy.mjs"
+        return NSHomeDirectory() + "/Developer/gz-brain/scripts/preview-proxy.mjs"
     }
 
     // ── cleanup: i processi spawnati in questa sessione vengono chiusi all'uscita dell'app ──
