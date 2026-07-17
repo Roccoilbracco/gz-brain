@@ -18,6 +18,7 @@ struct Solicitud: Identifiable, Decodable, Equatable {
     var estado: String
     var origen: String?
     var sitio: String?
+    var notas: String?
     let created_at: String?
 
     var nombreCompleto: String {
@@ -67,6 +68,9 @@ extension HubAPI {
     static func setSolicitudEstado(id: String, estado: String) async throws {
         try await sb.mutate("solicitudes_web?id=eq.\(id)", method: "PATCH", body: ["estado": estado])
     }
+    static func setSolicitudNotas(id: String, notas: String?) async throws {
+        try await sb.mutate("solicitudes_web?id=eq.\(id)", method: "PATCH", body: ["notas": notas])
+    }
     static func deleteSolicitud(id: String) async throws {
         try await sb.mutate("solicitudes_web?id=eq.\(id)", method: "DELETE")
     }
@@ -90,6 +94,11 @@ final class WallisModel: ObservableObject {
         items[i].estado = e.rawValue
         try? await HubAPI.setSolicitudEstado(id: id, estado: e.rawValue)
     }
+    func setNotas(_ id: String, _ notas: String) async {
+        let v = notas.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let i = items.firstIndex(where: { $0.id == id }) { items[i].notas = v.isEmpty ? nil : v }
+        try? await HubAPI.setSolicitudNotas(id: id, notas: v.isEmpty ? nil : v)
+    }
     func remove(_ s: Solicitud) async {
         items.removeAll { $0.id == s.id }
         try? await HubAPI.deleteSolicitud(id: s.id)
@@ -100,6 +109,7 @@ final class WallisModel: ObservableObject {
 struct WallisDashboard: View {
     @StateObject private var model = WallisModel()
     @State private var search = ""
+    @State private var selected: Solicitud?
 
     private var filtered: [Solicitud] {
         guard !search.isEmpty else { return model.items }
@@ -115,16 +125,40 @@ struct WallisDashboard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            header
-            statRow
-            searchRow
-            if model.loading {
-                HStack { Spacer(); ProgressView().controlSize(.large); Spacer() }.padding(.top, 40)
-            } else if let err = model.error {
-                GlassCard { Text("Errore: \(err)").foregroundStyle(Color(hex: 0xffb3ad)).padding(20) }
-            } else {
-                board
+        ZStack(alignment: .trailing) {
+            VStack(alignment: .leading, spacing: 16) {
+                header
+                statRow
+                searchRow
+                if model.loading {
+                    HStack { Spacer(); ProgressView().controlSize(.large); Spacer() }.padding(.top, 40)
+                } else if let err = model.error {
+                    GlassCard { Text("Errore: \(err)").foregroundStyle(Color(hex: 0xffb3ad)).padding(20) }
+                } else {
+                    board
+                }
+            }
+            .blur(radius: selected != nil ? 2 : 0)
+            .disabled(selected != nil)
+
+            if let sel = selected {
+                Color.black.opacity(0.35).ignoresSafeArea()
+                    .onTapGesture { withAnimation(.easeInOut(duration: 0.2)) { selected = nil } }
+                SolDrawerView(
+                    s: sel,
+                    onStage: { e in
+                        Task { await model.setEstadoById(sel.id, e) }
+                        if var s = selected { s.estado = e.rawValue; selected = s }
+                    },
+                    onNotas: { txt in Task { await model.setNotas(sel.id, txt) } },
+                    onDelete: {
+                        Task { await model.remove(sel) }
+                        withAnimation(.easeInOut(duration: 0.2)) { selected = nil }
+                    },
+                    onClose: { withAnimation(.easeInOut(duration: 0.2)) { selected = nil } }
+                )
+                .frame(width: 430)
+                .transition(.move(edge: .trailing))
             }
         }
         .task { await model.load() }
@@ -197,7 +231,7 @@ struct WallisDashboard: View {
                         stage: stage,
                         items: inStage(stage),
                         onDrop: { id in Task { await model.setEstadoById(id, stage) } },
-                        onDelete: { s in Task { await model.remove(s) } }
+                        onSelect: { s in withAnimation(.easeInOut(duration: 0.2)) { selected = s } }
                     )
                 }
             }
@@ -211,7 +245,7 @@ private struct SolStageColumn: View {
     let stage: SolEstado
     let items: [Solicitud]
     let onDrop: (String) -> Void
-    let onDelete: (Solicitud) -> Void
+    let onSelect: (Solicitud) -> Void
     @State private var targeted = false
 
     var body: some View {
@@ -232,7 +266,8 @@ private struct SolStageColumn: View {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 8) {
                     ForEach(items) { s in
-                        SolCard(s: s, onDelete: { onDelete(s) })
+                        SolCard(s: s)
+                            .onTapGesture { onSelect(s) }
                             .draggable(s.id)
                     }
                     if items.isEmpty {
@@ -258,7 +293,6 @@ private struct SolStageColumn: View {
 // ── Card richiesta ─────────────────────────────────────────────────────────────
 private struct SolCard: View {
     let s: Solicitud
-    let onDelete: () -> Void
     @State private var hover = false
 
     var body: some View {
@@ -290,10 +324,8 @@ private struct SolCard: View {
             HStack {
                 Text(fmtDate(s.created_at)).font(.system(size: 9)).foregroundStyle(Holo.labelDim.opacity(0.8))
                 Spacer()
-                if hover {
-                    Button { onDelete() } label: {
-                        Image(systemName: "trash").font(.system(size: 9)).foregroundStyle(Holo.hsl(5, 70, 62))
-                    }.buttonStyle(.plain)
+                if let n = s.notas, !n.isEmpty {
+                    Image(systemName: "note.text").font(.system(size: 9)).foregroundStyle(Holo.hsl(45, 70, 62))
                 }
             }
         }
@@ -309,6 +341,153 @@ private struct SolCard: View {
     private func clean(_ s: String?) -> String? {
         guard let s = s?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else { return nil }
         return s
+    }
+}
+
+// ── Drawer laterale: dettaglio richiesta + note ────────────────────────────────
+private struct SolDrawerView: View {
+    let s: Solicitud
+    let onStage: (SolEstado) -> Void
+    let onNotas: (String) -> Void
+    let onDelete: () -> Void
+    let onClose: () -> Void
+
+    @State private var notas: String = ""
+    @State private var savedFlash = false
+    private var estado: SolEstado { .from(s.estado) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // header
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(s.nombreCompleto.isEmpty ? "—" : s.nombreCompleto)
+                        .font(.system(size: 18, weight: .bold)).foregroundStyle(Holo.titleText)
+                    Text(estado.label.uppercased())
+                        .font(.system(size: 9.5, weight: .heavy)).tracking(1.2)
+                        .foregroundStyle(estado.color)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Capsule().fill(estado.color.opacity(0.16)))
+                        .overlay(Capsule().strokeBorder(estado.color.opacity(0.5), lineWidth: 1))
+                }
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark").font(.system(size: 13, weight: .semibold)).foregroundStyle(Csb.secFg)
+                        .frame(width: 28, height: 28).background(Circle().fill(Color.white.opacity(0.05)))
+                }.buttonStyle(.plain)
+            }
+            .padding(EdgeInsets(top: 46, leading: 22, bottom: 16, trailing: 20))
+
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 18) {
+                    section("PIPELINE") {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 6)], alignment: .leading, spacing: 6) {
+                            ForEach(SolEstado.allCases) { e in
+                                let on = e == estado
+                                Button { onStage(e) } label: {
+                                    Text(e.label).font(.system(size: 10.5, weight: .semibold))
+                                        .foregroundStyle(on ? Color(hex: 0x0b1220) : e.color)
+                                        .frame(maxWidth: .infinity).padding(.vertical, 6)
+                                        .background(RoundedRectangle(cornerRadius: 7).fill(on ? e.color : e.color.opacity(0.12)))
+                                        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(e.color.opacity(on ? 0 : 0.35), lineWidth: 1))
+                                }.buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    section("CONTATTI") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            infoRow("envelope.fill", clean(s.email) ?? "—")
+                            infoRow("phone.fill", clean(s.telefono) ?? "—")
+                            infoRow("calendar", fmtDate(s.created_at))
+                        }
+                    }
+                    if let msg = clean(s.mensaje) {
+                        section("RICHIESTA") {
+                            Text(msg).font(.system(size: 12.5)).lineSpacing(3).foregroundStyle(Holo.text)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    section("NOTE") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ZStack(alignment: .topLeading) {
+                                RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.04))
+                                    .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+                                if notas.isEmpty {
+                                    Text("Aggiungi una nota…").font(.system(size: 12)).foregroundStyle(Csb.secFg)
+                                        .padding(EdgeInsets(top: 10, leading: 12, bottom: 0, trailing: 0)).allowsHitTesting(false)
+                                }
+                                TextEditor(text: $notas)
+                                    .font(.system(size: 12.5)).foregroundStyle(Holo.text)
+                                    .scrollContentBackground(.hidden).background(Color.clear)
+                                    .padding(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
+                                    .frame(minHeight: 110)
+                            }
+                            HStack {
+                                if savedFlash {
+                                    Label("Salvato", systemImage: "checkmark.circle.fill")
+                                        .font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Holo.hsl(145, 70, 62))
+                                }
+                                Spacer()
+                                Button {
+                                    onNotas(notas)
+                                    savedFlash = true
+                                    Task { try? await Task.sleep(nanoseconds: 1_600_000_000); savedFlash = false }
+                                } label: {
+                                    Text("Salva nota").font(.system(size: 11.5, weight: .semibold))
+                                        .foregroundStyle(Color(hex: 0x0b1220))
+                                        .padding(.horizontal, 14).padding(.vertical, 7)
+                                        .background(Capsule().fill(Holo.hsl(210, 85, 66)))
+                                }.buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 22).padding(.bottom, 20)
+            }
+
+            // azioni
+            HStack(spacing: 10) {
+                if let mail = clean(s.email) {
+                    Link(destination: URL(string: "mailto:\(mail)")!) {
+                        Label("Rispondi", systemImage: "arrowshape.turn.up.left.fill")
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(Holo.titleText).frame(maxWidth: .infinity).padding(.vertical, 9)
+                            .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.06)))
+                            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+                    }.buttonStyle(.plain)
+                }
+                Button(action: onDelete) {
+                    Image(systemName: "trash").font(.system(size: 13)).foregroundStyle(Holo.hsl(5, 75, 65))
+                        .frame(width: 42, height: 36)
+                        .background(RoundedRectangle(cornerRadius: 9).fill(Holo.hsl(5, 70, 50).opacity(0.12)))
+                        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Holo.hsl(5, 70, 55).opacity(0.4), lineWidth: 1))
+                }.buttonStyle(.plain)
+            }
+            .padding(EdgeInsets(top: 12, leading: 22, bottom: 18, trailing: 22))
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(Color(hex: 0x0c1120))
+        .overlay(Rectangle().frame(width: 1).foregroundStyle(Holo.cardBorder), alignment: .leading)
+        .ignoresSafeArea()
+        .onAppear { notas = s.notas ?? "" }
+    }
+
+    private func section<C: View>(_ title: String, @ViewBuilder _ content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(title).font(.system(size: 9.5, weight: .heavy)).tracking(1.5).foregroundStyle(Holo.hsl(210, 60, 66))
+            content()
+        }
+    }
+    private func infoRow(_ icon: String, _ text: String) -> some View {
+        HStack(spacing: 9) {
+            Image(systemName: icon).font(.system(size: 11)).foregroundStyle(Csb.secFg).frame(width: 16)
+            Text(text).font(.system(size: 12.5)).foregroundStyle(Holo.text).textSelection(.enabled)
+        }
+    }
+    private func clean(_ v: String?) -> String? {
+        guard let v = v?.trimmingCharacters(in: .whitespacesAndNewlines), !v.isEmpty else { return nil }
+        return v
     }
 }
 
