@@ -848,15 +848,18 @@ private struct LeadFormView: View {
             Menu {
                 ForEach(opts, id: \.0) { o in Button(o.1) { set(o.0) } }
             } label: {
-                HStack {
-                    Text(opts.first { $0.0 == sel }?.1 ?? "—").font(.system(size: 12.5)).foregroundStyle(Holo.text)
-                    Spacer(); Image(systemName: "chevron.down").font(.system(size: 9)).foregroundStyle(Csb.secFg)
+                HStack(spacing: 8) {
+                    Text(opts.first { $0.0 == sel }?.1 ?? "—").font(.system(size: 12.5)).foregroundStyle(Holo.text).lineLimit(1)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(Csb.secFg)
                 }
                 .padding(.horizontal, 10).padding(.vertical, 8)
+                .frame(maxWidth: .infinity)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.05)))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+                .contentShape(Rectangle())
             }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden)
+            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
         }
         .frame(maxWidth: .infinity)
     }

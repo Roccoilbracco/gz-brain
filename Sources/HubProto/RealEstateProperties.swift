@@ -797,7 +797,7 @@ struct PropertyMap: NSViewRepresentable {
     }
 }
 
-// picker in stile HoloField (menu a tendina scuro)
+// picker in stile HoloField (menu a tendina scuro, box a larghezza piena)
 private func holoPicker(_ label: String, _ opts: [(String, String)], _ sel: String, _ set: @escaping (String) -> Void) -> some View {
     VStack(alignment: .leading, spacing: 5) {
         Text(label.uppercased()).font(.system(size: 9.5, weight: .heavy)).tracking(1.5)
@@ -805,15 +805,19 @@ private func holoPicker(_ label: String, _ opts: [(String, String)], _ sel: Stri
         Menu {
             ForEach(opts, id: \.0) { o in Button(o.1) { set(o.0) } }
         } label: {
-            HStack {
-                Text(opts.first { $0.0 == sel }?.1 ?? "—").font(.system(size: 13)).foregroundStyle(Color(hex: 0xe8f2ff))
-                Spacer(); Image(systemName: "chevron.down").font(.system(size: 9)).foregroundStyle(Holo.labelDim)
+            HStack(spacing: 8) {
+                Text(opts.first { $0.0 == sel }?.1 ?? "—").font(.system(size: 13))
+                    .foregroundStyle(Color(hex: 0xe8f2ff)).lineLimit(1)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(Holo.labelDim)
             }
             .padding(.horizontal, 12).padding(.vertical, 9)
+            .frame(maxWidth: .infinity)
             .background(RoundedRectangle(cornerRadius: 9).fill(Color(red: 10/255, green: 16/255, blue: 34/255).opacity(0.8)))
             .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color(red: 130/255, green: 180/255, blue: 1).opacity(0.35), lineWidth: 1))
+            .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden)
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
     }
     .frame(maxWidth: .infinity)
 }
