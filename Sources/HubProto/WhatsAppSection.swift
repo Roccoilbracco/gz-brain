@@ -56,7 +56,7 @@ final class WAModel: ObservableObject {
             } else {
                 // Conversazione più vecchia della tabella contatti: la creo ora.
                 try await HubAPI.creaContatto(slug: slug, jid: c.wa_jid,
-                                              nome: c.customer_name, telefono: c.phone, attivo: on)
+                                              nome: c.customer_name, telefono: c.telefono, attivo: on)
             }
             // Allineo anche la conversazione, così la vista resta coerente.
             try? await HubAPI.updateWAConversation(id: c.id, fields: ["agent_enabled": on])
@@ -92,19 +92,25 @@ struct WhatsAppSection: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header
-
+        SectionCard(title: "WhatsApp", count: model.conversations.count, icon: "message") {
+            HStack(spacing: 6) {
+                if !model.conversations.isEmpty {
+                    HoloSearchField(placeholder: "Cerca…", text: $search, width: 130)
+                }
+                GhostButton(label: "Rubrica", icon: "person.2") { mostraRubrica = true }
+                GhostButton(label: "Aggiorna", icon: "arrow.clockwise") { Task { await model.load() } }
+            }
+        } content: {
             if model.loading {
                 HStack { Spacer(); ProgressView().controlSize(.small); Spacer() }.padding(.vertical, 30)
             } else if let e = model.error {
-                GlassCard { Text("Errore: \(e)").font(.system(size: 11.5))
-                    .foregroundStyle(Color(hex: 0xffb3ad)).padding(16) }
+                Text("Errore: \(e)").font(.system(size: 11.5)).foregroundStyle(UI.tint(.stop))
+                    .frame(maxWidth: .infinity, alignment: .leading)
             } else if model.conversations.isEmpty {
                 vuoto
             } else {
                 HStack(alignment: .top, spacing: 12) {
-                    lista.frame(width: 260)
+                    lista.frame(width: 272)
                     thread.frame(maxWidth: .infinity)
                 }
                 .frame(height: 420)
@@ -119,52 +125,15 @@ struct WhatsAppSection: View {
         }
     }
 
-    private var header: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "message.fill").font(.system(size: 12, weight: .bold))
-                .foregroundStyle(Holo.hsl(140, 70, 60))
-            Text("WHATSAPP").font(.system(size: 13, weight: .heavy)).tracking(3)
-                .foregroundStyle(Holo.titleText)
-            Text("\(model.conversations.count)")
-                .font(.system(size: 10, weight: .heavy))
-                .foregroundStyle(Holo.labelDim)
-                .padding(.horizontal, 7).padding(.vertical, 2)
-                .background(Capsule().fill(Color.white.opacity(0.07)))
-            Spacer()
-            if !model.conversations.isEmpty {
-                HoloSearchField(placeholder: "Cerca…", text: $search, width: 130)
-            }
-
-            // Rubrica del numero di QUESTO progetto: si apre di fianco alle
-            // conversazioni a cui si riferisce, così non c'è modo di cambiare
-            // per sbaglio i contatti dell'altro numero.
-            Button { mostraRubrica = true } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "person.2.fill").font(.system(size: 10, weight: .bold))
-                    Text("Rubrica").font(.system(size: 11, weight: .semibold))
-                }
-                .foregroundStyle(Holo.hsl(210, 90, 74))
-                .padding(.horizontal, 10).padding(.vertical, 5)
-                .overlay(Capsule().strokeBorder(Holo.hsl(210, 90, 65).opacity(0.4), lineWidth: 1))
-            }
-            .buttonStyle(.plain)
-            .help("Scegli a quali contatti risponde l'agente e a quali rispondi tu")
-
-            IconButton(icon: "arrow.clockwise", help: "Ricarica conversazioni") { Task { await model.load() } }
-        }
-    }
-
     private var vuoto: some View {
-        GlassCard {
-            VStack(spacing: 6) {
-                Image(systemName: "message").font(.system(size: 22)).foregroundStyle(Holo.labelDim.opacity(0.5))
-                Text("Nessuna conversazione").font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Holo.subDim)
-                Text("Compariranno qui appena qualcuno scriverà al numero collegato.")
-                    .font(.system(size: 10.5)).foregroundStyle(Holo.labelDim)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 26)
+        VStack(spacing: 5) {
+            Image(systemName: "message").font(.system(size: 20)).foregroundStyle(UI.faint)
+            Text("Nessuna conversazione").font(.system(size: 12, weight: .medium)).foregroundStyle(UI.text)
+            Text("Compariranno qui appena qualcuno scriverà al numero collegato.")
+                .font(.system(size: 10.5)).foregroundStyle(UI.faint)
         }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 30)
     }
 
     private var lista: some View {
@@ -178,64 +147,61 @@ struct WhatsAppSection: View {
         }
     }
 
+    /// Riga conversazione: avatar, nome, stato, anteprima. Chi risponde è
+    /// un'etichetta piccola con un comando esplicito, non più un blocco colorato
+    /// che pesava quanto il nome della persona.
     private func rigaConv(_ c: WAConversation) -> some View {
         let st = WAStatus.from(c.status)
         let on = model.selected?.id == c.id
         let agente = model.agenteAttivo(c)
-        return VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 6) {
-                Text(c.titolo).font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Holo.titleText).lineLimit(1)
-                Spacer(minLength: 4)
-                Text(st.label).font(.system(size: 8, weight: .heavy)).tracking(0.5)
-                    .foregroundStyle(Holo.hsl(st.hue, 80, 68))
-                    .padding(.horizontal, 5).padding(.vertical, 2)
-                    .background(Capsule().fill(Holo.hsl(st.hue, 80, 60).opacity(0.15)))
-            }
+        return HStack(alignment: .top, spacing: 9) {
+            Avatar(nome: c.titolo)
 
-            // Chi risponde a questa persona: la scelta più importante della riga,
-            // quindi è un comando vero e non un'icona da interpretare.
-            Button {
-                Task { await model.setAgente(!agente, per: c) }
-            } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(c.titolo).font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(UI.ink).lineLimit(1)
+                    Spacer(minLength: 4)
+                    if st != .attiva {
+                        StatusPill(label: st.label, tint: UI.tint(st == .escalata ? .attesa : .ok))
+                    }
+                }
+
+                if let s = c.summary, !s.isEmpty {
+                    Text(s).font(.system(size: 10.5)).foregroundStyle(UI.dim).lineLimit(2)
+                } else if let p = c.telefono {
+                    Text(p).font(.system(size: 10.5)).foregroundStyle(UI.faint).monospacedDigit()
+                }
+
                 HStack(spacing: 5) {
                     Image(systemName: agente ? "sparkles" : "person.fill")
-                        .font(.system(size: 8.5, weight: .bold))
-                    Text(agente ? "Risponde l'agente" : "Rispondi tu")
-                        .font(.system(size: 9.5, weight: .bold))
-                    Spacer(minLength: 0)
-                    Text(agente ? "spegni" : "attiva")
-                        .font(.system(size: 8.5)).foregroundStyle(Holo.labelDim)
+                        .font(.system(size: 8)).foregroundStyle(UI.faint)
+                    Text(agente ? "Agente" : "Rispondi tu")
+                        .font(.system(size: 9.5)).foregroundStyle(UI.faint)
+                    Button { Task { await model.setAgente(!agente, per: c) } } label: {
+                        Text(agente ? "disattiva" : "attiva")
+                            .font(.system(size: 9.5, weight: .medium))
+                            .foregroundStyle(UI.accent)
+                    }
+                    .buttonStyle(.plain)
+                    .help(agente
+                          ? "L'agente risponde da solo a questo contatto. Premi per rispondere tu."
+                          : "A questo contatto rispondi tu. Premi per riattivare l'agente.")
                 }
-                .foregroundStyle(agente ? Holo.hsl(140, 75, 68) : Holo.hsl(35, 88, 70))
-                .padding(.horizontal, 7).padding(.vertical, 4)
-                .background(RoundedRectangle(cornerRadius: 6)
-                    .fill(Holo.hsl(agente ? 140 : 35, 70, 50).opacity(0.14)))
-                .overlay(RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(Holo.hsl(agente ? 140 : 35, 70, 60).opacity(0.3), lineWidth: 1))
-                .contentShape(RoundedRectangle(cornerRadius: 6))
-            }
-            .buttonStyle(.plain)
-            .help(agente
-                  ? "L'agente risponde da solo a questo contatto. Premi per rispondere tu."
-                  : "A questo contatto rispondi tu. Premi per riattivare l'agente.")
-            if let s = c.summary, !s.isEmpty {
-                Text(s).font(.system(size: 10)).foregroundStyle(Holo.subDim).lineLimit(2)
-            } else if let p = c.phone {
-                Text(p).font(.system(size: 10)).foregroundStyle(Holo.labelDim)
+                .padding(.top, 1)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 10))
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(on ? 0.09 : 0.03)))
-        .overlay(RoundedRectangle(cornerRadius: 9)
-            .strokeBorder(on ? Holo.hsl(140, 70, 60).opacity(0.5) : Color.white.opacity(0.06), lineWidth: 1))
-        .contentShape(RoundedRectangle(cornerRadius: 9))
+        .padding(EdgeInsets(top: 9, leading: 10, bottom: 9, trailing: 10))
+        .background(RoundedRectangle(cornerRadius: 8).fill(on ? UI.surfaceHi : UI.surface))
+        .overlay(RoundedRectangle(cornerRadius: 8)
+            .strokeBorder(on ? UI.accent.opacity(0.55) : UI.line, lineWidth: 1))
+        .contentShape(RoundedRectangle(cornerRadius: 8))
     }
 
     @ViewBuilder
     private var thread: some View {
-        GlassCard {
+        VStack(spacing: 0) {
             if let c = model.selected {
                 VStack(spacing: 0) {
                     threadHeader(c)
@@ -258,36 +224,44 @@ struct WhatsAppSection: View {
             } else {
                 VStack(spacing: 6) {
                     Image(systemName: "bubble.left.and.bubble.right")
-                        .font(.system(size: 20)).foregroundStyle(Holo.labelDim.opacity(0.5))
-                    Text("Scegli una conversazione").font(.system(size: 12)).foregroundStyle(Holo.subDim)
+                        .font(.system(size: 20)).foregroundStyle(UI.faint.opacity(0.5))
+                    Text("Scegli una conversazione").font(.system(size: 12)).foregroundStyle(UI.dim)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .background(RoundedRectangle(cornerRadius: 10).fill(UI.surface))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(UI.line, lineWidth: 1))
     }
 
     private func threadHeader(_ c: WAConversation) -> some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
-                Text(c.titolo).font(.system(size: 12.5, weight: .bold)).foregroundStyle(Holo.titleText)
-                Text(c.phone ?? c.wa_jid).font(.system(size: 10)).foregroundStyle(Holo.labelDim)
+                Text(c.titolo).font(.system(size: 12.5, weight: .bold)).foregroundStyle(UI.ink)
+                // Senza numero (chat via LID) non mostriamo l'identificatore:
+                // sarebbero cifre inutili al posto di un dato utile.
+                if let tel = c.telefono {
+                    Text(tel).font(.system(size: 10)).foregroundStyle(UI.faint).monospacedDigit()
+                } else {
+                    Text("numero non condiviso").font(.system(size: 10)).foregroundStyle(UI.faint)
+                }
             }
             Spacer()
             if c.lead_id != nil {
                 Text("SCHEDA CREATA").font(.system(size: 8, weight: .heavy)).tracking(1)
-                    .foregroundStyle(Color(hex: 0x9af0c5))
+                    .foregroundStyle(UI.tint(.ok))
                     .padding(.horizontal, 7).padding(.vertical, 3)
-                    .overlay(Capsule().strokeBorder(Color(hex: 0x34d399).opacity(0.5), lineWidth: 1))
+                    .overlay(Capsule().strokeBorder(UI.tint(.ok).opacity(0.5), lineWidth: 1))
             }
             HStack(spacing: 6) {
                 Text(model.agenteAttivo(c) ? "Agente" : "Manuale")
                     .font(.system(size: 9.5, weight: .bold))
-                    .foregroundStyle(model.agenteAttivo(c) ? Holo.hsl(140, 75, 68) : Holo.hsl(35, 88, 70))
+                    .foregroundStyle(model.agenteAttivo(c) ? UI.tint(.ok) : UI.tint(.attesa))
                 Toggle("", isOn: Binding(
                     get: { model.agenteAttivo(c) },
                     set: { v in Task { await model.setAgente(v, per: c) } }))
                     .labelsHidden().toggleStyle(.switch).controlSize(.mini)
-                    .tint(Holo.hsl(145, 70, 52))
+                    .tint(UI.accent)
             }
             .help(model.agenteAttivo(c)
                   ? "L'agente risponde a questo contatto"
@@ -303,16 +277,16 @@ struct WhatsAppSection: View {
         return HStack {
             if mio { Spacer(minLength: 40) }
             VStack(alignment: mio ? .trailing : .leading, spacing: 3) {
-                Text(m.body).font(.system(size: 11.5)).foregroundStyle(Holo.text)
+                Text(m.body).font(.system(size: 11.5)).foregroundStyle(UI.text)
                     .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(mio ? .trailing : .leading)
                 Text(m.author.capitalized).font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(Holo.hsl(hue, 70, 65).opacity(0.8))
+                    .foregroundStyle(UI.faint)
             }
             .padding(EdgeInsets(top: 7, leading: 10, bottom: 7, trailing: 10))
-            .background(RoundedRectangle(cornerRadius: 10).fill(Holo.hsl(hue, 60, 50).opacity(0.14)))
+            .background(RoundedRectangle(cornerRadius: 9).fill(UI.surface))
             .overlay(RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(Holo.hsl(hue, 70, 60).opacity(0.25), lineWidth: 1))
+                .strokeBorder(UI.line, lineWidth: 1))
             if !mio { Spacer(minLength: 40) }
         }
         .id(m.id)
@@ -321,17 +295,17 @@ struct WhatsAppSection: View {
     private func composer(_ c: WAConversation) -> some View {
         HStack(spacing: 8) {
             TextField("Scrivi tu al cliente…", text: $bozza, axis: .vertical)
-                .textFieldStyle(.plain).font(.system(size: 11.5)).foregroundStyle(Holo.text)
+                .textFieldStyle(.plain).font(.system(size: 11.5)).foregroundStyle(UI.text)
                 .lineLimit(1...4)
                 .padding(.horizontal, 10).padding(.vertical, 7)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Color(hex: 0x0d152c).opacity(0.7)))
+                .background(RoundedRectangle(cornerRadius: 8).fill(UI.surface))
                 .onSubmit { invia() }
 
             Button { invia() } label: {
                 Image(systemName: "paperplane.fill").font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(Color(hex: 0x0b1020))
+                    .foregroundStyle(UI.ink)
                     .padding(.horizontal, 11).padding(.vertical, 7)
-                    .background(Capsule().fill(Holo.hsl(140, 70, 60)))
+                    .background(Capsule().fill(UI.accent))
             }
             .buttonStyle(.plain)
             .disabled(bozza.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -340,7 +314,7 @@ struct WhatsAppSection: View {
         .overlay(alignment: .top) {
             if model.agenteAttivo(c) {
                 Text("Se scrivi, l'agente smette di rispondere a questo contatto")
-                    .font(.system(size: 9)).foregroundStyle(Holo.labelDim.opacity(0.8))
+                    .font(.system(size: 9)).foregroundStyle(UI.faint.opacity(0.8))
                     .offset(y: -1)
             }
         }

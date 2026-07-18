@@ -83,12 +83,6 @@ struct SidebarView: View {
             .background(RoundedRectangle(cornerRadius: 11).fill(Csb.tabsBg))
             .padding(.bottom, 12)
 
-            // voce Leads: pipeline CRM immobiliare (globale, non legata a un progetto)
-            navRow("Leads", icon: "person.crop.rectangle.stack.fill", on: state.route == .leadsHub) {
-                state.route = .leadsHub
-            }
-            .padding(.bottom, 6)
-
             // voce Proprietà: registro immobili (globale) + visibilità sui siti
             navRow("Proprietà", icon: "house", on: isProprieta) {
                 state.route = .proprietaHub

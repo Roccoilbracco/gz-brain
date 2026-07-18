@@ -36,7 +36,16 @@ struct WAConversation: Identifiable, Decodable, Equatable {
     var last_message_at: String?
     var created_at: String?
 
-    var titolo: String { customer_name?.isEmpty == false ? customer_name! : (phone ?? "Sconosciuto") }
+    var titolo: String { customer_name?.isEmpty == false ? customer_name! : (telefono ?? "Sconosciuto") }
+
+    /// Numero chiamabile, se c'è. WhatsApp indirizza molte chat con un LID
+    /// (`2696…@lid`): è un identificatore privato, non un numero, e mostrarlo
+    /// come telefono significa dare cifre che non corrispondono a nessuno.
+    var telefono: String? {
+        guard wa_jid.hasSuffix("@s.whatsapp.net") || phone?.hasPrefix("+") == true,
+              let p = phone, !p.isEmpty else { return nil }
+        return p
+    }
 }
 
 struct WAMessage: Identifiable, Decodable, Equatable {

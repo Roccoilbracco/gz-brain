@@ -40,6 +40,8 @@ struct GZIbizaDashboard: View {
     @State private var fonte: LeadSource?
     @State private var mostraAgente = false
     @State private var selected: RELead?
+    @State private var mostraForm = false
+    @State private var inModifica: RELead?     // nil = nuovo lead
 
     private var filtered: [RELead] {
         model.leads.filter { l in
@@ -57,22 +59,37 @@ struct GZIbizaDashboard: View {
     }
     private var daWhatsApp: Int { model.leads.filter { $0.source == LeadSource.whatsapp.rawValue }.count }
 
+    /// Budget complessivo dei lead ancora aperti: quanto vale la pipeline.
+    private var valorePipeline: Int {
+        model.leads.filter { !LeadStage.from($0.stage).isClosed }
+            .compactMap { $0.budget_max ?? $0.budget_min }.reduce(0, +)
+    }
+    /// Percentuale di vinti sui soli lead chiusi: quelli aperti non si contano,
+    /// altrimenti la conversione crollerebbe a ogni lead nuovo.
+    private var conversione: Int {
+        let chiusi = model.leads.filter { LeadStage.from($0.stage).isClosed }.count
+        guard chiusi > 0 else { return 0 }
+        return Int((Double(count(.vinto)) / Double(chiusi) * 100).rounded())
+    }
+
     var body: some View {
         ZStack(alignment: .trailing) {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 14) {
                 header
                 statRow
-                filtri
 
-                if model.loading {
-                    HStack { Spacer(); ProgressView().controlSize(.large); Spacer() }.padding(.top, 40)
-                } else if let e = model.error {
-                    GlassCard { Text("Errore: \(e)").foregroundStyle(Color(hex: 0xffb3ad)).padding(20) }
-                } else {
-                    board
+                SectionCard(title: "Pipeline lead", count: model.leads.count, icon: "square.stack.3d.up") {
+                    filtri
+                } content: {
+                    if model.loading {
+                        HStack { Spacer(); ProgressView().controlSize(.small); Spacer() }.padding(.vertical, 40)
+                    } else if let e = model.error {
+                        Text("Errore: \(e)").font(.system(size: 12)).foregroundStyle(UI.tint(.stop))
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 12)
+                    } else {
+                        board
+                    }
                 }
-
-                Divider().overlay(Color.white.opacity(0.08)).padding(.vertical, 4)
 
                 WhatsAppSection(slug: "gz-ibiza")
             }
@@ -96,6 +113,11 @@ struct GZIbizaDashboard: View {
                         Task { await model.remove(sel.id) }
                         withAnimation(.easeInOut(duration: 0.2)) { selected = nil }
                     },
+                    onEdit: {
+                        inModifica = sel
+                        withAnimation(.easeInOut(duration: 0.2)) { selected = nil }
+                        mostraForm = true
+                    },
                     onClose: { withAnimation(.easeInOut(duration: 0.2)) { selected = nil } }
                 )
                 .frame(width: 430)
@@ -106,79 +128,52 @@ struct GZIbizaDashboard: View {
         .sheet(isPresented: $mostraAgente) {
             AgenteSheet(slug: "gz-ibiza") { mostraAgente = false }
         }
+        .sheet(isPresented: $mostraForm, onDismiss: { inModifica = nil }) {
+            LeadFormView(existing: inModifica) { await model.load() }
+        }
     }
 
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("GZ IBIZA")
-                    .font(.system(size: 19, weight: .heavy)).tracking(5)
-                    .foregroundStyle(Holo.titleText)
-                    .shadow(color: Color(red: 110/255, green: 180/255, blue: 1).opacity(0.7), radius: 9)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("GZ Ibiza")
+                    .font(.system(size: 20, weight: .semibold)).foregroundStyle(UI.ink)
                 Text("Pipeline lead e conversazioni WhatsApp")
-                    .font(.system(size: 11)).foregroundStyle(Holo.subDim)
+                    .font(.system(size: 11.5)).foregroundStyle(UI.faint)
             }
             Spacer()
-            AgenteButton { mostraAgente = true }
-            Button { Task { await model.load() } } label: {
-                Image(systemName: "arrow.clockwise").font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Holo.labelDim).padding(8)
-                    .background(Circle().fill(Color.white.opacity(0.06)))
-            }.buttonStyle(.plain)
+            GhostButton(label: "Nuovo lead", icon: "plus") { inModifica = nil; mostraForm = true }
+            GhostButton(label: "Agente", icon: "gearshape.2") { mostraAgente = true }
+            GhostButton(label: "Aggiorna", icon: "arrow.clockwise") { Task { await model.load() } }
         }
     }
 
     private var statRow: some View {
-        HStack(spacing: 12) {
-            statCard("NUOVI", count(.nuovo), hue: 220, glow: count(.nuovo) > 0)
-            statCard("IN LAVORAZIONE", inLavorazione, hue: 190, glow: false)
-            statCard("DA WHATSAPP", daWhatsApp, hue: 140, glow: false)
-            statCard("VINTI", count(.vinto), hue: 145, glow: false)
-            statCard("TOTALI", model.leads.count, hue: 270, glow: false)
-        }
-    }
-
-    private func statCard(_ label: String, _ n: Int, hue: Double, glow: Bool) -> some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("\(n)").font(.system(size: 26, weight: .black))
-                    .foregroundStyle(Holo.hsl(hue, 90, 70))
-                    .shadow(color: glow ? Holo.hsl(hue, 90, 60).opacity(0.7) : .clear, radius: 8)
-                Text(label).font(.system(size: 9, weight: .heavy)).tracking(1.5)
-                    .foregroundStyle(Holo.labelDim)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(EdgeInsets(top: 12, leading: 15, bottom: 11, trailing: 15))
+        HStack(spacing: 10) {
+            StatTile(label: "Nuovi", value: count(.nuovo), evidenzia: true)
+            StatTile(label: "In lavorazione", value: inLavorazione)
+            StatTile(label: "Da WhatsApp", value: daWhatsApp)
+            StatTile(label: "Vinti", value: count(.vinto))
+            StatTile(label: "Valore pipeline", testo: valorePipeline > 0 ? LeadFmt.compact(valorePipeline) : "—")
+            StatTile(label: "Conversione", testo: conversione > 0 ? "\(conversione)%" : "—")
         }
     }
 
     private var filtri: some View {
-        HStack(spacing: 8) {
-            chipFonte(nil, "Tutte")
-            ForEach(LeadSource.allCases) { s in chipFonte(s, s.label) }
-            Spacer()
-            HoloSearchField(placeholder: "Cerca lead…", text: $search, width: 170)
-        }
-    }
-
-    private func chipFonte(_ s: LeadSource?, _ label: String) -> some View {
-        let on = fonte == s
-        return Button { fonte = on ? nil : s } label: {
-            HStack(spacing: 4) {
-                if let s { Image(systemName: s.icon).font(.system(size: 9)) }
-                Text(label).font(.system(size: 10.5, weight: .semibold))
+        HStack(spacing: 6) {
+            FilterChip(label: "Tutte", selected: fonte == nil) { fonte = nil }
+            ForEach(LeadSource.attive) { s in
+                FilterChip(label: s.label, icon: s.icon, selected: fonte == s) {
+                    fonte = fonte == s ? nil : s
+                }
             }
-            .foregroundStyle(on ? Color(hex: 0x0b1020) : (s?.color ?? Holo.subDim))
-            .padding(.horizontal, 9).padding(.vertical, 4)
-            .background(Capsule().fill(on ? (s?.color ?? Holo.hsl(210, 80, 65)) : Color.white.opacity(0.04)))
-            .overlay(Capsule().strokeBorder((s?.color ?? Holo.subDim).opacity(on ? 0 : 0.3), lineWidth: 1))
+            HoloSearchField(placeholder: "Cerca lead…", text: $search, width: 150)
         }
-        .buttonStyle(.plain)
     }
 
     private var board: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .top, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
                 ForEach(LeadStage.allCases) { stage in
                     GZStageColumn(
                         stage: stage,
@@ -203,39 +198,36 @@ private struct GZStageColumn: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 7) {
-                Circle().fill(stage.color).frame(width: 8, height: 8)
-                    .shadow(color: stage.color.opacity(0.8), radius: 4)
-                Text(stage.label.uppercased()).font(.system(size: 10.5, weight: .heavy)).tracking(0.8)
-                    .foregroundStyle(Holo.text)
-                Text("\(items.count)").font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(Csb.secFg)
-                    .padding(.horizontal, 6).padding(.vertical, 1)
-                    .background(Capsule().fill(Color.white.opacity(0.06)))
-                Spacer(minLength: 0)
+                Circle().fill(stage.color).frame(width: 6, height: 6)
+                Text(stage.label.uppercased()).font(.system(size: 9.5, weight: .semibold)).tracking(0.9)
+                    .foregroundStyle(UI.dim)
+                Spacer(minLength: 4)
+                Text("\(items.count)").font(.system(size: 10, weight: .semibold)).monospacedDigit()
+                    .foregroundStyle(items.isEmpty ? UI.faint : UI.text)
             }
-            .padding(.horizontal, 4)
+            .padding(.horizontal, 2)
 
             ScrollView(showsIndicators: false) {
-                VStack(spacing: 8) {
+                VStack(spacing: 7) {
                     ForEach(items) { l in
                         GZLeadCard(lead: l)
                             .onTapGesture { onSelect(l) }
                             .draggable(l.id)
                     }
                     if items.isEmpty {
-                        Text("—").font(.system(size: 12)).foregroundStyle(Csb.secFg.opacity(0.5))
-                            .frame(maxWidth: .infinity).padding(.vertical, 18)
+                        Text("Nessun lead").font(.system(size: 10.5)).foregroundStyle(UI.faint)
+                            .frame(maxWidth: .infinity).padding(.vertical, 16)
                     }
                 }
-                .padding(2)
+                .padding(1)
             }
         }
-        .frame(width: 250)
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 13)
-            .fill(targeted ? stage.color.opacity(0.10) : Color.white.opacity(0.022)))
-        .overlay(RoundedRectangle(cornerRadius: 13)
-            .strokeBorder(targeted ? stage.color.opacity(0.6) : Color.white.opacity(0.06), lineWidth: 1))
+        .frame(width: 236)
+        .padding(9)
+        .background(RoundedRectangle(cornerRadius: 10)
+            .fill(targeted ? UI.accent.opacity(0.10) : UI.surface))
+        .overlay(RoundedRectangle(cornerRadius: 10)
+            .strokeBorder(targeted ? UI.accent.opacity(0.55) : UI.line, lineWidth: 1))
         .dropDestination(for: String.self) { ids, _ in
             guard let id = ids.first else { return false }; onDrop(id); return true
         } isTargeted: { targeted = $0 }
@@ -249,60 +241,57 @@ private struct GZLeadCard: View {
 
     var body: some View {
         let src = LeadSource.from(lead.source)
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
                 Text(lead.name.isEmpty ? "—" : lead.name)
                     .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(Holo.titleText).lineLimit(1)
+                    .foregroundStyle(UI.ink).lineLimit(1)
                 Spacer(minLength: 4)
-                // Badge fonte: sito, WhatsApp, chiamata…
-                HStack(spacing: 3) {
-                    Image(systemName: src.icon).font(.system(size: 8))
-                    Text(src.label).font(.system(size: 8.5, weight: .bold))
-                }
-                .foregroundStyle(src.color)
-                .padding(.horizontal, 6).padding(.vertical, 2)
-                .background(Capsule().fill(src.color.opacity(0.14)))
+                // La fonte si riconosce dall'icona: niente pill colorata per ognuna
+                Image(systemName: src.icon).font(.system(size: 9)).foregroundStyle(UI.faint)
+                    .help(src.label)
             }
 
             // Contatti: servono a colpo d'occhio per richiamare senza aprire il lead
-            if let mail = clean(lead.email) {
-                Text(mail).font(.system(size: 10.5)).foregroundStyle(Holo.labelDim)
-                    .lineLimit(1).truncationMode(.middle)   // il dominio resta leggibile
-            }
-            if let tel = clean(lead.phone) {
-                Text(tel).font(.system(size: 10.5)).foregroundStyle(Holo.labelDim).lineLimit(1)
+            VStack(alignment: .leading, spacing: 2) {
+                if let mail = clean(lead.email) {
+                    Text(mail).font(.system(size: 10.5)).foregroundStyle(UI.dim)
+                        .lineLimit(1).truncationMode(.middle)   // il dominio resta leggibile
+                }
+                if let tel = clean(lead.phone) {
+                    Text(tel).font(.system(size: 10.5)).foregroundStyle(UI.dim)
+                        .lineLimit(1).monospacedDigit()
+                }
             }
 
             if let z = clean(lead.zone) {
                 Label(z, systemImage: "mappin.and.ellipse")
-                    .font(.system(size: 10)).foregroundStyle(Holo.subDim).lineLimit(1)
+                    .font(.system(size: 10)).foregroundStyle(UI.dim).lineLimit(1)
             }
             if let b = LeadFmt.budget(lead.budget_min, lead.budget_max) {
-                Text(b).font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Holo.hsl(150, 70, 65))
+                Text(b).font(.system(size: 10.5, weight: .medium)).foregroundStyle(UI.text)
             }
             // Il messaggio dal form, o in mancanza le note interne
             if let msg = clean(lead.request_message) ?? clean(lead.notes) {
                 Text(msg).font(.system(size: 10.5)).lineSpacing(2)
-                    .foregroundStyle(Holo.text.opacity(0.8)).lineLimit(3)
+                    .foregroundStyle(UI.dim).lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            HStack {
-                Text(fmtLeadDate(lead.created_at)).font(.system(size: 9))
-                    .foregroundStyle(Holo.labelDim.opacity(0.8))
+            HStack(spacing: 5) {
+                Text(fmtLeadDate(lead.created_at)).font(.system(size: 9)).foregroundStyle(UI.faint)
                 Spacer()
                 if clean(lead.notes) != nil {
-                    Image(systemName: "note.text").font(.system(size: 9)).foregroundStyle(Holo.hsl(45, 70, 62))
+                    Image(systemName: "note.text").font(.system(size: 9)).foregroundStyle(UI.faint)
+                        .help("Ha note interne")
                 }
             }
+            .padding(.top, 1)
         }
         .padding(EdgeInsets(top: 9, leading: 10, bottom: 9, trailing: 10))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 10)
-            .fill(hover ? Color.white.opacity(0.07) : Color(hex: 0x121a2c).opacity(0.7)))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
-        .contentShape(RoundedRectangle(cornerRadius: 10))
+        .background(RoundedRectangle(cornerRadius: 8).fill(hover ? UI.surfaceHi : UI.panel))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(UI.line, lineWidth: 1))
+        .contentShape(RoundedRectangle(cornerRadius: 8))
         .onHover { hover = $0 }
     }
 
@@ -318,6 +307,7 @@ private struct GZLeadDrawerView: View {
     let onStage: (LeadStage) -> Void
     let onNotes: (String) -> Void
     let onDelete: () -> Void
+    let onEdit: () -> Void
     let onClose: () -> Void
 
     @State private var note: String = ""
@@ -330,7 +320,7 @@ private struct GZLeadDrawerView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(lead.name.isEmpty ? "—" : lead.name)
-                        .font(.system(size: 18, weight: .bold)).foregroundStyle(Holo.titleText)
+                        .font(.system(size: 18, weight: .bold)).foregroundStyle(UI.ink)
                     HStack(spacing: 6) {
                         Text(stage.label.uppercased())
                             .font(.system(size: 9.5, weight: .heavy)).tracking(1.2)
@@ -350,7 +340,7 @@ private struct GZLeadDrawerView: View {
                 }
                 Spacer()
                 Button(action: onClose) {
-                    Image(systemName: "xmark").font(.system(size: 13, weight: .semibold)).foregroundStyle(Csb.secFg)
+                    Image(systemName: "xmark").font(.system(size: 13, weight: .semibold)).foregroundStyle(UI.dim)
                         .frame(width: 28, height: 28).background(Circle().fill(Color.white.opacity(0.05)))
                 }.buttonStyle(.plain)
             }
@@ -364,7 +354,7 @@ private struct GZLeadDrawerView: View {
                                 let on = s == stage
                                 Button { onStage(s) } label: {
                                     Text(s.label).font(.system(size: 10.5, weight: .semibold))
-                                        .foregroundStyle(on ? Color(hex: 0x0b1220) : s.color)
+                                        .foregroundStyle(on ? UI.ink : s.color)
                                         .frame(maxWidth: .infinity).padding(.vertical, 6)
                                         .background(RoundedRectangle(cornerRadius: 7).fill(on ? s.color : s.color.opacity(0.12)))
                                         .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(s.color.opacity(on ? 0 : 0.35), lineWidth: 1))
@@ -387,7 +377,7 @@ private struct GZLeadDrawerView: View {
                     }
                     if let msg = clean(lead.request_message) {
                         section("RICHIESTA") {
-                            Text(msg).font(.system(size: 12.5)).lineSpacing(3).foregroundStyle(Holo.text)
+                            Text(msg).font(.system(size: 12.5)).lineSpacing(3).foregroundStyle(UI.text)
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -398,11 +388,11 @@ private struct GZLeadDrawerView: View {
                                 RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.04))
                                     .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
                                 if note.isEmpty {
-                                    Text("Aggiungi una nota…").font(.system(size: 12)).foregroundStyle(Csb.secFg)
+                                    Text("Aggiungi una nota…").font(.system(size: 12)).foregroundStyle(UI.dim)
                                         .padding(EdgeInsets(top: 10, leading: 12, bottom: 0, trailing: 0)).allowsHitTesting(false)
                                 }
                                 TextEditor(text: $note)
-                                    .font(.system(size: 12.5)).foregroundStyle(Holo.text)
+                                    .font(.system(size: 12.5)).foregroundStyle(UI.text)
                                     .scrollContentBackground(.hidden).background(Color.clear)
                                     .padding(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
                                     .frame(minHeight: 110)
@@ -410,7 +400,7 @@ private struct GZLeadDrawerView: View {
                             HStack {
                                 if savedFlash {
                                     Label("Salvato", systemImage: "checkmark.circle.fill")
-                                        .font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Holo.hsl(145, 70, 62))
+                                        .font(.system(size: 10.5, weight: .semibold)).foregroundStyle(UI.tint(.ok))
                                 }
                                 Spacer()
                                 Button {
@@ -419,9 +409,9 @@ private struct GZLeadDrawerView: View {
                                     Task { try? await Task.sleep(nanoseconds: 1_600_000_000); savedFlash = false }
                                 } label: {
                                     Text("Salva nota").font(.system(size: 11.5, weight: .semibold))
-                                        .foregroundStyle(Color(hex: 0x0b1220))
+                                        .foregroundStyle(UI.ink)
                                         .padding(.horizontal, 14).padding(.vertical, 7)
-                                        .background(Capsule().fill(Holo.hsl(210, 85, 66)))
+                                        .background(Capsule().fill(UI.accent))
                                 }.buttonStyle(.plain)
                             }
                         }
@@ -435,7 +425,7 @@ private struct GZLeadDrawerView: View {
                     Link(destination: url) {
                         Label("WhatsApp", systemImage: "message.fill")
                             .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(Holo.titleText).frame(maxWidth: .infinity).padding(.vertical, 9)
+                            .foregroundStyle(UI.ink).frame(maxWidth: .infinity).padding(.vertical, 9)
                             .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.06)))
                             .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
                     }.buttonStyle(.plain)
@@ -444,23 +434,24 @@ private struct GZLeadDrawerView: View {
                     Link(destination: url) {
                         Label("Rispondi", systemImage: "arrowshape.turn.up.left.fill")
                             .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(Holo.titleText).frame(maxWidth: .infinity).padding(.vertical, 9)
+                            .foregroundStyle(UI.ink).frame(maxWidth: .infinity).padding(.vertical, 9)
                             .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.06)))
                             .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
                     }.buttonStyle(.plain)
                 }
+                GhostButton(label: "Modifica", icon: "pencil", action: onEdit)
                 Button(action: onDelete) {
-                    Image(systemName: "trash").font(.system(size: 13)).foregroundStyle(Holo.hsl(5, 75, 65))
+                    Image(systemName: "trash").font(.system(size: 13)).foregroundStyle(UI.tint(.stop))
                         .frame(width: 42, height: 36)
-                        .background(RoundedRectangle(cornerRadius: 9).fill(Holo.hsl(5, 70, 50).opacity(0.12)))
-                        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Holo.hsl(5, 70, 55).opacity(0.4), lineWidth: 1))
+                        .background(RoundedRectangle(cornerRadius: 9).fill(UI.tint(.stop).opacity(0.12)))
+                        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(UI.tint(.stop).opacity(0.4), lineWidth: 1))
                 }.buttonStyle(.plain)
             }
             .padding(EdgeInsets(top: 12, leading: 22, bottom: 18, trailing: 22))
         }
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(Color(hex: 0x0c1120))
-        .overlay(Rectangle().frame(width: 1).foregroundStyle(Holo.cardBorder), alignment: .leading)
+        .background(UI.panel)
+        .overlay(Rectangle().frame(width: 1).foregroundStyle(UI.line), alignment: .leading)
         .ignoresSafeArea()
         .onAppear { note = lead.notes ?? "" }
     }
@@ -478,14 +469,14 @@ private struct GZLeadDrawerView: View {
 
     private func section<C: View>(_ title: String, @ViewBuilder _ content: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text(title).font(.system(size: 9.5, weight: .heavy)).tracking(1.5).foregroundStyle(Holo.hsl(210, 60, 66))
+            Text(title).font(.system(size: 9.5, weight: .heavy)).tracking(1.5).foregroundStyle(UI.dim)
             content()
         }
     }
     private func infoRow(_ icon: String, _ text: String) -> some View {
         HStack(spacing: 9) {
-            Image(systemName: icon).font(.system(size: 11)).foregroundStyle(Csb.secFg).frame(width: 16)
-            Text(text).font(.system(size: 12.5)).foregroundStyle(Holo.text).textSelection(.enabled)
+            Image(systemName: icon).font(.system(size: 11)).foregroundStyle(UI.dim).frame(width: 16)
+            Text(text).font(.system(size: 12.5)).foregroundStyle(UI.text).textSelection(.enabled)
         }
     }
     private func clean(_ v: String?) -> String? {
@@ -522,7 +513,7 @@ struct AgenteButton: View {
                 Image(systemName: "sparkles").font(.system(size: 11, weight: .bold))
                 Text("Agente").font(.system(size: 11.5, weight: .semibold))
             }
-            .foregroundStyle(hover ? Color(hex: 0x0b1020) : Holo.hsl(140, 70, 65))
+            .foregroundStyle(hover ? UI.ink : Holo.hsl(140, 70, 65))
             .padding(.horizontal, 11).padding(.vertical, 6)
             .background(Capsule().fill(hover ? Holo.hsl(140, 70, 62) : Holo.hsl(140, 70, 50).opacity(0.16)))
             .overlay(Capsule().strokeBorder(Holo.hsl(140, 70, 60).opacity(hover ? 0 : 0.45), lineWidth: 1))
