@@ -28,7 +28,7 @@ final class AppState: ObservableObject {
     @Published var clientiPanelOpen = true
 
     var isClientiArea: Bool {
-        switch route { case .clienti, .cliente, .proprieta: return true; default: return false }
+        switch route { case .clienti, .cliente: return true; default: return false }
     }
 }
 
