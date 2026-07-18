@@ -208,7 +208,7 @@ final class TerminalStore {
     }
 
     private static func makeClaude(dir: String, sshHost: String? = nil) -> LocalProcessTerminalView {
-        let term = LocalProcessTerminalView(frame: .zero)
+        let term = DroppableTerminalView(frame: .zero)
         term.nativeBackgroundColor = NSColor(red: 8/255, green: 11/255, blue: 22/255, alpha: 1)
         term.nativeForegroundColor = NSColor(red: 0xd7/255, green: 0xe7/255, blue: 1, alpha: 1)
         term.font = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular)

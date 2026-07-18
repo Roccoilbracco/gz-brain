@@ -47,7 +47,7 @@ struct SidebarView: View {
         switch state.route { case .clienti, .cliente: return true; default: return false }
     }
     private var isProprieta: Bool {
-        switch state.route { case .proprietaHub, .proprieta: return true; default: return false }
+        switch state.route { case .proprietaHub, .proprieta, .proprietaNuova: return true; default: return false }
     }
     private var isImpostazioni: Bool { state.route == .impostazioni }
     private var isDash: Bool { !isClienti && !isImpostazioni && state.sidebarMode == .dash }
@@ -92,6 +92,12 @@ struct SidebarView: View {
             // voce Proprietà: registro immobili (globale) + visibilità sui siti
             navRow("Proprietà", icon: "house", on: isProprieta) {
                 state.route = .proprietaHub
+            }
+            .padding(.bottom, 6)
+
+            // voce Calendario: disponibilità per le visite + appuntamenti fissati
+            navRow("Calendario", icon: "calendar", on: state.route == .calendario) {
+                state.route = .calendario
             }
             .padding(.bottom, 14)
 

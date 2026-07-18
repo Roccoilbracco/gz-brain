@@ -143,7 +143,17 @@ enum LeadFmt {
     static let grouped: NumberFormatter = {
         let f = NumberFormatter(); f.numberStyle = .decimal; f.groupingSeparator = "."; f.maximumFractionDigits = 0; return f
     }()
-    static func euro(_ n: Int) -> String { "€" + (grouped.string(from: NSNumber(value: n)) ?? "\(n)") }
+    /// Separatore delle migliaia scritto a mano: il formato italiano non
+    /// raggruppa i numeri di quattro cifre, e accanto a "€80.000" comparivano
+    /// "€2666". Così il raggruppamento è sempre lo stesso.
+    static func euro(_ n: Int) -> String {
+        var cifre = ""
+        for (i, c) in String(abs(n)).reversed().enumerated() {
+            if i > 0 && i % 3 == 0 { cifre.append(".") }
+            cifre.append(c)
+        }
+        return "€" + (n < 0 ? "-" : "") + String(cifre.reversed())
+    }
     static func compact(_ n: Int) -> String {
         if n >= 1_000_000 { return String(format: "€%.1fM", Double(n)/1_000_000).replacingOccurrences(of: ".0M", with: "M") }
         if n >= 1_000 { return "€\(n/1000)k" }

@@ -1,0 +1,1018 @@
+import AppKit
+import SwiftUI
+
+// ── Pagina di dettaglio di un immobile ────────────────────────────────────────
+//
+// Impianto della pagina, in tre parti fisse:
+//
+//   1. TESTATA   foto di copertina, riferimento, stato, titolo, indirizzo
+//   2. NUMERI    prezzo, superficie, €/m², vani — la riga che si guarda per prima
+//   3. SEZIONI   panoramica · scheda tecnica · foto · proprietari · operazioni · documenti
+//
+// Regola che tiene insieme tutto: **le sezioni non cambiano fra lettura e
+// modifica**. Prima metà del contenuto compariva solo in lettura (scheda
+// tecnica, storico, documenti) e la griglia foto solo in modifica, così per
+// sapere cosa c'era dentro un immobile bisognava entrare e uscire dalla
+// modifica. Ora le righe sono sempre le stesse: cambia solo se la cella a
+// destra è testo o campo compilabile.
+
+enum SezioneProprieta: String, CaseIterable, Identifiable {
+    case panoramica, scheda, foto, proprietari, operazioni, documenti
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .panoramica: return "Panoramica"
+        case .scheda: return "Scheda tecnica"
+        case .foto: return "Foto"
+        case .proprietari: return "Proprietari"
+        case .operazioni: return "Operazioni"
+        case .documenti: return "Documenti"
+        }
+    }
+    var icon: String {
+        switch self {
+        case .panoramica: return "square.grid.2x2"
+        case .scheda: return "list.clipboard"
+        case .foto: return "photo.on.rectangle"
+        case .proprietari: return "person.2"
+        case .operazioni: return "clock.arrow.circlepath"
+        case .documenti: return "doc.text"
+        }
+    }
+}
+
+struct ProprietaDetailView: View {
+    /// nil = pagina "nuova proprietà": stessa impaginazione, campi già aperti.
+    let proprietaId: String?
+
+    @State private var p: Proprieta?
+    @State private var draft = PropertyDraft()
+    @State private var editing: Bool
+    @State private var loading: Bool
+    @State private var saving = false
+    @State private var errorMsg: String?
+    @State private var sezione: SezioneProprieta = .panoramica
+    @State private var showAddEvent = false
+    @State private var showAddProprietario = false
+    @State private var confirmDelete = false
+    @State private var fotoBusy = false
+    @State private var fotoMsg: String?
+    @State private var projects: [Project] = []
+    @State private var proprietari: [Proprietario] = []
+    @State private var pdfStato: PDFStato = .fermo
+
+    init(proprietaId: String?) {
+        self.proprietaId = proprietaId
+        _editing = State(initialValue: proprietaId == nil)
+        _loading = State(initialValue: proprietaId != nil)
+    }
+
+    private enum PDFStato: Equatable {
+        case fermo, inCorso, fatto(String), errore(String)
+    }
+
+    private var isNew: Bool { proprietaId == nil }
+    private var st: PropertyStatus { editing ? draft.status : .from(p?.status) }
+    private var titolo: String {
+        let t = editing ? draft.title : (p?.title ?? "")
+        return t.isEmpty ? (isNew ? "Nuova proprietà" : "—") : t
+    }
+    private var riferimento: String {
+        let r = editing ? draft.reference : (p?.reference ?? "")
+        return r.trimmingCharacters(in: .whitespaces)
+    }
+    private var indirizzo: String {
+        let parti = editing
+            ? [draft.address, draft.zone, draft.city]
+            : [p?.address ?? "", p?.zone ?? "", p?.city ?? ""]
+        return parti.map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }.joined(separator: ", ")
+    }
+
+    var body: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 16) {
+                barraAzioni
+
+                if let errorMsg {
+                    GlassCard {
+                        HStack(spacing: 10) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(Color(hex: 0xffb3ad))
+                            Text(errorMsg).font(.system(size: 12.5)).foregroundStyle(Color(hex: 0xffb3ad))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }.padding(16)
+                    }
+                }
+
+                if loading {
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text("Caricamento…").font(.system(size: 13)).foregroundStyle(Holo.subDim)
+                    }.padding(.top, 40)
+                } else if isNew || p != nil {
+                    testata
+                    numeriChiave
+                    barraSezioni
+                    contenuto
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // 54 in alto e non meno: la finestra non ha barra del titolo e il
+            // contenuto le passa sotto, ma quella fascia resta zona di
+            // trascinamento e si mangia i clic. Con 34 i bottoni di questa
+            // barra finivano dentro la fascia e non rispondevano.
+            .padding(EdgeInsets(top: 54, leading: 30, bottom: 40, trailing: 30))
+        }
+        .task(id: proprietaId ?? "nuova") { await load() }
+        .sheet(isPresented: $showAddEvent) {
+            if let id = proprietaId { StoricoFormView(proprietaId: id) { await load() } }
+        }
+        .sheet(isPresented: $showAddProprietario) {
+            if let id = proprietaId {
+                ProprietarioFormView(proprietaId: id) { await caricaProprietari(id) }
+            }
+        }
+        .confirmationDialog("Eliminare la proprietà e tutto il suo storico?",
+                            isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Elimina", role: .destructive) { delete() }
+            Button("Annulla", role: .cancel) {}
+        }
+    }
+
+    // ── 1. Barra azioni: sempre in alto, non cambia posto fra le sezioni ──────
+    private var barraAzioni: some View {
+        HStack(spacing: 10) {
+            Button { AppState.shared.route = .proprietaHub } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "chevron.left").font(.system(size: 9, weight: .bold))
+                    Text("PROPRIETÀ").font(.system(size: 11)).tracking(1.5)
+                }
+                .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.65))
+            }.buttonStyle(.plain)
+
+            Spacer(minLength: 12)
+
+            if editing {
+                Button("Annulla") { cancelEdit() }.buttonStyle(.plain)
+                    .font(.system(size: 12)).foregroundStyle(Holo.subDim)
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+                Button { Task { await save() } } label: {
+                    HStack(spacing: 6) {
+                        if saving { ProgressView().controlSize(.small).scaleEffect(0.7) }
+                        Text(saving ? "Salvataggio…" : "Salva").font(.system(size: 12.5, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16).padding(.vertical, 7)
+                    .background(Capsule().fill(LinearGradient(
+                        colors: [Holo.hsl(217, 82, 54), Holo.hsl(245, 72, 56)],
+                        startPoint: .leading, endPoint: .trailing)))
+                }
+                .buttonStyle(.plain).disabled(saving || !draft.isValid).opacity(draft.isValid ? 1 : 0.5)
+            } else {
+                if !isNew { bottonePDF }
+                Button { editing = true } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "pencil").font(.system(size: 11, weight: .semibold))
+                        Text("Modifica").font(.system(size: 12.5, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14).padding(.vertical, 7)
+                    .background(Capsule().fill(Holo.hsl(217, 80, 52)))
+                }.buttonStyle(.plain)
+
+                Menu {
+                    Button(role: .destructive) { confirmDelete = true } label: {
+                        Label("Elimina proprietà", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis").font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(Csb.itemFg)
+                        .frame(width: 32, height: 30)
+                        .background(RoundedRectangle(cornerRadius: 9).fill(Csb.tabsBg))
+                        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Csb.tabOnBorder, lineWidth: 1))
+                }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            }
+        }
+    }
+
+    /// Genera la scheda in PDF — lo stesso documento che riceve il cliente.
+    private var bottonePDF: some View {
+        Button { Task { await generaPDF() } } label: {
+            HStack(spacing: 6) {
+                switch pdfStato {
+                case .inCorso: ProgressView().controlSize(.small).scaleEffect(0.7)
+                case .fatto:   Image(systemName: "checkmark").font(.system(size: 11, weight: .bold))
+                case .errore:  Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 10))
+                case .fermo:   Image(systemName: "doc.richtext").font(.system(size: 11, weight: .semibold))
+                }
+                Text(etichettaPDF).font(.system(size: 12.5, weight: .semibold))
+            }
+            .foregroundStyle(coloreP)
+            .padding(.horizontal, 14).padding(.vertical, 7)
+            .background(Capsule().fill(coloreP.opacity(0.14)))
+            .overlay(Capsule().strokeBorder(coloreP.opacity(0.4), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .disabled(pdfStato == .inCorso)
+        .help(aiutoPDF)
+    }
+
+    private var etichettaPDF: String {
+        switch pdfStato {
+        case .fermo: return "Scheda PDF"
+        case .inCorso: return "Genero…"
+        case .fatto: return "Aperto"
+        case .errore: return "Non riuscito"
+        }
+    }
+    private var coloreP: Color {
+        switch pdfStato {
+        case .fatto: return Holo.hsl(145, 75, 66)
+        case .errore: return Color(hex: 0xffb3ad)
+        default: return Holo.hsl(28, 88, 66)
+        }
+    }
+    private var aiutoPDF: String {
+        if case let .errore(m) = pdfStato { return m }
+        if case let .fatto(path) = pdfStato { return "Salvato in \(path)" }
+        return "Genera la scheda tecnica in PDF (spagnolo, italiano, inglese, cinese) e la apre"
+    }
+
+    // ── 2. Testata: copertina + identità dell'immobile ───────────────────────
+    private var testata: some View {
+        ZStack(alignment: .bottomLeading) {
+            copertina
+
+            // Velo scuro dal basso: senza, il titolo bianco su una foto chiara
+            // (facciate, spiagge) diventa illeggibile.
+            LinearGradient(colors: [.clear, .black.opacity(0.35), .black.opacity(0.82)],
+                           startPoint: .center, endPoint: .bottom)
+
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 8) {
+                    if !riferimento.isEmpty {
+                        Text("RIF. \(riferimento)").font(.system(size: 9.5, weight: .heavy)).tracking(1.4)
+                            .foregroundStyle(.white.opacity(0.92))
+                            .padding(.horizontal, 8).padding(.vertical, 3.5)
+                            .background(Capsule().fill(.black.opacity(0.45)))
+                            .overlay(Capsule().strokeBorder(.white.opacity(0.22), lineWidth: 1))
+                    }
+                    StatusChip(text: st.label, hue: st.hue)
+                    if let op = operationInfo(editing ? draft.listingType : p?.listing_type) {
+                        Text(op.label.uppercased()).font(.system(size: 9.5, weight: .heavy)).tracking(1.2)
+                            .foregroundStyle(Holo.hsl(op.hue, 90, 78))
+                            .padding(.horizontal, 8).padding(.vertical, 3.5)
+                            .background(Capsule().fill(Holo.hsl(op.hue, 70, 40).opacity(0.55)))
+                    }
+                }
+
+                Text(titolo).font(.system(size: 25, weight: .heavy))
+                    .foregroundStyle(.white).lineLimit(2)
+                    .shadow(color: .black.opacity(0.5), radius: 6, y: 1)
+
+                if !indirizzo.isEmpty {
+                    HStack(spacing: 5) {
+                        Image(systemName: "mappin.and.ellipse").font(.system(size: 10.5))
+                        Text(indirizzo).font(.system(size: 12.5, weight: .medium)).lineLimit(1)
+                    }
+                    .foregroundStyle(.white.opacity(0.86))
+                    .shadow(color: .black.opacity(0.5), radius: 4, y: 1)
+                }
+            }
+            .padding(EdgeInsets(top: 0, leading: 22, bottom: 20, trailing: 22))
+        }
+        .frame(height: 260)
+        .frame(maxWidth: .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Csb.panelBorder, lineWidth: 1))
+    }
+
+    @ViewBuilder private var copertina: some View {
+        let foto = p?.photos ?? []
+        if let prima = foto.first {
+            FotoCopertina(path: prima)
+        } else {
+            // Nessuna foto: sfondo nella tinta dello stato, così la pagina non
+            // sembra rotta e lo stato resta leggibile a colpo d'occhio.
+            LinearGradient(colors: [Holo.hsl(st.hue, 45, 26), Holo.hsl(st.hue, 55, 14)],
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
+                .overlay(
+                    Image(systemName: "house.fill").font(.system(size: 56))
+                        .foregroundStyle(.white.opacity(0.09))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .padding(30))
+        }
+    }
+
+    // ── 3. Numeri chiave ─────────────────────────────────────────────────────
+    private var numeriChiave: some View {
+        let prezzo = editing ? Int(draft.price) : p?.price
+        let affitto = editing ? Int(draft.priceRent) : p?.price_rent
+        let mq = editing ? Int(draft.sqm) : p?.size_sqm
+        let camere = editing ? Int(draft.bedrooms) : p?.bedrooms
+        let bagni = editing ? Int(draft.bathrooms) : p?.bathrooms
+        // Al metro quadro: è il numero con cui si confrontano due immobili e
+        // nessuno ha voglia di calcolarlo a mano.
+        let alMq: Int? = {
+            guard let prezzo, let mq, mq > 0 else { return nil }
+            return prezzo / mq
+        }()
+
+        return LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: 10)], spacing: 10) {
+            if let prezzo {
+                cellaNumero("PREZZO", LeadFmt.euro(prezzo), "eurosign.circle.fill", 145)
+            }
+            if let affitto {
+                cellaNumero("AFFITTO", LeadFmt.euro(affitto) + "/mese", "calendar", 200)
+            }
+            if let mq {
+                cellaNumero("SUPERFICIE", "\(mq) m²", "square.dashed", 210)
+            }
+            if let alMq {
+                cellaNumero("AL M²", LeadFmt.euro(alMq), "function", 28)
+            }
+            if let camere, camere > 0 {
+                cellaNumero("CAMERE", "\(camere)", "bed.double.fill", 262)
+            }
+            if let bagni, bagni > 0 {
+                cellaNumero("BAGNI", "\(bagni)", "shower.fill", 190)
+            }
+        }
+    }
+
+    private func cellaNumero(_ label: String, _ valore: String, _ icona: String, _ tinta: Double) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 5) {
+                Image(systemName: icona).font(.system(size: 9.5))
+                Text(label).font(.system(size: 8.5, weight: .heavy)).tracking(1.1)
+            }
+            .foregroundStyle(Holo.hsl(tinta, 55, 66))
+            Text(valore).font(.system(size: 16, weight: .bold)).foregroundStyle(Holo.titleText)
+                .monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(EdgeInsets(top: 11, leading: 13, bottom: 12, trailing: 13))
+        .background(RoundedRectangle(cornerRadius: 12).fill(Holo.hsl(tinta, 40, 30).opacity(0.16)))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Holo.hsl(tinta, 45, 50).opacity(0.28), lineWidth: 1))
+    }
+
+    // ── 4. Selettore di sezione ──────────────────────────────────────────────
+    private var barraSezioni: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(SezioneProprieta.allCases) { s in
+                    // Su una proprietà nuova esiste solo la panoramica: le altre
+                    // sezioni hanno bisogno di un id salvato su cui appendersi.
+                    let bloccata = isNew && s != .panoramica
+                    Button { if !bloccata { sezione = s } } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: s.icon).font(.system(size: 10.5))
+                            Text(s.label).font(.system(size: 12, weight: sezione == s ? .semibold : .medium))
+                            if let n = conteggio(s), n > 0 {
+                                Text("\(n)").font(.system(size: 9.5, weight: .bold)).monospacedDigit()
+                                    .foregroundStyle(sezione == s ? .white : Csb.secFg)
+                                    .padding(.horizontal, 5).padding(.vertical, 1.5)
+                                    .background(Capsule().fill(sezione == s
+                                        ? Color.white.opacity(0.22) : Color.white.opacity(0.08)))
+                            }
+                        }
+                        .foregroundStyle(sezione == s ? .white : Csb.itemFg)
+                        .padding(.horizontal, 13).padding(.vertical, 8)
+                        .background(Capsule().fill(sezione == s
+                            ? Holo.hsl(217, 78, 50).opacity(0.92) : Csb.tabsBg))
+                        .overlay(Capsule().strokeBorder(sezione == s
+                            ? .clear : Csb.tabOnBorder, lineWidth: 1))
+                        .opacity(bloccata ? 0.35 : 1)
+                    }
+                    .buttonStyle(.plain).disabled(bloccata)
+                    .help(bloccata ? "Salva prima la proprietà" : "")
+                }
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    private func conteggio(_ s: SezioneProprieta) -> Int? {
+        switch s {
+        case .foto: return p?.photos?.count ?? 0
+        case .proprietari: return proprietari.count
+        case .operazioni: return p?.proprieta_storico?.count ?? 0
+        default: return nil
+        }
+    }
+
+    // ── 5. Contenuto della sezione scelta ────────────────────────────────────
+    @ViewBuilder private var contenuto: some View {
+        switch sezione {
+        case .panoramica:
+            pannello { schedaAnagrafica }
+        case .scheda:
+            if let p {
+                SchedaTecnicaSection(
+                    proprietaId: p.id,
+                    tipoSuggerito: p.listing_type == "traspaso"
+                        || (p.property_type ?? "").lowercased().contains("local")
+                        ? "commerciale" : nil)
+            }
+        case .foto:
+            sezioneFoto
+        case .proprietari:
+            sezioneProprietari
+        case .operazioni:
+            if let p { sezioneOperazioni(p) }
+        case .documenti:
+            if let p { ProprietaDocumentiSection(proprietaId: p.id) }
+        }
+    }
+
+    private func pannello<C: View>(@ViewBuilder _ content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 0) { content() }
+            .background(RoundedRectangle(cornerRadius: 16).fill(Csb.panel))
+            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Csb.panelBorder, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+
+    // ── Panoramica: le stesse righe in lettura e in modifica ─────────────────
+    private var schedaAnagrafica: some View {
+        VStack(spacing: 0) {
+            riga("TITOLO", letto: p?.title.ifEmpty("—") ?? "—") {
+                InlineField(placeholder: "Titolo proprietà *", text: $draft.title,
+                            font: .system(size: 13, weight: .semibold))
+            }
+            divider
+            riga("RIFERIMENTO", letto: (p?.reference ?? "").ifEmpty("—")) {
+                InlineField(placeholder: "es. GZ00082", text: $draft.reference).frame(width: 220)
+            }
+            divider
+            riga("STATO", letto: st.label) {
+                InlinePicker(opts: PropertyStatus.allCases.map { ($0.rawValue, $0.label) },
+                             sel: draft.status.rawValue) { draft.status = .from($0) }
+                    .frame(width: 200)
+            }
+            divider
+            riga("INDIRIZZO", letto: indirizzo.ifEmpty("—")) {
+                VStack(spacing: 7) {
+                    InlineField(placeholder: "Indirizzo (es. Carrer de …)", text: $draft.address)
+                    HStack(spacing: 8) {
+                        InlineField(placeholder: "Zona", text: $draft.zone)
+                        InlineField(placeholder: "Città", text: $draft.city)
+                    }
+                }
+            }
+            divider
+            riga("TIPOLOGIA", letto: [p?.category?.capitalized, p?.property_type]
+                    .compactMap { $0 }.joined(separator: " · ").ifEmpty("—")) {
+                HStack(spacing: 8) {
+                    InlinePicker(opts: [("", "Categoria")] + LeadCategory.allCases.map { ($0.rawValue, $0.label) },
+                                 sel: draft.category) { draft.category = $0 }
+                    InlinePicker(opts: [("", "Tipo immobile")] + propertyTypes.map { ($0, $0) },
+                                 sel: draft.propertyType) { draft.propertyType = $0 }
+                }
+            }
+            divider
+            riga("OPERAZIONE", letto: operationInfo(p?.listing_type)?.label ?? "—") {
+                InlinePicker(opts: [("", "—")] + LeadInterest.allCases.map { ($0.rawValue, $0.label) },
+                             sel: draft.listingType) { draft.listingType = $0 }
+                    .frame(width: 220)
+            }
+            divider
+            riga("DIMENSIONI", letto: [p?.size_sqm.map { "\($0) m²" },
+                                       p?.bedrooms.map { "\($0) camere" },
+                                       p?.bathrooms.map { "\($0) bagni" }]
+                    .compactMap { $0 }.joined(separator: " · ").ifEmpty("—")) {
+                HStack(spacing: 8) {
+                    InlineField(placeholder: "m²", text: $draft.sqm).frame(width: 100)
+                    InlineField(placeholder: "Camere", text: $draft.bedrooms).frame(width: 110)
+                    InlineField(placeholder: "Bagni", text: $draft.bathrooms).frame(width: 110)
+                    Spacer(minLength: 0)
+                }
+            }
+            divider
+            riga("PREZZO", letto: [p?.price.map { LeadFmt.euro($0) },
+                                   p?.price_rent.map { LeadFmt.euro($0) + "/mese" }]
+                    .compactMap { $0 }.joined(separator: " · ").ifEmpty("—")) {
+                HStack(spacing: 8) {
+                    InlineField(placeholder: "Prezzo € (vendita/traspaso)", text: $draft.price).frame(width: 230)
+                    InlineField(placeholder: "Affitto €/mese", text: $draft.priceRent).frame(width: 180)
+                    Spacer(minLength: 0)
+                }
+            }
+            divider
+            riga("PUBBLICAZIONE", letto: sitiLabel(p)) { visibilitaSiti }
+            divider
+            riga("DESCRIZIONE", letto: (p?.notes ?? "").ifEmpty("—")) {
+                InlineField(placeholder: "Testo dell'annuncio: è quello che viene tradotto nelle quattro lingue del PDF",
+                            text: $draft.notes, multiline: true)
+            }
+        }
+    }
+
+    /// Una riga della panoramica: etichetta a sinistra, a destra il valore
+    /// oppure — a parità di posizione — il campo per modificarlo.
+    private func riga<C: View>(_ label: String, letto: String,
+                               @ViewBuilder _ campo: () -> C) -> some View {
+        HStack(alignment: .top, spacing: 18) {
+            Text(label).font(.system(size: 9, weight: .heavy)).tracking(1.2)
+                .foregroundStyle(Csb.secFg)
+                .frame(width: 130, alignment: .leading)
+                .padding(.top, editing ? 8 : 1)
+
+            if editing {
+                campo().frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text(letto).font(.system(size: 13)).foregroundStyle(Holo.text)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(EdgeInsets(top: editing ? 9 : 11, leading: 18,
+                            bottom: editing ? 9 : 11, trailing: 18))
+    }
+
+    private var divider: some View { Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1) }
+
+    private func sitiLabel(_ p: Proprieta?) -> String {
+        let slugs = (p?.site_visibility ?? [:]).filter { $0.value }.keys.sorted()
+        guard !slugs.isEmpty else { return "Non pubblicata su nessun sito" }
+        return slugs.map { s in projects.first { $0.slug == s }?.name ?? s }.joined(separator: " · ")
+    }
+
+    private var visibilitaSiti: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if projects.isEmpty {
+                Text("Caricamento progetti…").font(.system(size: 11)).foregroundStyle(Holo.subDim)
+            } else {
+                ForEach(projects) { siteRow($0) }
+            }
+        }
+    }
+
+    private func siteRow(_ proj: Project) -> some View {
+        let associated = draft.visibility[proj.slug] != nil
+        let visible = draft.visibility[proj.slug] == true
+        return HStack(spacing: 10) {
+            Button {
+                if associated { draft.visibility[proj.slug] = nil } else { draft.visibility[proj.slug] = false }
+            } label: {
+                Image(systemName: associated ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 15)).foregroundStyle(associated ? Holo.hsl(217, 85, 64) : Csb.secFg)
+            }.buttonStyle(.plain)
+
+            Text(proj.name).font(.system(size: 12.5, weight: .medium)).foregroundStyle(Holo.text)
+            Spacer(minLength: 0)
+
+            Button {
+                guard associated else { return }
+                draft.visibility[proj.slug] = !visible
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: visible ? "eye.fill" : "eye.slash").font(.system(size: 10))
+                    Text(visible ? "Visibile sul sito" : "Rendi visibile").font(.system(size: 10.5, weight: .semibold))
+                }
+                .foregroundStyle(visible ? Holo.hsl(145, 72, 60) : Csb.secFg)
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(Capsule().fill(visible ? Holo.hsl(145, 60, 45).opacity(0.18) : Color.white.opacity(0.05)))
+                .overlay(Capsule().strokeBorder(visible ? Holo.hsl(145, 60, 55).opacity(0.5) : Color.white.opacity(0.1), lineWidth: 1))
+                .opacity(associated ? 1 : 0.35)
+            }.buttonStyle(.plain).disabled(!associated)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 9).fill(associated ? Color.white.opacity(0.05) : Color.white.opacity(0.02)))
+        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+    }
+
+    // ── Foto ─────────────────────────────────────────────────────────────────
+    //
+    // Si caricano da qui e basta, come i documenti: le foto erano l'unica cosa
+    // che si poteva aggiungere solo entrando in modifica, e da fuori sembrava
+    // che non si potessero aggiungere affatto. Caricamento ed eliminazione
+    // vanno subito sul database, senza passare dal salvataggio della scheda.
+    private var sezioneFoto: some View {
+        let salvate = p?.photos ?? []
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("GALLERIA").font(.system(size: 10, weight: .heavy)).tracking(2)
+                    .foregroundStyle(Holo.hsl(210, 60, 66))
+                if salvate.count > 1 {
+                    Text("la prima è la copertina").font(.system(size: 10.5))
+                        .foregroundStyle(Holo.subDim)
+                }
+                Spacer()
+                Button { Task { await aggiungiFoto() } } label: {
+                    HStack(spacing: 6) {
+                        if fotoBusy {
+                            ProgressView().controlSize(.small).scaleEffect(0.65)
+                        } else {
+                            Image(systemName: "photo.badge.plus").font(.system(size: 10, weight: .bold))
+                        }
+                        Text(fotoBusy ? "Carico…" : "Aggiungi foto")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .foregroundStyle(Csb.itemFgOn)
+                    .padding(.horizontal, 13).padding(.vertical, 7)
+                    .background(RoundedRectangle(cornerRadius: 9).fill(Csb.tabOn.opacity(0.9)))
+                    .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Csb.tabOnBorder, lineWidth: 1))
+                }
+                .buttonStyle(.plain).disabled(fotoBusy).opacity(fotoBusy ? 0.6 : 1)
+            }
+
+            if let fotoMsg {
+                Text(fotoMsg).font(.system(size: 11)).foregroundStyle(Holo.subDim)
+            }
+
+            if salvate.isEmpty {
+                EmptyStateCard(icon: "photo",
+                    text: "Nessuna foto.\nCarica le immagini dell'immobile (JPG, PNG) con “Aggiungi foto”.")
+            } else {
+                // Una foto per volta, grande; sotto la striscia per saltare a
+                // qualsiasi altra senza scorrerle tutte in fila.
+                GalleriaFoto(paths: salvate)
+
+                Text("GESTISCI").font(.system(size: 9, weight: .heavy)).tracking(1.4)
+                    .foregroundStyle(Csb.secFg).padding(.top, 4)
+                GlassCard {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
+                        ForEach(salvate, id: \.self) { path in
+                            RemotePhotoThumb(path: path, altezza: 100) {
+                                Task { await eliminaFoto(path) }
+                            }
+                        }
+                    }
+                    .padding(14)
+                }
+            }
+        }
+    }
+
+    /// Sceglie i file, li carica nel bucket e aggiorna subito l'immobile.
+    private func aggiungiFoto() async {
+        guard let id = proprietaId, !fotoBusy else { return }
+        // Il pannello di sistema vive sul thread principale: da un contesto
+        // asincrono va aperto lì e basta aspettarne la scelta.
+        let scelte: [URL] = await MainActor.run {
+            let panel = NSOpenPanel()
+            panel.allowedContentTypes = [.jpeg, .png, .image]
+            panel.allowsMultipleSelection = true
+            panel.canChooseDirectories = false
+            return panel.runModal() == .OK ? panel.urls : []
+        }
+        guard !scelte.isEmpty else { return }
+
+        fotoBusy = true; fotoMsg = nil
+        defer { fotoBusy = false }
+        var paths = p?.photos ?? []
+        var falliti = 0
+        for url in scelte {
+            do {
+                let data = try Data(contentsOf: url)
+                paths.append(try await HubAPI.uploadProprietaPhoto(
+                    propId: id, data: data, ext: url.pathExtension.lowercased()))
+            } catch { falliti += 1 }
+        }
+        do {
+            try await HubAPI.updateProprieta(id: id, fields: ["photos": paths])
+            await load()
+            // Un fallimento parziale va detto: le altre foto sono comunque
+            // salvate, e senza avviso sembrerebbe che siano entrate tutte.
+            fotoMsg = falliti > 0 ? "\(falliti) file non caricati (formato non supportato?)" : nil
+        } catch let e {
+            fotoMsg = "Caricamento non riuscito: \(e.localizedDescription)"
+        }
+    }
+
+    private func eliminaFoto(_ path: String) async {
+        guard let id = proprietaId, !fotoBusy else { return }
+        fotoBusy = true; fotoMsg = nil
+        defer { fotoBusy = false }
+        do {
+            let restanti = (p?.photos ?? []).filter { $0 != path }
+            try await HubAPI.updateProprieta(id: id, fields: ["photos": restanti])
+            // Il file si cancella dopo: se fallisce resta un orfano nel bucket,
+            // molto meno grave di una scheda che punta a una foto sparita.
+            try? await HubAPI.deleteProprietaPhotoFile(path: path)
+            await load()
+        } catch let e {
+            fotoMsg = "Eliminazione non riuscita: \(e.localizedDescription)"
+        }
+    }
+
+    // ── Proprietari ──────────────────────────────────────────────────────────
+    private var sezioneProprietari: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("CATENA DEI PROPRIETARI").font(.system(size: 10, weight: .heavy)).tracking(2)
+                    .foregroundStyle(Holo.hsl(210, 60, 66))
+                Spacer()
+                MenuPillButton(label: "Aggiungi proprietario", icon: "person.badge.plus") {
+                    showAddProprietario = true
+                }
+            }
+
+            if proprietari.isEmpty {
+                EmptyStateCard(icon: "person.2",
+                    text: "Nessun proprietario registrato.\nAggiungi chi possiede l'immobile oggi e chi lo possedeva prima.")
+            } else {
+                GlassCard {
+                    VStack(spacing: 0) {
+                        ForEach(Array(proprietari.enumerated()), id: \.element.id) { i, pr in
+                            RigaProprietario(p: pr, ultimo: i == proprietari.count - 1) {
+                                Task {
+                                    try? await HubAPI.deleteProprietario(id: pr.id)
+                                    if let id = proprietaId { await caricaProprietari(id) }
+                                }
+                            }
+                        }
+                    }
+                    .padding(.vertical, 6)
+                }
+            }
+        }
+    }
+
+    // ── Operazioni (storico) ─────────────────────────────────────────────────
+    private func sezioneOperazioni(_ p: Proprieta) -> some View {
+        let eventi = (p.proprieta_storico ?? []).sorted { ($0.event_date ?? "") > ($1.event_date ?? "") }
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("STORICO OPERAZIONI").font(.system(size: 10, weight: .heavy)).tracking(2)
+                    .foregroundStyle(Holo.hsl(210, 60, 66))
+                Spacer()
+                MenuPillButton(label: "Aggiungi evento", icon: "plus") { showAddEvent = true }
+            }
+            if eventi.isEmpty {
+                EmptyStateCard(icon: "clock.arrow.circlepath",
+                    text: "Nessuna operazione registrata.\nAggiungi acquisizione, vendita, affitto o traspaso.")
+            } else {
+                GlassCard {
+                    VStack(spacing: 0) {
+                        ForEach(Array(eventi.enumerated()), id: \.element.id) { i, ev in
+                            storicoRow(ev)
+                            if i < eventi.count - 1 {
+                                Divider().overlay(Color.white.opacity(0.07)).padding(.leading, 68)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 6)
+                }
+            }
+        }
+    }
+
+    private func storicoRow(_ ev: ProprietaStorico) -> some View {
+        let e = StoricoEvent.from(ev.event_type)
+        return HStack(alignment: .center, spacing: 14) {
+            Image(systemName: e.icon).font(.system(size: 16))
+                .foregroundStyle(Holo.hsl(e.hue, 88, 70))
+                .frame(width: 40, height: 40)
+                .background(Circle().fill(Holo.hsl(e.hue, 70, 45).opacity(0.16)))
+                .overlay(Circle().strokeBorder(Holo.hsl(e.hue, 70, 55).opacity(0.35), lineWidth: 1))
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text(e.label).font(.system(size: 13.5, weight: .bold))
+                        .foregroundStyle(Holo.hsl(e.hue, 82, 76))
+                    Text(prettyDate(ev.event_date)).font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Csb.secFg)
+                        .padding(.horizontal, 7).padding(.vertical, 1.5)
+                        .background(Capsule().fill(Color.white.opacity(0.05)))
+                }
+                if ev.counterparty != nil || ev.agent != nil {
+                    Text([ev.counterparty, ev.agent.map { "Agente: \($0)" }]
+                        .compactMap { $0 }.joined(separator: " · "))
+                        .font(.system(size: 11.5)).foregroundStyle(Holo.subDim).lineLimit(1)
+                }
+                if let n = ev.notes, !n.isEmpty {
+                    Text(n).font(.system(size: 11)).foregroundStyle(Holo.labelDim)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Spacer(minLength: 16)
+
+            if let pr = ev.price {
+                Text(LeadFmt.euro(pr)).font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(Holo.titleText).monospacedDigit()
+            }
+            IconButton(icon: "trash", help: "Elimina", danger: true) {
+                Task { try? await HubAPI.deleteStorico(id: ev.id); await load() }
+            }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 14)
+    }
+
+    // ── PDF ──────────────────────────────────────────────────────────────────
+    private func generaPDF() async {
+        guard let id = proprietaId, pdfStato != .inCorso else { return }
+        pdfStato = .inCorso
+        do {
+            let dati = try await WABridge.shared.schedaPDF(proprietaId: id)
+            // Nome file dal riferimento: in Download le schede restano
+            // riconoscibili senza doverle aprire una per una.
+            let base = riferimento.isEmpty ? "immobile" : riferimento
+            let dir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+                ?? URL(fileURLWithPath: NSTemporaryDirectory())
+            let url = dir.appendingPathComponent("Scheda-\(base).pdf")
+            try dati.write(to: url)
+            NSWorkspace.shared.open(url)
+            pdfStato = .fatto(url.path)
+        } catch let e as WABridge.Errore {
+            pdfStato = .errore(e.rimedio)
+            errorMsg = "Scheda PDF non generata: \(e.localizedDescription) — \(e.rimedio)"
+        } catch let e {
+            pdfStato = .errore(e.localizedDescription)
+            errorMsg = "Scheda PDF non generata: \(e.localizedDescription)"
+        }
+    }
+
+    // ── Dati ─────────────────────────────────────────────────────────────────
+    private func load() async {
+        if projects.isEmpty { projects = (try? await HubAPI.listProjects()) ?? [] }
+        guard let id = proprietaId else { return }
+        loading = true; defer { loading = false }
+        do {
+            p = try await HubAPI.getProprieta(id: id)
+            if let p, !editing { draft = PropertyDraft(p) }
+            await caricaProprietari(id)
+        } catch let e { errorMsg = e.localizedDescription }
+    }
+
+    private func caricaProprietari(_ id: String) async {
+        proprietari = (try? await HubAPI.listProprietari(proprietaId: id)) ?? []
+    }
+
+    private func cancelEdit() {
+        if isNew { AppState.shared.route = .proprietaHub; return }
+        if let p { draft = PropertyDraft(p) }
+        editing = false
+    }
+
+    private func save() async {
+        guard draft.isValid, !saving else { return }
+        saving = true; errorMsg = nil
+        defer { saving = false }
+        do {
+            var fields = draft.fields()
+            // Indirizzo cambiato: azzero le coordinate, la lista le rigeocodifica.
+            if let e = p, draft.addressChanged(from: e) {
+                fields.updateValue(nil, forKey: "latitude")
+                fields.updateValue(nil, forKey: "longitude")
+            }
+
+            let propId: String
+            if let e = p { try await HubAPI.updateProprieta(id: e.id, fields: fields); propId = e.id }
+            else { propId = try await HubAPI.createProprieta(fields).id }
+
+            editing = false
+            if isNew { AppState.shared.route = .proprieta(id: propId) } else { await load() }
+        } catch let e {
+            errorMsg = "Salvataggio fallito: \(e.localizedDescription)"
+        }
+    }
+
+    private func delete() {
+        guard let id = proprietaId else { return }
+        Task {
+            do {
+                try await HubAPI.deleteProprieta(id: id)
+                await MainActor.run { AppState.shared.route = .proprietaHub }
+            } catch let e {
+                await MainActor.run { errorMsg = "Eliminazione fallita: \(e.localizedDescription)" }
+            }
+        }
+    }
+}
+
+// ── Galleria: una foto per volta, con la striscia per saltare a qualsiasi ────
+//
+// L'immagine grande è contenuta, non ritagliata: qui si guarda l'immobile, e
+// una foto tagliata a metà non serve a nessuno. Il ritaglio resta alla
+// copertina della testata, dove conta riempire la fascia.
+struct GalleriaFoto: View {
+    let paths: [String]
+    @State private var images: [String: NSImage] = [:]
+    @State private var index = 0
+
+    private var corrente: String? { paths.indices.contains(index) ? paths[index] : nil }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 14).fill(Color(hex: 0x0a0f1a))
+                if let corrente, let img = images[corrente] {
+                    Image(nsImage: img).resizable().scaledToFit().padding(6)
+                } else {
+                    ProgressView().controlSize(.small)
+                }
+            }
+            .frame(height: 440)
+            .frame(maxWidth: .infinity)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.white.opacity(0.09), lineWidth: 1))
+            .overlay(alignment: .leading) { if paths.count > 1 { freccia("chevron.left", -1) } }
+            .overlay(alignment: .trailing) { if paths.count > 1 { freccia("chevron.right", 1) } }
+            .overlay(alignment: .topTrailing) { contatore }
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 20).onEnded { v in
+                if v.translation.width < -30 { passo(1) } else if v.translation.width > 30 { passo(-1) }
+            })
+
+            if paths.count > 1 { striscia }
+        }
+        .task(id: paths) { await carica() }
+    }
+
+    private var contatore: some View {
+        Text("\(index + 1) / \(paths.count)")
+            .font(.system(size: 10.5, weight: .bold)).monospacedDigit()
+            .foregroundStyle(.white.opacity(0.9))
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background(Capsule().fill(.black.opacity(0.55)))
+            .padding(12)
+    }
+
+    private func freccia(_ icona: String, _ d: Int) -> some View {
+        Button { passo(d) } label: {
+            Image(systemName: icona).font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
+                .frame(width: 34, height: 34)
+                .background(Circle().fill(.black.opacity(0.5)))
+                .overlay(Circle().strokeBorder(.white.opacity(0.2), lineWidth: 1))
+        }
+        .buttonStyle(.plain).padding(12)
+    }
+
+    private var striscia: some View {
+        ScrollViewReader { sp in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(Array(paths.enumerated()), id: \.element) { i, path in
+                        Button { withAnimation(.easeInOut(duration: 0.16)) { index = i } } label: {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 8).fill(Color(hex: 0x0c1220))
+                                if let img = images[path] {
+                                    Image(nsImage: img).resizable().scaledToFill()
+                                }
+                            }
+                            .frame(width: 96, height: 66)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(
+                                i == index ? Holo.hsl(217, 85, 62) : Color.white.opacity(0.1),
+                                lineWidth: i == index ? 2 : 1))
+                            .opacity(i == index ? 1 : 0.62)
+                        }
+                        .buttonStyle(.plain).id(i)
+                    }
+                }
+                .padding(.horizontal, 2).padding(.vertical, 2)
+            }
+            // La miniatura attiva si porta in vista da sola: con venti foto
+            // altrimenti sparisce fuori dalla striscia usando le frecce.
+            .onChange(of: index) { _, i in
+                withAnimation(.easeInOut(duration: 0.2)) { sp.scrollTo(i, anchor: .center) }
+            }
+        }
+    }
+
+    private func passo(_ d: Int) {
+        guard !paths.isEmpty else { return }
+        withAnimation(.easeInOut(duration: 0.16)) {
+            index = (index + d + paths.count) % paths.count
+        }
+    }
+
+    private func carica() async {
+        index = 0
+        // In ordine, quindi la prima foto — quella mostrata all'apertura —
+        // arriva subito e il resto si riempie mentre guardi.
+        for path in paths where images[path] == nil {
+            if let d = try? await HubAPI.downloadProprietaPhoto(path: path),
+               let img = NSImage(data: d) {
+                images[path] = img
+            }
+        }
+    }
+}
+
+// ── Foto di copertina della testata ──────────────────────────────────────────
+private struct FotoCopertina: View {
+    let path: String
+    @State private var img: NSImage?
+
+    var body: some View {
+        ZStack {
+            Color(hex: 0x0c1220)
+            if let img {
+                Image(nsImage: img).resizable().scaledToFill()
+            } else {
+                ProgressView().controlSize(.small)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+        .task(id: path) {
+            if let d = try? await HubAPI.downloadProprietaPhoto(path: path) { img = NSImage(data: d) }
+        }
+    }
+}

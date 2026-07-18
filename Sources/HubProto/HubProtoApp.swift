@@ -39,12 +39,14 @@ enum Route: Equatable {
     case progetti
     case leadsHub
     case proprietaHub
+    case calendario             // disponibilità visite + appuntamenti fissati
     case clienti
     case impostazioni
     case progetto(slug: String, tab: ProjectTab)
     case lead(slug: String, leadId: String)
     case cliente(id: String)
     case proprieta(id: String)
+    case proprietaNuova         // pagina nuova proprietà (campi editabili in pagina)
     case codeGeneric            // terminale Claude generico, senza progetto
 }
 
@@ -93,6 +95,11 @@ struct ContentView: View {
         }
         .ignoresSafeArea(.container, edges: .top)
         .preferredColorScheme(.dark)
+        // Interruttori, selettori e cursori usano di default il colore d'accento
+        // scelto nelle Preferenze di Sistema del Mac — che può essere qualsiasi
+        // cosa (fucsia, rosa, viola) e stonare con il tema. Lo fissiamo noi
+        // sull'azzurro dell'app, così l'interfaccia è sempre coerente.
+        .tint(Holo.hsl(210, 90, 62))
         .task { await model.load() }
     }
 }

@@ -15,6 +15,8 @@ struct MainRouter: View {
             LeadsHubView()
         case .proprietaHub:
             ProprietaView()
+        case .calendario:
+            CalendarioVisiteView()
         case .clienti:
             ClientiSectionView(model: model)
         case .impostazioni:
@@ -33,8 +35,15 @@ struct MainRouter: View {
             ClienteDetailView(clienteId: id)
                 .id(id)
         case .proprieta(let id):
-            ProprietaDetailView(proprietaId: id)
+            // L'identità è l'immobile: senza, SwiftUI riusa la stessa istanza
+            // passando da una proprietà all'altra e si porta dietro lo stato di
+            // quella prima — compresa la modifica aperta con la sua bozza, che
+            // salvata finirebbe sull'immobile sbagliato.
+            ProprietaDetailView(proprietaId: id).id(id)
                 .id(id)
+        case .proprietaNuova:
+            ProprietaDetailView(proprietaId: nil)
+                .id("proprieta-nuova")
         case .codeGeneric:
             ProgettoCodeView(project: nil)
         }

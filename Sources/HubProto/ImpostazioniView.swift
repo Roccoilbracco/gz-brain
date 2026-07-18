@@ -66,6 +66,8 @@ struct ImpostazioniView: View {
                 }
                 .frame(maxWidth: 700)
 
+                ConnessioniAPICard()
+
                 AziendaSettingsCard()
             }
             .frame(maxWidth: .infinity, alignment: .leading)

@@ -82,11 +82,11 @@ struct ProgettoDettaglioView: View {
                     // dash dedicata Camere PSE: pannello prenotazioni camere
                     CamerePSEDashboard()
                 } else if model.project.slug == "wallis-57" {
-                    // dash dedicata Wallis 57: richieste dal form del sito
+                    // dash dedicata Wallis 57: richieste dal form del sito + WhatsApp
                     WallisDashboard()
-                } else if model.project.slug == "easyact" {
-                    // dash dedicata EasyAct (legge il suo Supabase dal .env.local)
-                    EasyActLayout(project: model.project)
+                } else if model.project.slug == "gz-ibiza" {
+                    // dash dedicata GZ Ibiza: pipeline lead (re_leads) + WhatsApp
+                    GZIbizaDashboard()
                 } else {
                     if let err = model.error {
                         GlassCard { Text("Errore: \(err)").foregroundStyle(Color(hex: 0xffb3ad)).padding(20) }

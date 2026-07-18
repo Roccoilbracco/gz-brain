@@ -110,6 +110,7 @@ struct WallisDashboard: View {
     @StateObject private var model = WallisModel()
     @State private var search = ""
     @State private var selected: Solicitud?
+    @State private var mostraAgente = false
 
     private var filtered: [Solicitud] {
         guard !search.isEmpty else { return model.items }
@@ -137,6 +138,10 @@ struct WallisDashboard: View {
                 } else {
                     board
                 }
+
+                Divider().overlay(Color.white.opacity(0.08)).padding(.vertical, 4)
+
+                WhatsAppSection(slug: "wallis-57")
             }
             .blur(radius: selected != nil ? 2 : 0)
             .disabled(selected != nil)
@@ -162,6 +167,9 @@ struct WallisDashboard: View {
             }
         }
         .task { await model.load() }
+        .sheet(isPresented: $mostraAgente) {
+            AgenteSheet(slug: "wallis-57") { mostraAgente = false }
+        }
     }
 
     private var header: some View {
@@ -175,6 +183,7 @@ struct WallisDashboard: View {
                     .font(.system(size: 11)).foregroundStyle(Holo.subDim)
             }
             Spacer()
+            AgenteButton { mostraAgente = true }
             Button { Task { await model.load() } } label: {
                 Image(systemName: "arrow.clockwise").font(.system(size: 12, weight: .bold))
                     .foregroundStyle(Holo.labelDim).padding(8)
@@ -302,13 +311,16 @@ private struct SolCard: View {
                     .font(.system(size: 12.5, weight: .semibold))
                     .foregroundStyle(Holo.titleText).lineLimit(1)
                 Spacer(minLength: 4)
+                // Badge fonte letto da `origen`: sito, WhatsApp, chiamata…
+                // (prima era un pill "Sito" fisso, che nascondeva la provenienza)
+                let src = LeadSource.from(s.origen)
                 HStack(spacing: 3) {
-                    Image(systemName: "globe").font(.system(size: 8))
-                    Text("Sito").font(.system(size: 8.5, weight: .bold))
+                    Image(systemName: src.icon).font(.system(size: 8))
+                    Text(src.label).font(.system(size: 8.5, weight: .bold))
                 }
-                .foregroundStyle(Holo.hsl(210, 78, 66))
+                .foregroundStyle(src.color)
                 .padding(.horizontal, 6).padding(.vertical, 2)
-                .background(Capsule().fill(Holo.hsl(210, 78, 66).opacity(0.14)))
+                .background(Capsule().fill(src.color.opacity(0.14)))
             }
             if let mail = clean(s.email) {
                 Text(mail).font(.system(size: 10.5)).foregroundStyle(Holo.labelDim).lineLimit(1)

@@ -135,6 +135,9 @@ extension HubAPI {
         let name = "\(propId)/\(UUID().uuidString.prefix(8)).\(ext.isEmpty ? "jpg" : ext)"
         return try await sb.uploadFile(bucket: "proprieta", path: name, data: data, contentType: "image/\(ext == "png" ? "png" : "jpeg")")
     }
+    static func deleteProprietaPhotoFile(path: String) async throws {
+        try await sb.deleteFile(bucket: "proprieta", path: path)
+    }
     static func downloadProprietaPhoto(path: String) async throws -> Data {
         try await sb.downloadFile(bucket: "proprieta", path: path)
     }
@@ -274,8 +277,9 @@ struct ProprietaView: View {
     @State private var loading = true
     @State private var errorMsg: String?
     @State private var search = ""
-    @State private var showAdd = false
     @State private var mode: PropViewMode = .lista
+    @State private var geocoding = false
+    @State private var geocodeLeft = 0
 
     private var filtered: [Proprieta] {
         items.filter { p in
@@ -294,7 +298,7 @@ struct ProprietaView: View {
                     Spacer()
                     viewToggle
                     HoloSearchField(placeholder: "Cerca immobile…", text: $search)
-                    MenuPillButton(label: "Aggiungi proprietà", icon: "plus") { showAdd = true }
+                    MenuPillButton(label: "Aggiungi proprietà", icon: "plus") { AppState.shared.route = .proprietaNuova }
                 }
 
                 if let errorMsg {
@@ -302,6 +306,7 @@ struct ProprietaView: View {
                 } else if loading {
                     Text("Caricamento…").font(.system(size: 13)).foregroundStyle(Holo.subDim).padding(.top, 8)
                 } else if mode == .mappa {
+                    mapLegend
                     PropertyMap(items: filtered)
                         .frame(height: 560)
                         .clipShape(RoundedRectangle(cornerRadius: 16))
@@ -322,7 +327,31 @@ struct ProprietaView: View {
             .padding(EdgeInsets(top: 54, leading: 30, bottom: 34, trailing: 30))
         }
         .task { await load(); await geocodeMissing() }
-        .sheet(isPresented: $showAdd) { ProprietaFormView(existing: nil) { await load() } }
+    }
+
+    // quante proprietà hanno un pin e quante restano da localizzare
+    private var mapLegend: some View {
+        let senza = filtered.filter { $0.latitude == nil || $0.longitude == nil }
+        return HStack(spacing: 10) {
+            Text("\(filtered.count - senza.count) di \(filtered.count) sulla mappa")
+                .font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Holo.subDim)
+            if !senza.isEmpty {
+                Text("\(senza.count) senza posizione")
+                    .font(.system(size: 11, weight: .semibold)).foregroundStyle(Holo.hsl(45, 80, 70))
+                    .padding(.horizontal, 9).padding(.vertical, 3)
+                    .background(Capsule().fill(Holo.hsl(45, 70, 45).opacity(0.16)))
+                    .overlay(Capsule().strokeBorder(Holo.hsl(45, 70, 55).opacity(0.4), lineWidth: 1))
+                if geocoding {
+                    Text("Localizzazione in corso… \(geocodeLeft) rimaste")
+                        .font(.system(size: 11)).foregroundStyle(Holo.subDim)
+                } else {
+                    MenuPillButton(label: "Localizza mancanti", icon: "mappin.and.ellipse") {
+                        Task { await geocodeMissing() }
+                    }
+                }
+            }
+            Spacer()
+        }
     }
 
     private var viewToggle: some View {
@@ -356,20 +385,49 @@ struct ProprietaView: View {
     // Geocodifica in background gli indirizzi senza coordinate → salva lat/lng,
     // così i pin appaiono sulla mappa. Apple throttla: una richiesta ~al secondo.
     private func geocodeMissing() async {
+        guard !geocoding else { return }
+        geocoding = true; defer { geocoding = false; geocodeLeft = 0 }
         let geocoder = CLGeocoder()
-        for p in items where (p.latitude == nil || p.longitude == nil) {
-            let q = [p.address, p.zone, p.city, "Islas Baleares, España"]
-                .compactMap { $0 }.map { $0.trimmingCharacters(in: .whitespaces) }
-                .filter { !$0.isEmpty }.joined(separator: ", ")
-            guard q.count > 6 else { continue }
-            if let loc = try? await geocoder.geocodeAddressString(q).first?.location {
-                let lat = loc.coordinate.latitude, lng = loc.coordinate.longitude
-                try? await HubAPI.updateProprieta(id: p.id, fields: ["latitude": lat, "longitude": lng])
-                if let i = items.firstIndex(where: { $0.id == p.id }) {
-                    items[i].latitude = lat; items[i].longitude = lng
+        let mancanti = items.filter { $0.latitude == nil || $0.longitude == nil }
+        geocodeLeft = mancanti.count
+
+        for p in mancanti {
+            defer { geocodeLeft -= 1 }
+            // dal più preciso al più generico: se la via non si trova, ripiega su zona/città
+            let parts = [p.address, p.zone, p.city].compactMap { $0 }
+                .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            guard !parts.isEmpty else { continue }
+            let queries = [
+                (parts + ["Ibiza, Islas Baleares, España"]).joined(separator: ", "),
+                (parts.dropFirst() + ["Ibiza, Islas Baleares, España"]).joined(separator: ", "),
+            ]
+
+            for q in queries {
+                do {
+                    if let loc = try await geocoder.geocodeAddressString(q).first?.location {
+                        let lat = loc.coordinate.latitude, lng = loc.coordinate.longitude
+                        try? await HubAPI.updateProprieta(id: p.id, fields: ["latitude": lat, "longitude": lng])
+                        if let i = items.firstIndex(where: { $0.id == p.id }) {
+                            items[i].latitude = lat; items[i].longitude = lng
+                        }
+                        break
+                    }
+                } catch let e as NSError where e.code == CLError.network.rawValue {
+                    // Apple throttla le richieste a raffica: rallenta e riprova la stessa query
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    if let loc = try? await geocoder.geocodeAddressString(q).first?.location {
+                        let lat = loc.coordinate.latitude, lng = loc.coordinate.longitude
+                        try? await HubAPI.updateProprieta(id: p.id, fields: ["latitude": lat, "longitude": lng])
+                        if let i = items.firstIndex(where: { $0.id == p.id }) {
+                            items[i].latitude = lat; items[i].longitude = lng
+                        }
+                        break
+                    }
+                } catch {
+                    // indirizzo non trovato: prova la query successiva (più generica)
                 }
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
             }
-            try? await Task.sleep(nanoseconds: 1_100_000_000)
         }
     }
 }
@@ -579,391 +637,169 @@ private struct PropertyRow: View {
 }
 
 // ── Scheda proprietà: info + timeline storico ────────────────────────────────
-struct ProprietaDetailView: View {
-    let proprietaId: String
-    @State private var p: Proprieta?
-    @State private var loading = true
-    @State private var errorMsg: String?
-    @State private var showEdit = false
-    @State private var showAddEvent = false
-    @State private var confirmDelete = false
+// ── Draft editabile: i campi della proprietà come stringhe modificabili ──────
+struct PropertyDraft {
+    var title = "", reference = "", address = "", zone = "", city = ""
+    var category = "", listingType = "", propertyType = ""
+    var bedrooms = "", bathrooms = "", sqm = "", price = "", priceRent = ""
+    var status = PropertyStatus.disponibile
+    var notes = ""
+    var photos: [String] = []
+    var visibility: [String: Bool] = [:]
 
-    private var st: PropertyStatus { .from(p?.status) }
-
-    var body: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 16) {
-                Button { AppState.shared.route = .proprietaHub } label: {
-                    Text("← PROPRIETÀ").font(.system(size: 11)).tracking(1.5)
-                        .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.6))
-                }.buttonStyle(.plain)
-
-                if let errorMsg {
-                    GlassCard { Text("Errore: \(errorMsg)").foregroundStyle(Color(hex: 0xffb3ad)).padding(20) }
-                } else if loading {
-                    Text("Caricamento…").font(.system(size: 13)).foregroundStyle(Holo.subDim)
-                } else if let p {
-                    anagrafica(p)
-                    if let ph = p.photos, !ph.isEmpty {
-                        RemoteImageCarousel(paths: ph, height: 300, corner: 16)
-                    }
-                    storicoSection(p)
-                    ProprietaDocumentiSection(proprietaId: proprietaId)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(EdgeInsets(top: 40, leading: 30, bottom: 34, trailing: 30))
-        }
-        .task(id: proprietaId) { await load() }
-        .sheet(isPresented: $showEdit) {
-            if let p { ProprietaFormView(existing: p) { await load() } }
-        }
-        .sheet(isPresented: $showAddEvent) {
-            StoricoFormView(proprietaId: proprietaId) { await load() }
-        }
-    }
-
-    private func anagrafica(_ p: Proprieta) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top, spacing: 14) {
-                Image(systemName: "house.fill").font(.system(size: 20)).foregroundStyle(.white)
-                    .frame(width: 46, height: 46)
-                    .background(RoundedRectangle(cornerRadius: 12).fill(LinearGradient(
-                        colors: [Holo.hsl(st.hue, 55, 42), Holo.hsl(st.hue, 60, 28)],
-                        startPoint: .topLeading, endPoint: .bottomTrailing)))
-                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Holo.hsl(st.hue, 60, 55).opacity(0.45), lineWidth: 1))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(p.title).font(.system(size: 18, weight: .heavy)).foregroundStyle(Holo.titleText).lineLimit(1)
-                    if let r = p.reference, !r.isEmpty {
-                        Text("Rif. \(r)").font(.system(size: 11, weight: .medium)).foregroundStyle(Csb.tagFg)
-                    }
-                }
-                Spacer(minLength: 12)
-                StatusChip(text: st.label, hue: st.hue)
-                Menu {
-                    Button { showEdit = true } label: { Label("Modifica", systemImage: "pencil") }
-                    Button(role: .destructive) { confirmDelete = true } label: { Label("Elimina", systemImage: "trash") }
-                } label: {
-                    Image(systemName: "ellipsis").font(.system(size: 15, weight: .bold)).foregroundStyle(Csb.itemFg)
-                        .frame(width: 32, height: 32)
-                        .background(RoundedRectangle(cornerRadius: 9).fill(Csb.tabsBg))
-                        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Csb.tabOnBorder, lineWidth: 1))
-                }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-            }
-            .padding(EdgeInsets(top: 16, leading: 18, bottom: 16, trailing: 18))
-            divider
-            defRow("INDIRIZZO", [p.address, p.zone, p.city].compactMap { $0 }.joined(separator: ", ").ifEmpty("—"))
-            divider
-            defRow("TIPOLOGIA", [p.category?.capitalized, p.property_type].compactMap { $0 }.joined(separator: " · ").ifEmpty("—"))
-            divider
-            defRow("OPERAZIONE", operationInfo(p.listing_type)?.label ?? "—")
-            divider
-            defRow("DETTAGLI", [p.size_sqm.map { "\($0) m²" }, p.bedrooms.map { "\($0) camere" }, p.bathrooms.map { "\($0) bagni" }]
-                .compactMap { $0 }.joined(separator: " · ").ifEmpty("—"))
-            divider
-            defRow("PREZZO ATTUALE", p.price.map { LeadFmt.euro($0) } ?? "—")
-            if let n = p.notes, !n.isEmpty { divider; defRow("NOTE", n) }
-        }
-        .background(RoundedRectangle(cornerRadius: 16).fill(Csb.panel))
-        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Csb.panelBorder, lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .confirmationDialog("Eliminare la proprietà e tutto il suo storico?", isPresented: $confirmDelete, titleVisibility: .visible) {
-            Button("Elimina", role: .destructive) { delete() }
-            Button("Annulla", role: .cancel) {}
-        }
-    }
-
-    private var divider: some View { Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1) }
-    private func defRow(_ label: String, _ value: String) -> some View {
-        HStack(alignment: .top, spacing: 18) {
-            Text(label).font(.system(size: 9, weight: .heavy)).tracking(1.2)
-                .foregroundStyle(Csb.secFg).frame(width: 130, alignment: .leading).padding(.top, 1)
-            Text(value).font(.system(size: 13)).foregroundStyle(Holo.text).textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(EdgeInsets(top: 11, leading: 18, bottom: 11, trailing: 18))
-    }
-
-    // timeline storico
-    private func storicoSection(_ p: Proprieta) -> some View {
-        let eventi = (p.proprieta_storico ?? []).sorted {
-            ($0.event_date ?? "") > ($1.event_date ?? "")
-        }
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("STORICO OPERAZIONI").font(.system(size: 10, weight: .heavy)).tracking(2)
-                    .foregroundStyle(Holo.hsl(210, 60, 66))
-                Spacer()
-                MenuPillButton(label: "Aggiungi evento", icon: "plus") { showAddEvent = true }
-            }
-            if eventi.isEmpty {
-                EmptyStateCard(icon: "clock.arrow.circlepath",
-                    text: "Nessuna operazione registrata.\nAggiungi acquisizione, vendita, affitto o traspaso.")
-            } else {
-                GlassCard {
-                    VStack(spacing: 0) {
-                        ForEach(Array(eventi.enumerated()), id: \.element.id) { i, ev in
-                            storicoRow(ev)
-                            if i < eventi.count - 1 {
-                                Divider().overlay(Color.white.opacity(0.07)).padding(.leading, 68)
-                            }
-                        }
-                    }
-                    .padding(.vertical, 6)
-                }
-            }
-        }
-    }
-
-    private func storicoRow(_ ev: ProprietaStorico) -> some View {
-        let e = StoricoEvent.from(ev.event_type)
-        return HStack(alignment: .center, spacing: 14) {
-            // pastiglia icona colorata (evento)
-            Image(systemName: e.icon).font(.system(size: 16))
-                .foregroundStyle(Holo.hsl(e.hue, 88, 70))
-                .frame(width: 40, height: 40)
-                .background(Circle().fill(Holo.hsl(e.hue, 70, 45).opacity(0.16)))
-                .overlay(Circle().strokeBorder(Holo.hsl(e.hue, 70, 55).opacity(0.35), lineWidth: 1))
-
-            // corpo: tipo + data, controparte/agente, note
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 8) {
-                    Text(e.label).font(.system(size: 13.5, weight: .bold)).foregroundStyle(Holo.hsl(e.hue, 82, 76))
-                    Text(prettyDate(ev.event_date)).font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Csb.secFg)
-                        .padding(.horizontal, 7).padding(.vertical, 1.5)
-                        .background(Capsule().fill(Color.white.opacity(0.05)))
-                }
-                if ev.counterparty != nil || ev.agent != nil {
-                    Text([ev.counterparty, ev.agent.map { "Agente: \($0)" }].compactMap { $0 }.joined(separator: " · "))
-                        .font(.system(size: 11.5)).foregroundStyle(Holo.subDim).lineLimit(1)
-                }
-                if let n = ev.notes, !n.isEmpty {
-                    Text(n).font(.system(size: 11)).foregroundStyle(Holo.labelDim)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            Spacer(minLength: 16)
-
-            // colonna destra: prezzo + elimina
-            if let pr = ev.price {
-                Text(LeadFmt.euro(pr)).font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(Holo.titleText).monospacedDigit()
-            }
-            IconButton(icon: "trash", help: "Elimina", danger: true) {
-                Task { try? await HubAPI.deleteStorico(id: ev.id); await load() }
-            }
-        }
-        .padding(.horizontal, 16).padding(.vertical, 14)
-    }
-
-    private func load() async {
-        loading = true; defer { loading = false }
-        do { p = try await HubAPI.getProprieta(id: proprietaId) }
-        catch let e { errorMsg = e.localizedDescription }
-    }
-    private func delete() {
-        Task {
-            do { try await HubAPI.deleteProprieta(id: proprietaId)
-                await MainActor.run { AppState.shared.route = .proprietaHub }
-            } catch let e { await MainActor.run { errorMsg = "Eliminazione fallita: \(e.localizedDescription)" } }
-        }
-    }
-}
-
-private extension String { func ifEmpty(_ f: String) -> String { isEmpty ? f : self } }
-
-// ── Form proprietà (nuova / modifica) ────────────────────────────────────────
-struct ProprietaFormView: View {
-    let existing: Proprieta?
-    let onSaved: () async -> Void
-    @Environment(\.dismiss) private var dismiss
-
-    @State private var title = ""; @State private var reference = ""
-    @State private var address = ""; @State private var zone = ""; @State private var city = ""
-    @State private var category = ""; @State private var listingType = ""; @State private var propertyType = ""
-    @State private var bedrooms = ""; @State private var bathrooms = ""; @State private var sqm = ""
-    @State private var price = ""; @State private var status = PropertyStatus.disponibile
-    @State private var notes = ""; @State private var saving = false
-    @State private var newPhotos: [URL] = []
-    // Visibilità sui siti: slug progetto → visibile. Key presente = associata al progetto.
-    @State private var projects: [Project] = []
-    @State private var visibility: [String: Bool] = [:]
-
-    var body: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 14) {
-                Text(existing == nil ? "NUOVA PROPRIETÀ" : "MODIFICA PROPRIETÀ")
-                    .font(.system(size: 15, weight: .heavy)).tracking(2).foregroundStyle(Holo.titleText)
-                HoloField(label: "Titolo *", text: $title, placeholder: "Es. Villa vista mare Es Cubells")
-                HoloField(label: "Riferimento", text: $reference, placeholder: "Es. GZ-0012")
-                HoloField(label: "Indirizzo", text: $address, placeholder: "Es. Carrer de …")
-                HStack(spacing: 12) { HoloField(label: "Zona", text: $zone); HoloField(label: "Città", text: $city) }
-                holoPicker("Operazione", [("", "—")] + LeadInterest.allCases.map { ($0.rawValue, $0.label) }, listingType) { listingType = $0 }
-                HStack(spacing: 12) {
-                    holoPicker("Categoria", [("", "—")] + LeadCategory.allCases.map { ($0.rawValue, $0.label) }, category) { category = $0 }
-                    holoPicker("Tipo immobile", [("", "—")] + propertyTypes.map { ($0, $0) }, propertyType) { propertyType = $0 }
-                }
-                HStack(spacing: 12) {
-                    HoloField(label: "Camere", text: $bedrooms, placeholder: "3")
-                    HoloField(label: "Bagni", text: $bathrooms, placeholder: "2")
-                    HoloField(label: "Superficie m²", text: $sqm, placeholder: "180")
-                }
-                HStack(spacing: 12) {
-                    HoloField(label: "Prezzo €", text: $price, placeholder: "1200000")
-                    holoPicker("Stato", PropertyStatus.allCases.map { ($0.rawValue, $0.label) }, status.rawValue) { status = .from($0) }
-                }
-                HoloField(label: "Note", text: $notes)
-                visibilitaSiti
-                photoStaging
-
-                HStack(spacing: 10) {
-                    Spacer()
-                    Button("Annulla") { dismiss() }.buttonStyle(.plain)
-                        .font(.system(size: 13)).foregroundStyle(Holo.subDim).padding(.horizontal, 16).padding(.vertical, 9)
-                    Button { Task { await save() } } label: {
-                        Text(saving ? "Salvataggio…" : "Salva proprietà").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
-                            .padding(.horizontal, 18).padding(.vertical, 9)
-                            .background(Capsule().fill(LinearGradient(
-                                colors: [Color(red: 37/255, green: 99/255, blue: 235/255), Color(red: 79/255, green: 70/255, blue: 229/255)],
-                                startPoint: .leading, endPoint: .trailing)))
-                    }.buttonStyle(.plain)
-                    .disabled(saving || title.trimmingCharacters(in: .whitespaces).isEmpty)
-                    .opacity(title.trimmingCharacters(in: .whitespaces).isEmpty ? 0.5 : 1)
-                }
-            }
-            .padding(24)
-        }
-        .frame(width: 520, height: 720)
-        .background(LinearGradient(colors: [Color(red: 16/255, green: 24/255, blue: 48/255), Color(red: 8/255, green: 12/255, blue: 26/255)],
-                                   startPoint: .top, endPoint: .bottom))
-        .preferredColorScheme(.dark)
-        .onAppear(perform: prefill)
-        .task { projects = (try? await HubAPI.listProjects()) ?? [] }
-    }
-
-    private var photoStaging: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("FOTO").font(.system(size: 9.5, weight: .heavy)).tracking(1.5)
-                    .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.65))
-                Spacer()
-                Button { pickPhotos() } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "photo.badge.plus").font(.system(size: 10, weight: .bold))
-                        Text("Aggiungi foto").font(.system(size: 11, weight: .semibold))
-                    }
-                    .foregroundStyle(Color(hex: 0xeaf0fb))
-                    .padding(.horizontal, 11).padding(.vertical, 5)
-                    .background(Capsule().fill(Color(red: 40/255, green: 70/255, blue: 140/255).opacity(0.5)))
-                    .overlay(Capsule().strokeBorder(Holo.hsl(217, 85, 62).opacity(0.5), lineWidth: 1))
-                }.buttonStyle(.plain)
-            }
-            let existingCount = existing?.photos?.count ?? 0
-            if newPhotos.isEmpty && existingCount == 0 {
-                Text("Aggiungi foto dell'immobile (JPG, PNG).").font(.system(size: 10.5)).foregroundStyle(Holo.labelDim)
-            } else {
-                Text("\(existingCount) già caricate · \(newPhotos.count) nuove da caricare")
-                    .font(.system(size: 10.5)).foregroundStyle(Holo.subDim)
-            }
-        }
-    }
-    // ── Visibilità sui siti: associa la proprietà a uno o più progetti e
-    //    scegli se pubblicarla sul relativo sito ──
-    private var visibilitaSiti: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("VISIBILITÀ SUI SITI").font(.system(size: 9.5, weight: .heavy)).tracking(1.5)
-                .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.65))
-            Text("Seleziona i progetti in cui mostrare la proprietà e attiva «Rendi visibile» per pubblicarla sul relativo sito.")
-                .font(.system(size: 10.5)).foregroundStyle(Holo.labelDim)
-            if projects.isEmpty {
-                Text("Caricamento progetti…").font(.system(size: 11)).foregroundStyle(Holo.subDim)
-            } else {
-                VStack(spacing: 6) { ForEach(projects) { siteRow($0) } }
-            }
-        }
-    }
-
-    private func siteRow(_ p: Project) -> some View {
-        let associated = visibility[p.slug] != nil
-        let visible = visibility[p.slug] == true
-        return HStack(spacing: 10) {
-            Button {
-                if associated { visibility[p.slug] = nil } else { visibility[p.slug] = false }
-            } label: {
-                Image(systemName: associated ? "checkmark.square.fill" : "square")
-                    .font(.system(size: 15)).foregroundStyle(associated ? Holo.hsl(217, 85, 64) : Csb.secFg)
-            }.buttonStyle(.plain)
-
-            Text(p.name).font(.system(size: 12.5, weight: .medium)).foregroundStyle(Holo.text)
-            Spacer(minLength: 0)
-
-            Button {
-                guard associated else { return }
-                visibility[p.slug] = !visible
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: visible ? "eye.fill" : "eye.slash").font(.system(size: 10))
-                    Text(visible ? "Visibile sul sito" : "Rendi visibile").font(.system(size: 10.5, weight: .semibold))
-                }
-                .foregroundStyle(visible ? Holo.hsl(145, 72, 60) : Csb.secFg)
-                .padding(.horizontal, 10).padding(.vertical, 5)
-                .background(Capsule().fill(visible ? Holo.hsl(145, 60, 45).opacity(0.18) : Color.white.opacity(0.05)))
-                .overlay(Capsule().strokeBorder(visible ? Holo.hsl(145, 60, 55).opacity(0.5) : Color.white.opacity(0.1), lineWidth: 1))
-                .opacity(associated ? 1 : 0.35)
-            }.buttonStyle(.plain).disabled(!associated)
-        }
-        .padding(.horizontal, 10).padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 9).fill(associated ? Color.white.opacity(0.05) : Color.white.opacity(0.02)))
-        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
-    }
-
-    private func pickPhotos() {
-        let p = NSOpenPanel()
-        p.allowedContentTypes = [.jpeg, .png, .image]
-        p.allowsMultipleSelection = true
-        p.canChooseDirectories = false
-        if p.runModal() == .OK { newPhotos.append(contentsOf: p.urls.filter { !newPhotos.contains($0) }) }
-    }
-
-    private func prefill() {
-        guard let e = existing else { return }
+    init() {}
+    init(_ e: Proprieta) {
         title = e.title; reference = e.reference ?? ""; address = e.address ?? ""
         zone = e.zone ?? ""; city = e.city ?? ""; category = e.category ?? ""
         listingType = e.listing_type ?? ""; propertyType = e.property_type ?? ""
         bedrooms = e.bedrooms.map(String.init) ?? ""; bathrooms = e.bathrooms.map(String.init) ?? ""
         sqm = e.size_sqm.map(String.init) ?? ""; price = e.price.map(String.init) ?? ""
+        priceRent = e.price_rent.map(String.init) ?? ""
         status = .from(e.status); notes = e.notes ?? ""
-        visibility = e.site_visibility ?? [:]
+        photos = e.photos ?? []; visibility = e.site_visibility ?? [:]
     }
-    private func save() async {
-        saving = true
-        func s(_ v: String) -> String? { let t = v.trimmingCharacters(in: .whitespaces); return t.isEmpty ? nil : t }
-        let body: [String: Any?] = [
+
+    var isValid: Bool { !title.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    private func s(_ v: String) -> String? {
+        let t = v.trimmingCharacters(in: .whitespacesAndNewlines); return t.isEmpty ? nil : t
+    }
+    func fields() -> [String: Any?] {
+        [
             "title": title.trimmingCharacters(in: .whitespaces), "reference": s(reference),
             "address": s(address), "zone": s(zone), "city": s(city),
             "category": s(category), "listing_type": s(listingType), "property_type": s(propertyType),
             "bedrooms": Int(bedrooms), "bathrooms": Int(bathrooms), "size_sqm": Int(sqm),
-            "price": Int(price), "status": status.rawValue, "notes": s(notes),
-            "site_visibility": visibility,
+            "price": Int(price), "price_rent": Int(priceRent), "status": status.rawValue,
+            "notes": s(notes), "site_visibility": visibility,
         ]
-        do {
-            let propId: String
-            if let e = existing { try await HubAPI.updateProprieta(id: e.id, fields: body); propId = e.id }
-            else { propId = try await HubAPI.createProprieta(body).id }
-            if !newPhotos.isEmpty {
-                var paths = existing?.photos ?? []
-                for url in newPhotos {
-                    if let data = try? Data(contentsOf: url) {
-                        let p = try await HubAPI.uploadProprietaPhoto(propId: propId, data: data, ext: url.pathExtension.lowercased())
-                        paths.append(p)
-                    }
-                }
-                try await HubAPI.updateProprieta(id: propId, fields: ["photos": paths])
+    }
+    // indirizzo cambiato → le coordinate salvate non valgono più (si rigeocodifica)
+    func addressChanged(from e: Proprieta) -> Bool {
+        s(address) != e.address || s(zone) != e.zone || s(city) != e.city
+    }
+}
+
+
+extension String { func ifEmpty(_ f: String) -> String { isEmpty ? f : self } }
+
+// ── Campi inline (stile HoloField, senza etichetta: sta nella colonna a sinistra)
+struct InlineField: View {
+    var placeholder: String = ""
+    @Binding var text: String
+    var font: Font = .system(size: 13)
+    var multiline: Bool = false
+
+    var body: some View {
+        Group {
+            if multiline {
+                TextField(placeholder, text: $text, axis: .vertical).lineLimit(3...16)
+            } else {
+                TextField(placeholder, text: $text)
             }
-            await onSaved(); dismiss()
-        } catch { saving = false }
+        }
+        .textFieldStyle(.plain).font(font).foregroundStyle(Color(hex: 0xe8f2ff))
+        .padding(.horizontal, 10).padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color(red: 10/255, green: 16/255, blue: 34/255).opacity(0.8)))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color(red: 130/255, green: 180/255, blue: 1).opacity(0.32), lineWidth: 1))
+    }
+}
+
+struct InlinePicker: View {
+    let opts: [(String, String)]
+    let sel: String
+    let set: (String) -> Void
+
+    var body: some View {
+        Menu {
+            ForEach(opts, id: \.0) { o in Button(o.1) { set(o.0) } }
+        } label: {
+            HStack(spacing: 8) {
+                Text(opts.first { $0.0 == sel }?.1 ?? "—").font(.system(size: 13))
+                    .foregroundStyle(sel.isEmpty ? Holo.labelDim : Color(hex: 0xe8f2ff)).lineLimit(1)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(Holo.labelDim)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .frame(maxWidth: .infinity)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color(red: 10/255, green: 16/255, blue: 34/255).opacity(0.8)))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color(red: 130/255, green: 180/255, blue: 1).opacity(0.32), lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+    }
+}
+
+// ── Miniature foto in modifica (già caricate / in attesa di upload) ──
+private struct ThumbBox<Content: View>: View {
+    let caption: String?
+    /// nil = sola lettura: la crocetta non compare.
+    var onDelete: (() -> Void)?
+    var altezza: CGFloat = 92
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10).fill(Color(hex: 0x0c1220))
+                content
+            }
+            .frame(height: altezza)
+            .frame(maxWidth: .infinity)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+            .overlay(alignment: .bottomLeading) {
+                if let caption {
+                    Text(caption).font(.system(size: 9, weight: .semibold)).foregroundStyle(.white)
+                        .lineLimit(1).padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Capsule().fill(.black.opacity(0.55)))
+                        .padding(6)
+                }
+            }
+
+            if let onDelete {
+                Button(action: onDelete) {
+                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(.white)
+                        .frame(width: 20, height: 20).background(Circle().fill(.black.opacity(0.6)))
+                        .overlay(Circle().strokeBorder(Color.white.opacity(0.25), lineWidth: 1))
+                }
+                .buttonStyle(.plain).padding(5).help("Rimuovi foto")
+            }
+        }
+    }
+}
+
+struct RemotePhotoThumb: View {
+    let path: String
+    var altezza: CGFloat = 92
+    /// nil in sola lettura: la galleria si sfoglia, non si modifica.
+    var onDelete: (() -> Void)?
+    @State private var img: NSImage?
+    @State private var loaded = false
+
+    var body: some View {
+        ThumbBox(caption: nil, onDelete: onDelete, altezza: altezza) {
+            if let img { Image(nsImage: img).resizable().scaledToFill() }
+            else if !loaded { ProgressView().controlSize(.small) }
+            else { Image(systemName: "photo").font(.system(size: 20)).foregroundStyle(Csb.secFg.opacity(0.5)) }
+        }
+        .task {
+            if let d = try? await HubAPI.downloadProprietaPhoto(path: path) { img = NSImage(data: d) }
+            loaded = true
+        }
+    }
+}
+
+struct LocalPhotoThumb: View {
+    let url: URL
+    var altezza: CGFloat = 92
+    let onDelete: () -> Void
+
+    var body: some View {
+        ThumbBox(caption: "Nuova", onDelete: onDelete, altezza: altezza) {
+            if let img = NSImage(contentsOf: url) { Image(nsImage: img).resizable().scaledToFill() }
+            else { Image(systemName: "photo").font(.system(size: 20)).foregroundStyle(Csb.secFg.opacity(0.5)) }
+        }
     }
 }
 
@@ -1192,18 +1028,41 @@ struct PropertyMap: NSViewRepresentable {
     }
 
     func updateNSView(_ mv: MKMapView, context: Context) {
-        mv.removeAnnotations(mv.annotations)
         let anns: [PropAnnotation] = items.compactMap { p in
             guard let la = p.latitude, let lo = p.longitude else { return nil }
             return PropAnnotation(propId: p.id,
                                   coordinate: CLLocationCoordinate2D(latitude: la, longitude: lo),
                                   title: p.title, subtitle: p.price.map { LeadFmt.euro($0) })
         }
+        // ridisegna solo se l'insieme è cambiato (altrimenti si chiuderebbe il callout aperto)
+        let newIds = Set(anns.map(\.propId))
+        guard newIds != context.coordinator.shownIds else { return }
+        context.coordinator.shownIds = newIds
+        mv.removeAnnotations(mv.annotations)
         mv.addAnnotations(anns)
+        // al primo caricamento inquadra tutti i pin; poi rispetta lo zoom dell'utente
+        if !context.coordinator.didFit, !anns.isEmpty {
+            context.coordinator.didFit = true
+            mv.showAnnotations(anns, animated: false)
+        }
     }
 
     final class Coordinator: NSObject, MKMapViewDelegate {
+        var shownIds = Set<String>()
+        var didFit = false
+
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            // gruppo di pin vicini: pastiglia con il conteggio
+            if let cluster = annotation as? MKClusterAnnotation {
+                let id = "propCluster"
+                let v = (mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView)
+                    ?? MKMarkerAnnotationView(annotation: annotation, reuseIdentifier: id)
+                v.annotation = annotation
+                v.markerTintColor = NSColor(red: 0.85, green: 0.47, blue: 0.34, alpha: 1)
+                v.glyphText = "\(cluster.memberAnnotations.count)"
+                v.displayPriority = .required
+                return v
+            }
             guard annotation is PropAnnotation else { return nil }
             let id = "prop"
             let v = (mapView.dequeueReusableAnnotationView(withIdentifier: id) as? MKMarkerAnnotationView)
@@ -1212,6 +1071,9 @@ struct PropertyMap: NSViewRepresentable {
             v.canShowCallout = true
             v.markerTintColor = NSColor(red: 0.85, green: 0.47, blue: 0.34, alpha: 1)
             v.glyphImage = NSImage(systemSymbolName: "house.fill", accessibilityDescription: nil)
+            // senza questi due MapKit nasconde i marker che si sovrappongono
+            v.displayPriority = .required
+            v.clusteringIdentifier = "prop"
             let btn = NSButton(title: "Apri", target: self, action: #selector(openProp(_:)))
             btn.bezelStyle = .rounded
             v.rightCalloutAccessoryView = btn
