@@ -111,11 +111,14 @@ struct WallisDashboard: View {
     @State private var search = ""
     @State private var selected: Solicitud?
     @State private var mostraAgente = false
+    @State private var fonte: LeadSource?
 
     private var filtered: [Solicitud] {
-        guard !search.isEmpty else { return model.items }
-        return model.items.filter {
-            [$0.nombreCompleto, $0.email, $0.telefono ?? "", $0.mensaje ?? ""]
+        model.items.filter { s in
+            let okFonte = fonte == nil || LeadSource.from(s.origen) == fonte!
+            guard okFonte else { return false }
+            guard !search.isEmpty else { return true }
+            return [s.nombreCompleto, s.email, s.telefono ?? "", s.mensaje ?? "", s.notas ?? ""]
                 .joined(separator: " ").localizedCaseInsensitiveContains(search)
         }
     }
@@ -124,13 +127,16 @@ struct WallisDashboard: View {
     private var inLavorazione: Int {
         model.items.filter { let e = SolEstado.from($0.estado); return e != .nuevo && !e.isClosed }.count
     }
+    private var daWhatsApp: Int {
+        model.items.filter { LeadSource.from($0.origen) == .whatsapp }.count
+    }
 
     var body: some View {
         ZStack(alignment: .trailing) {
             VStack(alignment: .leading, spacing: 16) {
                 header
                 statRow
-                searchRow
+                filtri
                 if model.loading {
                     HStack { Spacer(); ProgressView().controlSize(.large); Spacer() }.padding(.top, 40)
                 } else if let err = model.error {
@@ -155,7 +161,10 @@ struct WallisDashboard: View {
                         Task { await model.setEstadoById(sel.id, e) }
                         if var s = selected { s.estado = e.rawValue; selected = s }
                     },
-                    onNotas: { txt in Task { await model.setNotas(sel.id, txt) } },
+                    onNotas: { txt in
+                        Task { await model.setNotas(sel.id, txt) }
+                        if var s = selected { s.notas = txt; selected = s }
+                    },
                     onDelete: {
                         Task { await model.remove(sel) }
                         withAnimation(.easeInOut(duration: 0.2)) { selected = nil }
@@ -196,6 +205,7 @@ struct WallisDashboard: View {
         HStack(spacing: 12) {
             statCard("NUOVE", count(.nuevo), hue: 220, glow: count(.nuevo) > 0)
             statCard("IN LAVORAZIONE", inLavorazione, hue: 190, glow: false)
+            statCard("DA WHATSAPP", daWhatsApp, hue: 140, glow: false)
             statCard("VINTE", count(.vinto), hue: 145, glow: false)
             statCard("TOTALI", model.items.count, hue: 270, glow: false)
         }
@@ -215,21 +225,31 @@ struct WallisDashboard: View {
         }
     }
 
-    private var searchRow: some View {
+    /// Stessa riga filtri della dash GZ Ibiza: chip per fonte + ricerca.
+    private var filtri: some View {
         HStack(spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(Csb.secFg)
-                TextField("Cerca nome, email, messaggio…", text: $search)
-                    .textFieldStyle(.plain).font(.system(size: 12)).frame(width: 240)
-                    .foregroundStyle(Holo.text)
-            }
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.04)))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+            chipFonte(nil, "Tutte")
+            ForEach(LeadSource.allCases) { s in chipFonte(s, s.label) }
             Spacer()
-            Text("Trascina le schede per cambiare stato")
+            Text("Trascina per cambiare stato")
                 .font(.system(size: 10)).foregroundStyle(Holo.labelDim.opacity(0.7))
+            HoloSearchField(placeholder: "Cerca richiesta…", text: $search, width: 170)
         }
+    }
+
+    private func chipFonte(_ s: LeadSource?, _ label: String) -> some View {
+        let on = fonte == s
+        return Button { fonte = on ? nil : s } label: {
+            HStack(spacing: 4) {
+                if let s { Image(systemName: s.icon).font(.system(size: 9)) }
+                Text(label).font(.system(size: 10.5, weight: .semibold))
+            }
+            .foregroundStyle(on ? Color(hex: 0x0b1020) : (s?.color ?? Holo.subDim))
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background(Capsule().fill(on ? (s?.color ?? Holo.hsl(210, 80, 65)) : Color.white.opacity(0.04)))
+            .overlay(Capsule().strokeBorder((s?.color ?? Holo.subDim).opacity(on ? 0 : 0.3), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
     }
 
     private var board: some View {
@@ -375,12 +395,23 @@ private struct SolDrawerView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(s.nombreCompleto.isEmpty ? "—" : s.nombreCompleto)
                         .font(.system(size: 18, weight: .bold)).foregroundStyle(Holo.titleText)
-                    Text(estado.label.uppercased())
-                        .font(.system(size: 9.5, weight: .heavy)).tracking(1.2)
-                        .foregroundStyle(estado.color)
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(Capsule().fill(estado.color.opacity(0.16)))
-                        .overlay(Capsule().strokeBorder(estado.color.opacity(0.5), lineWidth: 1))
+                    HStack(spacing: 6) {
+                        Text(estado.label.uppercased())
+                            .font(.system(size: 9.5, weight: .heavy)).tracking(1.2)
+                            .foregroundStyle(estado.color)
+                            .padding(.horizontal, 8).padding(.vertical, 3)
+                            .background(Capsule().fill(estado.color.opacity(0.16)))
+                            .overlay(Capsule().strokeBorder(estado.color.opacity(0.5), lineWidth: 1))
+                        // fonte: da dove è arrivata la richiesta (sito, WhatsApp, …)
+                        let src = LeadSource.from(s.origen)
+                        HStack(spacing: 3) {
+                            Image(systemName: src.icon).font(.system(size: 8))
+                            Text(src.label).font(.system(size: 9, weight: .heavy))
+                        }
+                        .foregroundStyle(src.color)
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(Capsule().fill(src.color.opacity(0.14)))
+                    }
                 }
                 Spacer()
                 Button(action: onClose) {
@@ -460,8 +491,17 @@ private struct SolDrawerView: View {
 
             // azioni
             HStack(spacing: 10) {
-                if let mail = clean(s.email) {
-                    Link(destination: URL(string: "mailto:\(mail)")!) {
+                if let tel = clean(s.telefono), let url = waURL(tel) {
+                    Link(destination: url) {
+                        Label("WhatsApp", systemImage: "message.fill")
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(Holo.titleText).frame(maxWidth: .infinity).padding(.vertical, 9)
+                            .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.06)))
+                            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+                    }.buttonStyle(.plain)
+                }
+                if let mail = clean(s.email), let mailURL = URL(string: "mailto:\(mail)") {
+                    Link(destination: mailURL) {
                         Label("Rispondi", systemImage: "arrowshape.turn.up.left.fill")
                             .font(.system(size: 12.5, weight: .semibold))
                             .foregroundStyle(Holo.titleText).frame(maxWidth: .infinity).padding(.vertical, 9)
@@ -500,6 +540,11 @@ private struct SolDrawerView: View {
     private func clean(_ v: String?) -> String? {
         guard let v = v?.trimmingCharacters(in: .whitespacesAndNewlines), !v.isEmpty else { return nil }
         return v
+    }
+    /// wa.me vuole il numero senza + né separatori
+    private func waURL(_ tel: String) -> URL? {
+        let n = tel.filter(\.isNumber)
+        return n.isEmpty ? nil : URL(string: "https://wa.me/\(n)")
     }
 }
 

@@ -273,6 +273,7 @@ create table if not exists public.re_leads (
   notes           text,
   assigned_to     text,
   idealista_ref   text,
+  solicitud_id    uuid,                            -- richiesta del form sito (public.solicitudes_web), 1:1
   last_contact_at timestamptz,
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now()
@@ -280,6 +281,8 @@ create table if not exists public.re_leads (
 create index if not exists re_leads_stage_idx   on public.re_leads using btree (stage);
 create index if not exists re_leads_source_idx  on public.re_leads using btree (source);
 create index if not exists re_leads_created_idx on public.re_leads using btree (created_at desc);
+create unique index if not exists re_leads_solicitud_id_uniq
+  on public.re_leads using btree (solicitud_id) where (solicitud_id is not null);
 
 -- ── proprieta (registro immobili) + storico (una proprietà venduta/affittata più volte nel tempo) ──
 create table if not exists public.proprieta (

@@ -21,7 +21,8 @@ struct RELead: Identifiable, Decodable, Equatable {
     var budget_min: Int?
     var budget_max: Int?
     var bedrooms: Int?
-    var notes: String?
+    var notes: String?              // note interne (drawer, agente)
+    var request_message: String?    // testo scritto dal cliente nel form del sito
     var assigned_to: String?
     var idealista_ref: String?
     var last_contact_at: String?
