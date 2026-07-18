@@ -44,7 +44,10 @@ struct SidebarView: View {
     }
     // tab segmentate top-level: Dash · Code (modalità del click sui progetti) · Clienti
     private var isClienti: Bool {
-        switch state.route { case .clienti, .cliente, .proprieta: return true; default: return false }
+        switch state.route { case .clienti, .cliente: return true; default: return false }
+    }
+    private var isProprieta: Bool {
+        switch state.route { case .proprietaHub, .proprieta: return true; default: return false }
     }
     private var isImpostazioni: Bool { state.route == .impostazioni }
     private var isDash: Bool { !isClienti && !isImpostazioni && state.sidebarMode == .dash }
@@ -83,6 +86,12 @@ struct SidebarView: View {
             // voce Leads: pipeline CRM immobiliare (globale, non legata a un progetto)
             navRow("Leads", icon: "person.crop.rectangle.stack.fill", on: state.route == .leadsHub) {
                 state.route = .leadsHub
+            }
+            .padding(.bottom, 6)
+
+            // voce Proprietà: registro immobili (globale) + visibilità sui siti
+            navRow("Proprietà", icon: "house", on: isProprieta) {
+                state.route = .proprietaHub
             }
             .padding(.bottom, 14)
 

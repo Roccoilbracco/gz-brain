@@ -29,6 +29,7 @@ struct Proprieta: Decodable, Identifiable {
     var latitude: Double?
     var longitude: Double?
     var notes: String?
+    var site_visibility: [String: Bool]?
     let created_at: String?
     var proprieta_storico: [ProprietaStorico]?
 }
@@ -444,7 +445,7 @@ struct ProprietaDetailView: View {
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
-                Button { AppState.shared.clientiTab = .proprieta; AppState.shared.route = .clienti } label: {
+                Button { AppState.shared.route = .proprietaHub } label: {
                     Text("← PROPRIETÀ").font(.system(size: 11)).tracking(1.5)
                         .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.6))
                 }.buttonStyle(.plain)
@@ -617,7 +618,7 @@ struct ProprietaDetailView: View {
     private func delete() {
         Task {
             do { try await HubAPI.deleteProprieta(id: proprietaId)
-                await MainActor.run { AppState.shared.clientiTab = .proprieta; AppState.shared.route = .clienti }
+                await MainActor.run { AppState.shared.route = .proprietaHub }
             } catch let e { await MainActor.run { errorMsg = "Eliminazione fallita: \(e.localizedDescription)" } }
         }
     }
@@ -638,6 +639,9 @@ struct ProprietaFormView: View {
     @State private var price = ""; @State private var status = PropertyStatus.disponibile
     @State private var notes = ""; @State private var saving = false
     @State private var newPhotos: [URL] = []
+    // Visibilità sui siti: slug progetto → visibile. Key presente = associata al progetto.
+    @State private var projects: [Project] = []
+    @State private var visibility: [String: Bool] = [:]
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -663,6 +667,7 @@ struct ProprietaFormView: View {
                     holoPicker("Stato", PropertyStatus.allCases.map { ($0.rawValue, $0.label) }, status.rawValue) { status = .from($0) }
                 }
                 HoloField(label: "Note", text: $notes)
+                visibilitaSiti
                 photoStaging
 
                 HStack(spacing: 10) {
@@ -687,6 +692,7 @@ struct ProprietaFormView: View {
                                    startPoint: .top, endPoint: .bottom))
         .preferredColorScheme(.dark)
         .onAppear(perform: prefill)
+        .task { projects = (try? await HubAPI.listProjects()) ?? [] }
     }
 
     private var photoStaging: some View {
@@ -715,6 +721,56 @@ struct ProprietaFormView: View {
             }
         }
     }
+    // ── Visibilità sui siti: associa la proprietà a uno o più progetti e
+    //    scegli se pubblicarla sul relativo sito ──
+    private var visibilitaSiti: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("VISIBILITÀ SUI SITI").font(.system(size: 9.5, weight: .heavy)).tracking(1.5)
+                .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.65))
+            Text("Seleziona i progetti in cui mostrare la proprietà e attiva «Rendi visibile» per pubblicarla sul relativo sito.")
+                .font(.system(size: 10.5)).foregroundStyle(Holo.labelDim)
+            if projects.isEmpty {
+                Text("Caricamento progetti…").font(.system(size: 11)).foregroundStyle(Holo.subDim)
+            } else {
+                VStack(spacing: 6) { ForEach(projects) { siteRow($0) } }
+            }
+        }
+    }
+
+    private func siteRow(_ p: Project) -> some View {
+        let associated = visibility[p.slug] != nil
+        let visible = visibility[p.slug] == true
+        return HStack(spacing: 10) {
+            Button {
+                if associated { visibility[p.slug] = nil } else { visibility[p.slug] = false }
+            } label: {
+                Image(systemName: associated ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 15)).foregroundStyle(associated ? Holo.hsl(217, 85, 64) : Csb.secFg)
+            }.buttonStyle(.plain)
+
+            Text(p.name).font(.system(size: 12.5, weight: .medium)).foregroundStyle(Holo.text)
+            Spacer(minLength: 0)
+
+            Button {
+                guard associated else { return }
+                visibility[p.slug] = !visible
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: visible ? "eye.fill" : "eye.slash").font(.system(size: 10))
+                    Text(visible ? "Visibile sul sito" : "Rendi visibile").font(.system(size: 10.5, weight: .semibold))
+                }
+                .foregroundStyle(visible ? Holo.hsl(145, 72, 60) : Csb.secFg)
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(Capsule().fill(visible ? Holo.hsl(145, 60, 45).opacity(0.18) : Color.white.opacity(0.05)))
+                .overlay(Capsule().strokeBorder(visible ? Holo.hsl(145, 60, 55).opacity(0.5) : Color.white.opacity(0.1), lineWidth: 1))
+                .opacity(associated ? 1 : 0.35)
+            }.buttonStyle(.plain).disabled(!associated)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 9).fill(associated ? Color.white.opacity(0.05) : Color.white.opacity(0.02)))
+        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+    }
+
     private func pickPhotos() {
         let p = NSOpenPanel()
         p.allowedContentTypes = [.jpeg, .png, .image]
@@ -731,6 +787,7 @@ struct ProprietaFormView: View {
         bedrooms = e.bedrooms.map(String.init) ?? ""; bathrooms = e.bathrooms.map(String.init) ?? ""
         sqm = e.size_sqm.map(String.init) ?? ""; price = e.price.map(String.init) ?? ""
         status = .from(e.status); notes = e.notes ?? ""
+        visibility = e.site_visibility ?? [:]
     }
     private func save() async {
         saving = true
@@ -741,6 +798,7 @@ struct ProprietaFormView: View {
             "category": s(category), "listing_type": s(listingType), "property_type": s(propertyType),
             "bedrooms": Int(bedrooms), "bathrooms": Int(bathrooms), "size_sqm": Int(sqm),
             "price": Int(price), "status": status.rawValue, "notes": s(notes),
+            "site_visibility": visibility,
         ]
         do {
             let propId: String

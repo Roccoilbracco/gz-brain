@@ -38,6 +38,7 @@ enum Route: Equatable {
     case panoramica
     case progetti
     case leadsHub
+    case proprietaHub
     case clienti
     case impostazioni
     case progetto(slug: String, tab: ProjectTab)
