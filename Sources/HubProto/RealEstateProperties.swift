@@ -264,14 +264,16 @@ struct RemoteImageCarousel: View {
     }
 }
 
-// ── Lista proprietà (griglia card + mappa) ───────────────────────────────────
+enum PropViewMode { case lista, griglia, mappa }
+
+// ── Lista proprietà (tabella + griglia card + mappa) ─────────────────────────
 struct ProprietaView: View {
     @State private var items: [Proprieta] = []
     @State private var loading = true
     @State private var errorMsg: String?
     @State private var search = ""
     @State private var showAdd = false
-    @State private var mapMode = false
+    @State private var mode: PropViewMode = .lista
 
     private var filtered: [Proprieta] {
         items.filter { p in
@@ -297,7 +299,7 @@ struct ProprietaView: View {
                     GlassCard { Text("Errore: \(errorMsg)").foregroundStyle(Color(hex: 0xffb3ad)).padding(20) }
                 } else if loading {
                     Text("Caricamento…").font(.system(size: 13)).foregroundStyle(Holo.subDim).padding(.top, 8)
-                } else if mapMode {
+                } else if mode == .mappa {
                     PropertyMap(items: filtered)
                         .frame(height: 560)
                         .clipShape(RoundedRectangle(cornerRadius: 16))
@@ -306,6 +308,8 @@ struct ProprietaView: View {
                     EmptyStateCard(icon: "house", text: search.isEmpty
                         ? "Nessuna proprietà.\nAggiungine una con “+ Aggiungi proprietà”."
                         : "Nessuna proprietà trovata.")
+                } else if mode == .lista {
+                    PropertyTable(items: filtered)
                 } else {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 14)], spacing: 14) {
                         ForEach(filtered) { p in PropertyCard(p: p) }
@@ -321,8 +325,9 @@ struct ProprietaView: View {
 
     private var viewToggle: some View {
         HStack(spacing: 3) {
-            toggleBtn("Griglia", "square.grid.2x2", on: !mapMode) { mapMode = false }
-            toggleBtn("Mappa", "map", on: mapMode) { mapMode = true }
+            toggleBtn("Lista", "list.bullet", on: mode == .lista) { mode = .lista }
+            toggleBtn("Griglia", "square.grid.2x2", on: mode == .griglia) { mode = .griglia }
+            toggleBtn("Mappa", "map", on: mode == .mappa) { mode = .mappa }
         }
         .padding(3)
         .background(RoundedRectangle(cornerRadius: 10).fill(Csb.tabsBg))
@@ -427,6 +432,98 @@ private struct PropertyCard: View {
             .foregroundStyle(Holo.hsl(st.hue, 85, 75))
             .padding(.horizontal, 8).padding(.vertical, 3)
             .overlay(Capsule().strokeBorder(Holo.hsl(st.hue, 80, 60).opacity(0.5), lineWidth: 1))
+    }
+}
+
+// ── Vista tabella (stile listado): righe compatte e ordinate ─────────────────
+private struct PropertyTable: View {
+    let items: [Proprieta]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            ForEach(Array(items.enumerated()), id: \.element.id) { idx, p in
+                PropertyRow(p: p, alt: idx % 2 == 1)
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 13).fill(Color(hex: 0x0e1626).opacity(0.55)))
+        .overlay(RoundedRectangle(cornerRadius: 13).strokeBorder(Holo.cardBorder.opacity(0.6), lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 13))
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            cell("RIF.", 90, .leading)
+            cell("OPERAZIONE", 104, .leading)
+            cell("INDIRIZZO", nil, .leading)
+            cell("PREZZO", 120, .trailing)
+            cell("CAM", 44, .center)
+            cell("M²", 56, .center)
+            cell("STATO", 104, .leading)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(Color.white.opacity(0.03))
+        .overlay(Rectangle().fill(Holo.cardBorder.opacity(0.5)).frame(height: 1), alignment: .bottom)
+    }
+    private func cell(_ t: String, _ w: CGFloat?, _ align: Alignment) -> some View {
+        Text(t).font(.system(size: 9, weight: .heavy)).tracking(1).foregroundStyle(Holo.labelDim)
+            .frame(width: w, alignment: align).frame(maxWidth: w == nil ? .infinity : nil, alignment: align)
+    }
+}
+
+private struct PropertyRow: View {
+    let p: Proprieta
+    let alt: Bool
+    @State private var hover = false
+    private var st: PropertyStatus { .from(p.status) }
+
+    var body: some View {
+        Button { AppState.shared.route = .proprieta(id: p.id) } label: {
+            HStack(spacing: 10) {
+                // Rif.
+                Text(p.reference ?? "—").font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(Holo.subDim).frame(width: 90, alignment: .leading).lineLimit(1)
+                // Operazione + tipo
+                VStack(alignment: .leading, spacing: 2) {
+                    if let op = operationInfo(p.listing_type) {
+                        Text(op.label).font(.system(size: 9.5, weight: .heavy)).tracking(0.4)
+                            .foregroundStyle(Holo.hsl(op.hue, 85, 74))
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Capsule().fill(Holo.hsl(op.hue, 70, 45).opacity(0.18)))
+                    }
+                    if let t = p.property_type { Text(t).font(.system(size: 9.5)).foregroundStyle(Holo.labelDim).lineLimit(1) }
+                }
+                .frame(width: 104, alignment: .leading)
+                // Indirizzo
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(p.title).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Holo.titleText).lineLimit(1)
+                    let loc = [p.zone, p.city].compactMap { $0 }.joined(separator: " · ")
+                    if !loc.isEmpty { Text(loc).font(.system(size: 10.5)).foregroundStyle(Holo.labelDim).lineLimit(1) }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                // Prezzo
+                Text(p.price.map { LeadFmt.euro($0) } ?? "—")
+                    .font(.system(size: 12.5, weight: .bold)).foregroundStyle(Holo.hsl(150, 70, 68))
+                    .frame(width: 120, alignment: .trailing).lineLimit(1)
+                // Camere
+                Text(p.bedrooms.map(String.init) ?? "—").font(.system(size: 12))
+                    .foregroundStyle(Holo.subDim).frame(width: 44, alignment: .center)
+                // m²
+                Text(p.size_sqm.map { "\($0)" } ?? "—").font(.system(size: 12))
+                    .foregroundStyle(Holo.subDim).frame(width: 56, alignment: .center)
+                // Stato
+                Text(st.label).font(.system(size: 9.5, weight: .heavy)).tracking(0.4)
+                    .foregroundStyle(Holo.hsl(st.hue, 85, 75))
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .overlay(Capsule().strokeBorder(Holo.hsl(st.hue, 80, 60).opacity(0.5), lineWidth: 1))
+                    .frame(width: 104, alignment: .leading)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 9)
+            .background(hover ? Color.white.opacity(0.06) : (alt ? Color.white.opacity(0.015) : Color.clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
     }
 }
 
