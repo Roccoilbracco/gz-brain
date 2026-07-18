@@ -25,6 +25,7 @@ struct Proprieta: Decodable, Identifiable {
     var bathrooms: Int?
     var size_sqm: Int?
     var price: Int?
+    var price_rent: Int?   // affitto mensile (per i traspaso: costo traspaso in price + affitto qui)
     var status: String
     var photos: [String]?
     var latitude: Double?
@@ -426,6 +427,8 @@ private struct PropertyCard: View {
                         }
                         if let pr = p.price { Text(LeadFmt.euro(pr)).font(.system(size: 14, weight: .bold))
                             .foregroundStyle(Holo.hsl(150, 70, 68)) }
+                        if let rent = p.price_rent { Text(LeadFmt.euro(rent) + "/mes").font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Holo.hsl(210, 78, 70)) }
                         Spacer()
                         if storicoCount > 0 {
                             HStack(spacing: 4) {
@@ -474,8 +477,9 @@ private struct PropertyTable: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            cell("RIF.", 90, .leading)
-            cell("OPERAZIONE", 104, .leading)
+            cell("", 52, .leading)          // foto
+            cell("RIF.", 78, .leading)
+            cell("OPERAZIONE", 158, .leading)
             cell("INDIRIZZO", nil, .leading)
             cell("PREZZO", 120, .trailing)
             cell("CAM", 44, .center)
@@ -498,23 +502,43 @@ private struct PropertyRow: View {
     @State private var hover = false
     private var st: PropertyStatus { .from(p.status) }
 
+    @ViewBuilder private var thumbnail: some View {
+        if let first = p.photos?.first {
+            RemoteImageCarousel(paths: [first], height: 40, corner: 8)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+        } else {
+            RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.05))
+                .overlay(Image(systemName: "photo").font(.system(size: 13)).foregroundStyle(Holo.labelDim.opacity(0.55)))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+        }
+    }
+
     var body: some View {
         Button { AppState.shared.route = .proprieta(id: p.id) } label: {
             HStack(spacing: 10) {
+                // Foto (placeholder finché non ci sono foto)
+                thumbnail.frame(width: 52, height: 40)
                 // Rif.
                 Text(p.reference ?? "—").font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(Holo.subDim).frame(width: 90, alignment: .leading).lineLimit(1)
-                // Operazione + tipo
-                VStack(alignment: .leading, spacing: 2) {
+                    .foregroundStyle(Holo.subDim).frame(width: 78, alignment: .leading).lineLimit(1)
+                // Operazione + tipo (badge inline sulla stessa riga)
+                HStack(spacing: 5) {
                     if let op = operationInfo(p.listing_type) {
                         Text(op.label).font(.system(size: 9.5, weight: .heavy)).tracking(0.4)
                             .foregroundStyle(Holo.hsl(op.hue, 85, 74))
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Capsule().fill(Holo.hsl(op.hue, 70, 45).opacity(0.18)))
+                            .padding(.horizontal, 7).padding(.vertical, 3)
+                            .background(Capsule().fill(Holo.hsl(op.hue, 70, 45).opacity(0.2)))
                     }
-                    if let t = p.property_type { Text(t).font(.system(size: 9.5)).foregroundStyle(Holo.labelDim).lineLimit(1) }
+                    if let t = p.property_type {
+                        Text(t).font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(Holo.subDim)
+                            .padding(.horizontal, 6).padding(.vertical, 3)
+                            .background(Capsule().fill(Color.white.opacity(0.06)))
+                            .overlay(Capsule().strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+                            .lineLimit(1)
+                    }
                 }
-                .frame(width: 104, alignment: .leading)
+                .frame(width: 158, alignment: .leading)
                 // Indirizzo
                 VStack(alignment: .leading, spacing: 1) {
                     Text(p.title).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Holo.titleText).lineLimit(1)
@@ -522,10 +546,16 @@ private struct PropertyRow: View {
                     if !loc.isEmpty { Text(loc).font(.system(size: 10.5)).foregroundStyle(Holo.labelDim).lineLimit(1) }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                // Prezzo
-                Text(p.price.map { LeadFmt.euro($0) } ?? "—")
-                    .font(.system(size: 12.5, weight: .bold)).foregroundStyle(Holo.hsl(150, 70, 68))
-                    .frame(width: 120, alignment: .trailing).lineLimit(1)
+                // Prezzo (per i traspaso: costo traspaso + affitto/mes)
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(p.price.map { LeadFmt.euro($0) } ?? "—")
+                        .font(.system(size: 12.5, weight: .bold)).foregroundStyle(Holo.hsl(150, 70, 68)).lineLimit(1)
+                    if let rent = p.price_rent {
+                        Text(LeadFmt.euro(rent) + "/mes").font(.system(size: 9.5, weight: .semibold))
+                            .foregroundStyle(Holo.hsl(210, 78, 70)).lineLimit(1)
+                    }
+                }
+                .frame(width: 120, alignment: .trailing)
                 // Camere
                 Text(p.bedrooms.map(String.init) ?? "—").font(.system(size: 12))
                     .foregroundStyle(Holo.subDim).frame(width: 44, alignment: .center)
