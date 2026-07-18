@@ -1,5 +1,6 @@
 import SwiftUI
 import MapKit
+import CoreLocation
 import AppKit
 import UniformTypeIdentifiers
 
@@ -319,7 +320,7 @@ struct ProprietaView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(EdgeInsets(top: 54, leading: 30, bottom: 34, trailing: 30))
         }
-        .task { await load() }
+        .task { await load(); await geocodeMissing() }
         .sheet(isPresented: $showAdd) { ProprietaFormView(existing: nil) { await load() } }
     }
 
@@ -349,6 +350,26 @@ struct ProprietaView: View {
         loading = true; defer { loading = false }
         do { items = try await HubAPI.listProprieta() }
         catch let e { errorMsg = e.localizedDescription }
+    }
+
+    // Geocodifica in background gli indirizzi senza coordinate → salva lat/lng,
+    // così i pin appaiono sulla mappa. Apple throttla: una richiesta ~al secondo.
+    private func geocodeMissing() async {
+        let geocoder = CLGeocoder()
+        for p in items where (p.latitude == nil || p.longitude == nil) {
+            let q = [p.address, p.zone, p.city, "Islas Baleares, España"]
+                .compactMap { $0 }.map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }.joined(separator: ", ")
+            guard q.count > 6 else { continue }
+            if let loc = try? await geocoder.geocodeAddressString(q).first?.location {
+                let lat = loc.coordinate.latitude, lng = loc.coordinate.longitude
+                try? await HubAPI.updateProprieta(id: p.id, fields: ["latitude": lat, "longitude": lng])
+                if let i = items.firstIndex(where: { $0.id == p.id }) {
+                    items[i].latitude = lat; items[i].longitude = lng
+                }
+            }
+            try? await Task.sleep(nanoseconds: 1_100_000_000)
+        }
     }
 }
 
