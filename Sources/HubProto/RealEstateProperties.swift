@@ -813,6 +813,10 @@ struct StoricoFormView: View {
     @State private var date = Date()
     @State private var price = ""; @State private var counterparty = ""; @State private var agent = ""; @State private var notes = ""
     @State private var saving = false
+    // Controparte collegata all'anagrafica: senza questo legame la transazione
+    // non comparirebbe nella scheda del contatto, resterebbe solo testo libero.
+    @State private var contatti: [Contatto] = []
+    @State private var clienteId: String?
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -832,6 +836,33 @@ struct StoricoFormView: View {
                     HoloField(label: "Controparte", text: $counterparty, placeholder: "Acquirente / inquilino")
                     HoloField(label: "Agente", text: $agent, placeholder: "Giorgio")
                 }
+                // Collegando un contatto, l'operazione compare nel suo storico.
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("CONTATTO IN RUBRICA").font(.system(size: 9.5, weight: .heavy)).tracking(1.5)
+                        .foregroundStyle(Color(red: 165/255, green: 200/255, blue: 250/255).opacity(0.65))
+                    Menu {
+                        Button("Nessuno") { clienteId = nil }
+                        ForEach(contatti) { c in
+                            Button(c.ragione_sociale) {
+                                clienteId = c.id
+                                if counterparty.trimmingCharacters(in: .whitespaces).isEmpty {
+                                    counterparty = c.ragione_sociale
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Text(contatti.first { $0.id == clienteId }?.ragione_sociale ?? "Nessuno")
+                                .font(.system(size: 13)).foregroundStyle(Holo.text).lineLimit(1)
+                            Spacer()
+                            Image(systemName: "chevron.up.chevron.down").font(.system(size: 9)).foregroundStyle(Csb.secFg)
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 7)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.05)))
+                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+                    }
+                    .menuStyle(.borderlessButton)
+                }
                 HoloField(label: "Note", text: $notes)
 
                 HStack(spacing: 10) {
@@ -849,10 +880,11 @@ struct StoricoFormView: View {
             }
             .padding(24)
         }
-        .frame(width: 500, height: 470)
+        .frame(width: 500, height: 540)
         .background(LinearGradient(colors: [Color(red: 16/255, green: 24/255, blue: 48/255), Color(red: 8/255, green: 12/255, blue: 26/255)],
                                    startPoint: .top, endPoint: .bottom))
         .preferredColorScheme(.dark)
+        .task { contatti = (try? await HubAPI.listContatti()) ?? [] }
     }
 
     private func save() async {
@@ -862,6 +894,7 @@ struct StoricoFormView: View {
         let body: [String: Any?] = [
             "proprieta_id": proprietaId, "event_type": event.rawValue, "event_date": f.string(from: date),
             "price": Int(price), "counterparty": s(counterparty), "agent": s(agent), "notes": s(notes),
+            "cliente_id": clienteId,
         ]
         do { try await HubAPI.addStorico(body); await onSaved(); dismiss() }
         catch { saving = false }

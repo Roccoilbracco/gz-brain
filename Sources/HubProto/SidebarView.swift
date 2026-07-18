@@ -83,6 +83,12 @@ struct SidebarView: View {
             .background(RoundedRectangle(cornerRadius: 11).fill(Csb.tabsBg))
             .padding(.bottom, 12)
 
+            // voce Contatti: anagrafica clienti e potenziali clienti, con ricorrenze
+            navRow("Contatti", icon: "person.crop.circle", on: state.route == .contatti) {
+                state.route = .contatti
+            }
+            .padding(.bottom, 6)
+
             // voce Proprietà: registro immobili (globale) + visibilità sui siti
             navRow("Proprietà", icon: "house", on: isProprieta) {
                 state.route = .proprietaHub

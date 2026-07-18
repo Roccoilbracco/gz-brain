@@ -37,6 +37,7 @@ enum ClientiTab: String, CaseIterable { case clienti, proprieta, fatture, spese,
 enum Route: Equatable {
     case panoramica
     case progetti
+    case contatti               // clienti, potenziali clienti, ricorrenze
     case proprietaHub
     case calendario             // disponibilità visite + appuntamenti fissati
     case clienti

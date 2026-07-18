@@ -11,6 +11,8 @@ struct MainRouter: View {
             PanoramicaView(model: model)
         case .progetti:
             ProgettiView(model: model)
+        case .contatti:
+            ContattiView()
         case .proprietaHub:
             ProprietaView()
         case .calendario:
