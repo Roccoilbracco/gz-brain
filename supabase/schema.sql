@@ -334,7 +334,7 @@ create index if not exists proprieta_documenti_prop_idx on public.proprieta_docu
 -- ── prenotazioni (Camere PSE: pannello controllo camere/pagamenti) ─────────
 create table if not exists public.prenotazioni (
   id            uuid primary key default gen_random_uuid(),
-  struttura     text not null default 'es-vedra',   -- es-vedra | via-romagna
+  struttura     text not null default 'via-po',     -- via-po | via-romagna
   camera        text,
   guest_name    text not null,
   guest_phone   text,

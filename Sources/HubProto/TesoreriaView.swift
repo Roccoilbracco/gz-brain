@@ -176,7 +176,7 @@ struct TesoreriaView: View {
             HStack(spacing: 12) {
                 PSESegmented(items: TesSub.allCases.map { ($0, $0.rawValue) }, selection: $sub)
                 if sub == .movimenti {
-                    PSESegmented(items: [(nil, "Tutte"), (.esVedra, "Es Vedra"), (.viaRomagna, "Via Romagna")] as [(Struttura?, String)], selection: $movStrut)
+                    PSESegmented(items: [(nil, "Tutte"), (.viaPo, "Via Po"), (.viaRomagna, "Via Romagna")] as [(Struttura?, String)], selection: $movStrut)
                     meseMenu
                 }
                 Spacer()
@@ -223,7 +223,7 @@ struct TesoreriaView: View {
             }
             Text("PER CASA — entrate, spese e utile registrati").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint).padding(.top, 6)
             HStack(spacing: 12) {
-                casaCard(.esVedra)
+                casaCard(.viaPo)
                 casaCard(.viaRomagna)
             }
             Text("SERVIZI").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint).padding(.top, 6)
@@ -319,7 +319,7 @@ struct TesoreriaView: View {
     private func movRow(_ m: TesMovimento) -> some View {
         let entrata = m.tipo == "entrata"
         let contoNome = model.conti.first { $0.id == m.conto_id }?.nome ?? (m.conto_id ?? "—")
-        let casa = m.struttura == "es-vedra" ? "Es Vedra" : m.struttura == "via-romagna" ? "Via Romagna" : "—"
+        let casa = m.struttura == "via-po" ? "Via Po" : m.struttura == "via-romagna" ? "Via Romagna" : "—"
         return Button { editing = m; showForm = true } label: {
             HStack(spacing: 12) {
                 Text(tesPrettyStr(m.data)).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim).frame(width: 62, alignment: .leading).monospacedDigit()
@@ -409,7 +409,7 @@ private struct TesMovimentoForm: View {
                 }
                 HStack(spacing: 12) {
                     pick("Modalità", modalitaOpts.map { ($0, $0.capitalized) }, modalita) { modalita = $0 }
-                    pick("Struttura", [("—", "Entrambe"), ("es-vedra", "Es Vedra"), ("via-romagna", "Via Romagna")], struttura) { struttura = $0 }
+                    pick("Struttura", [("—", "Entrambe"), ("via-po", "Via Po"), ("via-romagna", "Via Romagna")], struttura) { struttura = $0 }
                 }
                 HoloField(label: "Categoria", text: $categoria, placeholder: "affitto, spesa, pulizia…")
                 HoloField(label: "Descrizione", text: $descrizione, placeholder: "Es. Stanza Camino — Federica")

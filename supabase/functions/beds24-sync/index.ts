@@ -31,9 +31,9 @@ const clean = (v: unknown): string | null => {
   return s ? s : null;
 };
 function strutturaFor(propName: string): string {
-  return /romagna/i.test(propName) ? "via-romagna" : "es-vedra";
+  return /romagna/i.test(propName) ? "via-romagna" : "via-po";
 }
-// nomi camera OTA (Booking) → nomi reali del reticolo gestionale (Es Vedra)
+// nomi camera OTA (Booking) → nomi reali del reticolo gestionale (Via Po)
 function normalizeRoom(name: string | null): string | null {
   if (!name) return name;
   const n = name.toLowerCase();

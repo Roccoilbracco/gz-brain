@@ -21,7 +21,11 @@ const json = (body: unknown, status = 200) =>
     headers: { ...CORS, "content-type": "application/json" },
   });
 
-const STRUTTURE = ["es-vedra", "via-romagna"];
+const STRUTTURE = ["via-po", "via-romagna"];
+// "es-vedra" è il vecchio slug di Via Po. Il sito è un export statico: un browser
+// con il JS ancora in cache può continuare a inviarlo per un po', quindi lo
+// accettiamo e lo normalizziamo invece di rifiutare la prenotazione.
+const LEGACY_SLUG: Record<string, string> = { "es-vedra": "via-po" };
 
 function clean(v: unknown, max: number): string | null {
   if (typeof v !== "string") return null;
@@ -44,7 +48,8 @@ Deno.serve(async (req) => {
   // honeypot anti-spam: se il campo nascosto è pieno è un bot → fingi successo
   if (clean(body.company, 200)) return json({ ok: true });
 
-  const struttura = clean(body.struttura, 40);
+  let struttura = clean(body.struttura, 40);
+  if (struttura && LEGACY_SLUG[struttura]) struttura = LEGACY_SLUG[struttura];
   const camera = clean(body.camera, 80);
   const guest_name = clean(body.guest_name, 120);
   const guest_phone = clean(body.guest_phone, 60);

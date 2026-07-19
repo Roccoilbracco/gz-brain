@@ -1,7 +1,7 @@
 import SwiftUI
 
 // ============================================================================
-// Camere PSE — pannello controllo prenotazioni (Es Vedra · Via Romagna)
+// Camere PSE — pannello controllo prenotazioni (Via Po · Via Romagna)
 // Stato prenotazioni, pagamenti, check-in/out. Dati demo ora; poi integrazione
 // con le richieste dal sito camerepse.it.
 // ============================================================================
@@ -51,17 +51,22 @@ enum BookingStatus: String, CaseIterable, Identifiable {
 }
 
 enum Struttura: String, CaseIterable, Identifiable {
-    case esVedra = "es-vedra", viaRomagna = "via-romagna"
+    case viaPo = "via-po", viaRomagna = "via-romagna"
     var id: String { rawValue }
-    var label: String { self == .esVedra ? "Es Vedra" : "Via Romagna" }
-    var address: String { self == .esVedra ? "Via Po 13" : "Via Romagna 41" }
-    var hue: Double { self == .esVedra ? 200 : 280 }
+    var label: String { self == .viaPo ? "Via Po" : "Via Romagna" }
+    var address: String { self == .viaPo ? "Via Po 13" : "Via Romagna 41" }
+    var hue: Double { self == .viaPo ? 200 : 280 }
     var rooms: [String] {
-        self == .esVedra
+        self == .viaPo
         ? ["Stanza 1 · Camera Queen", "Stanza 2 · Standard", "Stanza 3 · Camera King", "Stanza 4 · Ampia Matrimoniale", "Intera struttura"]
         : ["Doppia senza bagno", "Balcone senza bagno", "Stanza Camino", "Balcone con bagno (ragazzi)", "Mansarda", "Intero appartamento"]
     }
-    static func from(_ s: String?) -> Struttura { Struttura(rawValue: s ?? "") ?? .esVedra }
+    // "es-vedra" è il vecchio slug di Via Po: i dati sono stati migrati, ma lo
+    // riconosciamo comunque per non mostrare come Via Po una riga sconosciuta.
+    static func from(_ s: String?) -> Struttura {
+        if s == "es-vedra" { return .viaPo }
+        return Struttura(rawValue: s ?? "") ?? .viaPo
+    }
 }
 
 let bookingSources = ["sito", "whatsapp", "booking", "airbnb", "telefono", "email"]
@@ -199,7 +204,7 @@ struct CamerePSEDashboard: View {
         }.count
     }
     private var capacity: Int {
-        switch strutturaFilter { case .esVedra: return 4; case .viaRomagna: return 5; case nil: return 9 }
+        switch strutturaFilter { case .viaPo: return 4; case .viaRomagna: return 5; case nil: return 9 }
     }
     // prenotazioni rilevanti per il giorno (arrivo, in casa, partenza)
     private func bookingsOn(_ d: Date) -> [Prenotazione] {
@@ -348,7 +353,7 @@ struct CamerePSEDashboard: View {
 
     private var strutturaChips: some View {
         HStack {
-            PSESegmented(items: [(nil, "Tutte"), (.esVedra, "Es Vedra"), (.viaRomagna, "Via Romagna")] as [(Struttura?, String)], selection: $strutturaFilter)
+            PSESegmented(items: [(nil, "Tutte"), (.viaPo, "Via Po"), (.viaRomagna, "Via Romagna")] as [(Struttura?, String)], selection: $strutturaFilter)
             Spacer()
         }
     }
@@ -622,7 +627,7 @@ struct CamerePSEDashboard: View {
         guard paidNow >= b.amount_cents, b.amount_cents > 0, n > 0 else { return }
         let fields: [String: Any?] = [
             "ext_key": key, "conto_id": "cassa", "data": String((b.checkin ?? "").prefix(10)),
-            "tipo": "uscita", "categoria": "colazioni", "modalita": "contante", "struttura": "es-vedra",
+            "tipo": "uscita", "categoria": "colazioni", "modalita": "contante", "struttura": "via-po",
             "descrizione": "Colazione bar — \(b.guest_name) (\(n)n × \(g)p)",
             "importo_cents": 350 * g * n,
         ]
@@ -773,7 +778,7 @@ private struct BookingForm: View {
     let onSaved: () async -> Void
     @Environment(\.dismiss) private var dismiss
 
-    @State private var struttura = Struttura.esVedra
+    @State private var struttura = Struttura.viaPo
     @State private var camera = ""
     @State private var name = ""; @State private var phone = ""; @State private var email = ""
     @State private var checkin = Date()
