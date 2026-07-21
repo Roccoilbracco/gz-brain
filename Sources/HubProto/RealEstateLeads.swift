@@ -27,6 +27,12 @@ struct RELead: Identifiable, Decodable, Equatable {
     var idealista_ref: String?
     var last_contact_at: String?
     var created_at: String?
+    // Campi specifici della pipeline proprietari/inquilini (nil per i lead)
+    var property_offered: String?   // che immobile offre
+    var size_sqm: Int?              // m²
+    var has_license: Bool?          // ha licenza
+    var license_type: String?       // tipo di licenza
+    var three_phase: Bool?          // installazione trifase
 }
 
 // ── Fonti richiesta ──────────────────────────────────────────────────────────
@@ -156,6 +162,88 @@ extension HubAPI {
     static func deleteReLead(id: String) async throws {
         try await sb.mutate("re_leads?id=eq.\(id)", method: "DELETE")
     }
+
+    // ── Propietarios/Inquilinos: pipeline gemella su re_owners ────────────────
+    // Stesso modello RELead, tabella diversa. Le funzioni accettano `kind` così
+    // board, drawer e form restano condivisi tra le due pipeline.
+    static func listRePipeline(_ kind: PipelineKind) async throws -> [RELead] {
+        try await sb.fetch("\(kind.table)?select=*&order=created_at.desc&limit=2000")
+    }
+    @discardableResult
+    static func createRePipeline(_ kind: PipelineKind, _ fields: [String: Any?]) async throws -> RELead {
+        try await sb.insertReturning(kind.table, body: fields)
+    }
+    static func updateRePipeline(_ kind: PipelineKind, id: String, fields: [String: Any?]) async throws {
+        var body = fields; body["updated_at"] = isoNowString()
+        try await sb.mutate("\(kind.table)?id=eq.\(id)", method: "PATCH", body: body)
+    }
+    static func setRePipelineStage(_ kind: PipelineKind, id: String, stage: String) async throws {
+        try await sb.mutate("\(kind.table)?id=eq.\(id)", method: "PATCH",
+                            body: ["stage": stage, "last_contact_at": isoNowString(), "updated_at": isoNowString()])
+    }
+    static func deleteRePipeline(_ kind: PipelineKind, id: String) async throws {
+        try await sb.mutate("\(kind.table)?id=eq.\(id)", method: "DELETE")
+    }
+}
+
+// Le due pipeline immobiliari: chi cerca casa (leads) e chi affida immobili in gestione (owners).
+enum PipelineKind: String, CaseIterable, Identifiable {
+    case leads, owners
+    var id: String { rawValue }
+    var table: String { self == .leads ? "re_leads" : "re_owners" }
+    var tabLabel: String { self == .leads ? "Leads" : "Propietari / Inquilini" }
+    var singular: String { self == .leads ? "lead" : "proprietario" }
+    var newLabel: String { self == .leads ? "Nuovo lead" : "Nuovo proprietario" }
+    var formTitle: String { self == .leads ? "LEAD" : "PROPRIETARIO / INQUILINO" }
+    var searchPlaceholder: String { self == .leads ? "Cerca lead…" : "Cerca proprietario…" }
+    var emptyColumn: String { self == .leads ? "Nessun lead" : "Nessuno" }
+
+    /// Le colonne della board: i lead usano gli stadi del compratore, i proprietari
+    /// il ciclo di vita dell'immobile affidato (offerto → in cartella → in gestione → chiuso).
+    var stages: [PipelineStage] {
+        switch self {
+        case .leads:
+            return LeadStage.allCases.map { PipelineStage(id: $0.rawValue, label: $0.label, color: $0.color, isClosed: $0.isClosed) }
+        case .owners:
+            return OwnerStage.allCases.map { PipelineStage(id: $0.rawValue, label: $0.label, color: $0.color, isClosed: $0.isClosed) }
+        }
+    }
+    func stage(_ id: String) -> PipelineStage { stages.first { $0.id == id } ?? stages[0] }
+    var wonStageId: String { self == .leads ? "vinto" : "concluso" }
+}
+
+// Descrittore di colonna, condiviso tra le due pipeline (id = valore salvato in `stage`).
+struct PipelineStage: Identifiable, Equatable {
+    let id: String
+    let label: String
+    let color: Color
+    let isClosed: Bool
+}
+
+// Ciclo di vita del proprietario/inquilino che offre un immobile in gestione.
+enum OwnerStage: String, CaseIterable, Identifiable {
+    case nuovo, da_valutare, disponibile, in_gestione, concluso, archiviato
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .nuovo:       return "Nuovo"
+        case .da_valutare: return "Da valutare"
+        case .disponibile: return "Disponibile"
+        case .in_gestione: return "In gestione"
+        case .concluso:    return "Concluso"
+        case .archiviato:  return "Archiviato"
+        }
+    }
+    /// Tinte sobrie: blu = nuovo, corso = in lavorazione, verde = concluso, rosso = archiviato.
+    var color: Color {
+        switch self {
+        case .nuovo:       return UI.accent
+        case .da_valutare, .disponibile, .in_gestione: return UI.tint(.corso)
+        case .concluso:    return UI.tint(.ok)
+        case .archiviato:  return UI.tint(.stop)
+        }
+    }
+    var isClosed: Bool { self == .concluso || self == .archiviato }
 }
 
 // ── Formattazione budget ─────────────────────────────────────────────────────
@@ -192,6 +280,7 @@ enum LeadFmt {
 // ── Form nuovo / modifica lead ───────────────────────────────────────────────
 struct LeadFormView: View {
     let existing: RELead?
+    var kind: PipelineKind = .leads
     let onSaved: () async -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -205,15 +294,17 @@ struct LeadFormView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(existing == nil ? "NUOVO LEAD" : "MODIFICA LEAD")
+            Text((existing == nil ? "NUOVO " : "MODIFICA ") + kind.formTitle)
                 .font(.system(size: 15, weight: .heavy)).tracking(3).foregroundStyle(Holo.titleText)
                 .padding(EdgeInsets(top: 22, leading: 24, bottom: 14, trailing: 24))
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 14) {
                     field("Nome / contatto", $name, "Es. Marco Rossi")
                     HStack(spacing: 12) { field("Telefono", $phone, "+34 …"); field("Email", $email, "nome@email.com") }
-                    // fonte
-                    picker("Fonte", LeadSource.attive.map { ($0.rawValue, $0.label) }, source.rawValue) { source = .from($0) }
+                    // fonte (solo per i lead: chi affida immobili arriva sempre in diretto)
+                    if kind == .leads {
+                        picker("Fonte", LeadSource.attive.map { ($0.rawValue, $0.label) }, source.rawValue) { source = .from($0) }
+                    }
                     picker("Stato pipeline", LeadStage.allCases.map { ($0.rawValue, $0.label) }, stage.rawValue) { stage = .from($0) }
                     HStack(spacing: 12) {
                         picker("Interesse", [("", "—")] + LeadInterest.allCases.map { ($0.rawValue, $0.label) }, interest) { interest = $0 }
@@ -265,14 +356,16 @@ struct LeadFormView: View {
         func s(_ v: String) -> String? { let t = v.trimmingCharacters(in: .whitespaces); return t.isEmpty ? nil : t }
         let body: [String: Any?] = [
             "name": name.trimmingCharacters(in: .whitespaces),
-            "phone": s(phone), "email": s(email), "source": source.rawValue, "stage": stage.rawValue,
+            "phone": s(phone), "email": s(email),
+            "source": kind == .leads ? source.rawValue : (existing?.source ?? "diretto"),
+            "stage": stage.rawValue,
             "interest": s(interest), "category": s(category), "property_type": s(propertyType), "zone": s(zone),
             "budget_min": Int(budgetMin), "budget_max": Int(budgetMax), "bedrooms": Int(bedrooms),
             "assigned_to": s(assignedTo), "idealista_ref": s(idealistaRef), "notes": s(notes),
         ]
         do {
-            if let e = existing { try await HubAPI.updateReLead(id: e.id, fields: body) }
-            else { try await HubAPI.createReLead(body) }
+            if let e = existing { try await HubAPI.updateRePipeline(kind, id: e.id, fields: body) }
+            else { try await HubAPI.createRePipeline(kind, body) }
             await onSaved(); dismiss()
         } catch { saving = false }
     }
@@ -317,5 +410,155 @@ struct LeadFormView: View {
             .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+// ── Helper campi condivisi (stesso look del form lead) ────────────────────────
+private func reField(_ label: String, _ text: Binding<String>, _ ph: String = "") -> some View {
+    VStack(alignment: .leading, spacing: 5) {
+        Text(label).font(.system(size: 10, weight: .semibold)).foregroundStyle(Holo.labelDim)
+        TextField(ph, text: text).textFieldStyle(.plain).font(.system(size: 12.5)).foregroundStyle(Holo.text)
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+    }
+    .frame(maxWidth: .infinity)
+}
+private func reFieldMulti(_ label: String, _ text: Binding<String>) -> some View {
+    VStack(alignment: .leading, spacing: 5) {
+        Text(label).font(.system(size: 10, weight: .semibold)).foregroundStyle(Holo.labelDim)
+        TextEditor(text: text).font(.system(size: 12.5)).foregroundStyle(Holo.text)
+            .scrollContentBackground(.hidden).frame(height: 64).padding(6)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+    }
+}
+private func rePicker(_ label: String, _ opts: [(String, String)], _ sel: String, _ set: @escaping (String) -> Void) -> some View {
+    VStack(alignment: .leading, spacing: 5) {
+        Text(label).font(.system(size: 10, weight: .semibold)).foregroundStyle(Holo.labelDim)
+        Menu {
+            ForEach(opts, id: \.0) { o in Button(o.1) { set(o.0) } }
+        } label: {
+            HStack(spacing: 8) {
+                Text(opts.first { $0.0 == sel }?.1 ?? "—").font(.system(size: 12.5)).foregroundStyle(Holo.text).lineLimit(1)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(Csb.secFg)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .frame(maxWidth: .infinity)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+    }
+    .frame(maxWidth: .infinity)
+}
+// sì / no / — mappato su Bool?  ("" = non specificato)
+private let siNoOpts = [("", "—"), ("si", "Sì"), ("no", "No")]
+private func boolToRaw(_ b: Bool?) -> String { b == true ? "si" : (b == false ? "no" : "") }
+private func rawToBool(_ s: String) -> Bool? { s == "si" ? true : (s == "no" ? false : nil) }
+
+// ── Form proprietario / inquilino ─────────────────────────────────────────────
+// Chi affida un immobile in gestione: dati del contatto + dell'immobile offerto.
+struct OwnerFormView: View {
+    let existing: RELead?
+    let onSaved: () async -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var name = ""; @State private var phone = ""; @State private var email = ""
+    @State private var stage = OwnerStage.nuovo.rawValue
+    @State private var interest = ""          // affitto / vendita / traspaso
+    @State private var propertyType = ""      // tipo immobile
+    @State private var propertyOffered = ""   // che immobile offre
+    @State private var zone = ""; @State private var sqm = ""
+    @State private var hasLicense = ""        // "", "si", "no"
+    @State private var licenseType = ""
+    @State private var threePhase = ""        // "", "si", "no"
+    @State private var notes = ""
+    @State private var saving = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(existing == nil ? "NUOVO PROPRIETARIO / INQUILINO" : "MODIFICA PROPRIETARIO / INQUILINO")
+                .font(.system(size: 15, weight: .heavy)).tracking(3).foregroundStyle(Holo.titleText)
+                .padding(EdgeInsets(top: 22, leading: 24, bottom: 14, trailing: 24))
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 14) {
+                    reField("Nome e cognome *", $name, "Es. Marco Rossi")
+                    HStack(spacing: 12) { reField("Telefono", $phone, "+34 …"); reField("Email", $email, "nome@email.com") }
+                    rePicker("Stato pipeline", OwnerStage.allCases.map { ($0.rawValue, $0.label) }, stage) { stage = $0 }
+
+                    // Immobile offerto
+                    HStack(spacing: 12) {
+                        rePicker("Operazione", [("", "—")] + LeadInterest.allCases.map { ($0.rawValue, $0.label) }, interest) { interest = $0 }
+                        rePicker("Tipo immobile", [("", "—")] + propertyTypes.map { ($0, $0) }, propertyType) { propertyType = $0 }
+                    }
+                    reField("Immobile offerto", $propertyOffered, "Es. Local comercial en calle X · 2 plantas")
+                    HStack(spacing: 12) { reField("Zona", $zone, "Es. Ibiza centro"); reField("Superficie m²", $sqm, "120") }
+
+                    // Licenza + impianto
+                    HStack(spacing: 12) {
+                        rePicker("Ha licenza", siNoOpts, hasLicense) { hasLicense = $0 }
+                        reField("Tipo di licenza", $licenseType, "Es. C3 · ristorazione")
+                    }
+                    rePicker("Installazione trifase", siNoOpts, threePhase) { threePhase = $0 }
+
+                    reFieldMulti("Note", $notes)
+                }
+                .padding(.horizontal, 24).padding(.bottom, 16)
+            }
+            HStack(spacing: 10) {
+                Spacer()
+                Button("Annulla") { dismiss() }.buttonStyle(.plain)
+                    .font(.system(size: 12.5)).foregroundStyle(Csb.secFg)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                Button {
+                    Task { await save() }
+                } label: {
+                    Text(saving ? "Salvo…" : "Salva").font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(Color(hex: 0x0b1220))
+                        .padding(.horizontal, 18).padding(.vertical, 8)
+                        .background(Capsule().fill(Holo.hsl(210, 90, 66)))
+                }
+                .buttonStyle(.plain).disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || saving)
+                .opacity(name.trimmingCharacters(in: .whitespaces).isEmpty ? 0.5 : 1)
+            }
+            .padding(EdgeInsets(top: 12, leading: 24, bottom: 18, trailing: 24))
+        }
+        .frame(width: 560, height: 640)
+        .background(Color(hex: 0x0c1120))
+        .onAppear(perform: prefill)
+    }
+
+    private func prefill() {
+        guard let e = existing else { return }
+        name = e.name; phone = e.phone ?? ""; email = e.email ?? ""
+        stage = OwnerStage(rawValue: e.stage)?.rawValue ?? OwnerStage.nuovo.rawValue
+        interest = e.interest ?? ""; propertyType = e.property_type ?? ""
+        propertyOffered = e.property_offered ?? ""; zone = e.zone ?? ""
+        sqm = e.size_sqm.map(String.init) ?? ""
+        hasLicense = boolToRaw(e.has_license); licenseType = e.license_type ?? ""
+        threePhase = boolToRaw(e.three_phase); notes = e.notes ?? ""
+    }
+
+    private func save() async {
+        saving = true
+        func s(_ v: String) -> String? { let t = v.trimmingCharacters(in: .whitespaces); return t.isEmpty ? nil : t }
+        let body: [String: Any?] = [
+            "name": name.trimmingCharacters(in: .whitespaces),
+            "phone": s(phone), "email": s(email),
+            "source": existing?.source ?? "diretto", "stage": stage,
+            "interest": s(interest), "property_type": s(propertyType),
+            "property_offered": s(propertyOffered), "zone": s(zone),
+            "size_sqm": Int(sqm),
+            "has_license": rawToBool(hasLicense), "license_type": s(licenseType),
+            "three_phase": rawToBool(threePhase), "notes": s(notes),
+        ]
+        do {
+            if let e = existing { try await HubAPI.updateRePipeline(.owners, id: e.id, fields: body) }
+            else { try await HubAPI.createRePipeline(.owners, body) }
+            await onSaved(); dismiss()
+        } catch { saving = false }
     }
 }

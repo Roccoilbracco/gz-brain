@@ -6,84 +6,96 @@ final class GZIbizaModel: ObservableObject {
     @Published var loading = true
     @Published var error: String?
 
+    let kind: PipelineKind
+    init(kind: PipelineKind = .leads) { self.kind = kind }
+
     func load() async {
         loading = true
-        do { leads = try await HubAPI.listReLeads(); error = nil }
+        do { leads = try await HubAPI.listRePipeline(kind); error = nil }
         catch { self.error = error.localizedDescription }
         loading = false
     }
 
     /// Mutazione ottimistica + PATCH: la card si sposta subito sotto il dito.
     /// Se lo stadio non cambia (drop nella stessa colonna) non tocchiamo il DB.
-    func setStage(_ id: String, _ stage: LeadStage) async {
-        guard let i = leads.firstIndex(where: { $0.id == id }), leads[i].stage != stage.rawValue else { return }
-        leads[i].stage = stage.rawValue
-        try? await HubAPI.setReLeadStage(id: id, stage: stage.rawValue)
+    func setStage(_ id: String, _ stageId: String) async {
+        guard let i = leads.firstIndex(where: { $0.id == id }), leads[i].stage != stageId else { return }
+        leads[i].stage = stageId
+        try? await HubAPI.setRePipelineStage(kind, id: id, stage: stageId)
     }
 
     func setNotes(_ id: String, _ notes: String) async {
         let v = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         if let i = leads.firstIndex(where: { $0.id == id }) { leads[i].notes = v.isEmpty ? nil : v }
-        try? await HubAPI.updateReLead(id: id, fields: ["notes": v.isEmpty ? nil : v])
+        try? await HubAPI.updateRePipeline(kind, id: id, fields: ["notes": v.isEmpty ? nil : v])
     }
 
     func remove(_ id: String) async {
         leads.removeAll { $0.id == id }
-        try? await HubAPI.deleteReLead(id: id)
+        try? await HubAPI.deleteRePipeline(kind, id: id)
     }
 }
 
 // ─── Dash GZ Ibiza: pipeline lead + conversazioni WhatsApp ───────────────────
 struct GZIbizaDashboard: View {
-    @StateObject private var model = GZIbizaModel()
+    @StateObject private var model = GZIbizaModel(kind: .leads)
+    @StateObject private var owners = GZIbizaModel(kind: .owners)
+    @State private var tab: PipelineKind = .leads
     @State private var search = ""
     @State private var fonte: LeadSource?
     @State private var mostraAgente = false
     @State private var selected: RELead?
     @State private var mostraForm = false
-    @State private var inModifica: RELead?     // nil = nuovo lead
+    @State private var inModifica: RELead?     // nil = nuovo record
+
+    // Il modello della pipeline attualmente mostrata (leads o proprietari/inquilini)
+    private var active: GZIbizaModel { tab == .leads ? model : owners }
 
     private var filtered: [RELead] {
-        model.leads.filter { l in
-            let okFonte = fonte == nil || l.source == fonte!.rawValue
+        active.leads.filter { l in
+            // il filtro fonte esiste solo per i lead (i proprietari arrivano in diretto)
+            let okFonte = tab == .owners || fonte == nil || l.source == fonte!.rawValue
             guard okFonte else { return false }
             guard !search.isEmpty else { return true }
             return [l.name, l.email ?? "", l.phone ?? "", l.zone ?? "", l.notes ?? "", l.request_message ?? ""]
                 .joined(separator: " ").localizedCaseInsensitiveContains(search)
         }
     }
-    private func inStage(_ s: LeadStage) -> [RELead] { filtered.filter { $0.stage == s.rawValue } }
-    private func count(_ s: LeadStage) -> Int { model.leads.filter { $0.stage == s.rawValue }.count }
+    private func inStage(_ id: String) -> [RELead] { filtered.filter { $0.stage == id } }
+    private func count(_ id: String) -> Int { active.leads.filter { $0.stage == id }.count }
+    // insieme degli stadi "chiusi" della pipeline attiva (vinto/perso · concluso/archiviato)
+    private var closedIds: Set<String> { Set(active.kind.stages.filter { $0.isClosed }.map(\.id)) }
     private var inLavorazione: Int {
-        model.leads.filter { let s = LeadStage.from($0.stage); return s != .nuovo && !s.isClosed }.count
+        active.leads.filter { $0.stage != "nuovo" && !closedIds.contains($0.stage) }.count
     }
-    private var daWhatsApp: Int { model.leads.filter { $0.source == LeadSource.whatsapp.rawValue }.count }
+    private var daWhatsApp: Int { active.leads.filter { $0.source == LeadSource.whatsapp.rawValue }.count }
 
-    /// Budget complessivo dei lead ancora aperti: quanto vale la pipeline.
+    /// Budget/valore complessivo dei record ancora aperti.
     private var valorePipeline: Int {
-        model.leads.filter { !LeadStage.from($0.stage).isClosed }
+        active.leads.filter { !closedIds.contains($0.stage) }
             .compactMap { $0.budget_max ?? $0.budget_min }.reduce(0, +)
     }
-    /// Percentuale di vinti sui soli lead chiusi: quelli aperti non si contano,
-    /// altrimenti la conversione crollerebbe a ogni lead nuovo.
+    /// Percentuale di chiusi con esito positivo (vinto / concluso) sul totale dei chiusi.
     private var conversione: Int {
-        let chiusi = model.leads.filter { LeadStage.from($0.stage).isClosed }.count
+        let chiusi = active.leads.filter { closedIds.contains($0.stage) }.count
         guard chiusi > 0 else { return 0 }
-        return Int((Double(count(.vinto)) / Double(chiusi) * 100).rounded())
+        return Int((Double(count(active.kind.wonStageId)) / Double(chiusi) * 100).rounded())
     }
 
     var body: some View {
         ZStack(alignment: .trailing) {
             VStack(alignment: .leading, spacing: 14) {
                 header
+                pipelineTabs
                 statRow
 
-                SectionCard(title: "Pipeline lead", count: model.leads.count, icon: "square.stack.3d.up") {
+                SectionCard(title: tab == .leads ? "Pipeline lead" : "Pipeline proprietari / inquilini",
+                            count: active.leads.count, icon: "square.stack.3d.up") {
                     filtri
                 } content: {
-                    if model.loading {
+                    if active.loading {
                         HStack { Spacer(); ProgressView().controlSize(.small); Spacer() }.padding(.vertical, 40)
-                    } else if let e = model.error {
+                    } else if let e = active.error {
                         Text("Errore: \(e)").font(.system(size: 12)).foregroundStyle(UI.tint(.stop))
                             .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 12)
                     } else {
@@ -91,7 +103,8 @@ struct GZIbizaDashboard: View {
                     }
                 }
 
-                WhatsAppSection(slug: "gz-ibiza")
+                // WhatsApp: solo per i lead (richieste in arrivo), non per i proprietari
+                if tab == .leads { WhatsAppSection(slug: "gz-ibiza") }
             }
             .blur(radius: selected != nil ? 2 : 0)
             .disabled(selected != nil)
@@ -101,16 +114,17 @@ struct GZIbizaDashboard: View {
                     .onTapGesture { withAnimation(.easeInOut(duration: 0.2)) { selected = nil } }
                 GZLeadDrawerView(
                     lead: sel,
-                    onStage: { s in
-                        Task { await model.setStage(sel.id, s) }
-                        if var l = selected { l.stage = s.rawValue; selected = l }
+                    stages: active.kind.stages,
+                    onStage: { sid in
+                        Task { await active.setStage(sel.id, sid) }
+                        if var l = selected { l.stage = sid; selected = l }
                     },
                     onNotes: { txt in
-                        Task { await model.setNotes(sel.id, txt) }
+                        Task { await active.setNotes(sel.id, txt) }
                         if var l = selected { l.notes = txt; selected = l }
                     },
                     onDelete: {
-                        Task { await model.remove(sel.id) }
+                        Task { await active.remove(sel.id) }
                         withAnimation(.easeInOut(duration: 0.2)) { selected = nil }
                     },
                     onEdit: {
@@ -125,11 +139,16 @@ struct GZIbizaDashboard: View {
             }
         }
         .task { await model.load() }
+        .task { await owners.load() }
         .sheet(isPresented: $mostraAgente) {
             AgenteSheet(slug: "gz-ibiza") { mostraAgente = false }
         }
         .sheet(isPresented: $mostraForm, onDismiss: { inModifica = nil }) {
-            LeadFormView(existing: inModifica) { await model.load() }
+            if tab == .owners {
+                OwnerFormView(existing: inModifica) { await active.load() }
+            } else {
+                LeadFormView(existing: inModifica, kind: tab) { await active.load() }
+            }
         }
     }
 
@@ -138,47 +157,89 @@ struct GZIbizaDashboard: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("GZ Ibiza")
                     .font(.system(size: 20, weight: .semibold)).foregroundStyle(UI.ink)
-                Text("Pipeline lead e conversazioni WhatsApp")
+                Text(tab == .leads ? "Pipeline lead e conversazioni WhatsApp"
+                                   : "Proprietari e inquilini che affidano immobili in gestione")
                     .font(.system(size: 11.5)).foregroundStyle(UI.faint)
             }
             Spacer()
-            GhostButton(label: "Nuovo lead", icon: "plus") { inModifica = nil; mostraForm = true }
-            GhostButton(label: "Agente", icon: "gearshape.2") { mostraAgente = true }
-            GhostButton(label: "Aggiorna", icon: "arrow.clockwise") { Task { await model.load() } }
+            GhostButton(label: tab.newLabel, icon: "plus") { inModifica = nil; mostraForm = true }
+            if tab == .leads {
+                GhostButton(label: "Agente", icon: "gearshape.2") { mostraAgente = true }
+            }
+            GhostButton(label: "Aggiorna", icon: "arrow.clockwise") { Task { await active.load() } }
+        }
+    }
+
+    // Segmented control: Leads ↔ Propietari / Inquilini
+    private var pipelineTabs: some View {
+        HStack(spacing: 4) {
+            ForEach(PipelineKind.allCases) { k in
+                let on = tab == k
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { tab = k; selected = nil; search = ""; fonte = nil }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: k == .leads ? "person.crop.rectangle.stack" : "house.and.flag")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text(k.tabLabel).font(.system(size: 12, weight: .semibold))
+                        Text("\((k == .leads ? model : owners).leads.count)")
+                            .font(.system(size: 10, weight: .bold)).monospacedDigit()
+                            .foregroundStyle(on ? UI.ink.opacity(0.7) : UI.faint)
+                    }
+                    .foregroundStyle(on ? UI.ink : UI.dim)
+                    .padding(.horizontal, 13).padding(.vertical, 7)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(on ? UI.accent.opacity(0.16) : UI.surface))
+                    .overlay(RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(on ? UI.accent.opacity(0.55) : UI.line, lineWidth: 1))
+                }.buttonStyle(.plain)
+            }
+            Spacer()
         }
     }
 
     private var statRow: some View {
         HStack(spacing: 10) {
-            StatTile(label: "Nuovi", value: count(.nuovo), evidenzia: true)
-            StatTile(label: "In lavorazione", value: inLavorazione)
-            StatTile(label: "Da WhatsApp", value: daWhatsApp)
-            StatTile(label: "Vinti", value: count(.vinto))
-            StatTile(label: "Valore pipeline", testo: valorePipeline > 0 ? LeadFmt.compact(valorePipeline) : "—")
-            StatTile(label: "Conversione", testo: conversione > 0 ? "\(conversione)%" : "—")
+            if tab == .leads {
+                StatTile(label: "Nuovi", value: count("nuovo"), evidenzia: true)
+                StatTile(label: "In lavorazione", value: inLavorazione)
+                StatTile(label: "Da WhatsApp", value: daWhatsApp)
+                StatTile(label: "Vinti", value: count("vinto"))
+                StatTile(label: "Valore pipeline", testo: valorePipeline > 0 ? LeadFmt.compact(valorePipeline) : "—")
+                StatTile(label: "Conversione", testo: conversione > 0 ? "\(conversione)%" : "—")
+            } else {
+                StatTile(label: "Nuovi", value: count("nuovo"), evidenzia: true)
+                StatTile(label: "Da valutare", value: count("da_valutare"))
+                StatTile(label: "Disponibili", value: count("disponibile"))
+                StatTile(label: "In gestione", value: count("in_gestione"))
+                StatTile(label: "Conclusi", value: count("concluso"))
+                StatTile(label: "Valore immobili", testo: valorePipeline > 0 ? LeadFmt.compact(valorePipeline) : "—")
+            }
         }
     }
 
     private var filtri: some View {
         HStack(spacing: 6) {
-            FilterChip(label: "Tutte", selected: fonte == nil) { fonte = nil }
-            ForEach(LeadSource.attive) { s in
-                FilterChip(label: s.label, icon: s.icon, selected: fonte == s) {
-                    fonte = fonte == s ? nil : s
+            if tab == .leads {
+                FilterChip(label: "Tutte", selected: fonte == nil) { fonte = nil }
+                ForEach(LeadSource.attive) { s in
+                    FilterChip(label: s.label, icon: s.icon, selected: fonte == s) {
+                        fonte = fonte == s ? nil : s
+                    }
                 }
             }
-            HoloSearchField(placeholder: "Cerca lead…", text: $search, width: 150)
+            HoloSearchField(placeholder: tab.searchPlaceholder, text: $search, width: 150)
         }
     }
 
     private var board: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .top, spacing: 10) {
-                ForEach(LeadStage.allCases) { stage in
+                ForEach(active.kind.stages) { stage in
                     GZStageColumn(
                         stage: stage,
-                        items: inStage(stage),
-                        onDrop: { id in Task { await model.setStage(id, stage) } },
+                        emptyText: active.kind.emptyColumn,
+                        items: inStage(stage.id),
+                        onDrop: { id in Task { await active.setStage(id, stage.id) } },
                         onSelect: { l in withAnimation(.easeInOut(duration: 0.2)) { selected = l } })
                 }
             }
@@ -189,7 +250,8 @@ struct GZIbizaDashboard: View {
 
 // ─── Colonna pipeline ────────────────────────────────────────────────────────
 private struct GZStageColumn: View {
-    let stage: LeadStage
+    let stage: PipelineStage
+    var emptyText: String = "Nessun lead"
     let items: [RELead]
     let onDrop: (String) -> Void
     let onSelect: (RELead) -> Void
@@ -215,7 +277,7 @@ private struct GZStageColumn: View {
                             .draggable(l.id)
                     }
                     if items.isEmpty {
-                        Text("Nessun lead").font(.system(size: 10.5)).foregroundStyle(UI.faint)
+                        Text(emptyText).font(.system(size: 10.5)).foregroundStyle(UI.faint)
                             .frame(maxWidth: .infinity).padding(.vertical, 16)
                     }
                 }
@@ -271,6 +333,12 @@ private struct GZLeadCard: View {
             if let b = LeadFmt.budget(lead.budget_min, lead.budget_max) {
                 Text(b).font(.system(size: 10.5, weight: .medium)).foregroundStyle(UI.text)
             }
+            // Immobile offerto (proprietari): m² e operazione accanto alla descrizione
+            if let off = clean(lead.property_offered) {
+                Text(off + (lead.size_sqm.map { " · \($0) m²" } ?? ""))
+                    .font(.system(size: 10.5, weight: .medium)).foregroundStyle(UI.text)
+                    .lineLimit(1)
+            }
             // Il messaggio dal form, o in mancanza le note interne
             if let msg = clean(lead.request_message) ?? clean(lead.notes) {
                 Text(msg).font(.system(size: 10.5)).lineSpacing(2)
@@ -304,7 +372,8 @@ private struct GZLeadCard: View {
 // ─── Drawer laterale: dettaglio lead + note (gemello di quello Wallis) ───────
 private struct GZLeadDrawerView: View {
     let lead: RELead
-    let onStage: (LeadStage) -> Void
+    let stages: [PipelineStage]
+    let onStage: (String) -> Void
     let onNotes: (String) -> Void
     let onDelete: () -> Void
     let onEdit: () -> Void
@@ -312,7 +381,7 @@ private struct GZLeadDrawerView: View {
 
     @State private var note: String = ""
     @State private var savedFlash = false
-    private var stage: LeadStage { .from(lead.stage) }
+    private var stage: PipelineStage { stages.first { $0.id == lead.stage } ?? stages[0] }
     private var src: LeadSource { .from(lead.source) }
 
     var body: some View {
@@ -350,9 +419,9 @@ private struct GZLeadDrawerView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     section("PIPELINE") {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 6)], alignment: .leading, spacing: 6) {
-                            ForEach(LeadStage.allCases) { s in
-                                let on = s == stage
-                                Button { onStage(s) } label: {
+                            ForEach(stages) { s in
+                                let on = s.id == lead.stage
+                                Button { onStage(s.id) } label: {
                                     Text(s.label).font(.system(size: 10.5, weight: .semibold))
                                         .foregroundStyle(on ? UI.ink : s.color)
                                         .frame(maxWidth: .infinity).padding(.vertical, 6)
@@ -369,9 +438,16 @@ private struct GZLeadDrawerView: View {
                             infoRow("calendar", fmtLeadDate(lead.created_at))
                         }
                     }
-                    // Ricerca immobile: compilata dall'agente WhatsApp, vuota per i lead dal sito
+                    // Immobile offerto dal proprietario (solo pipeline proprietari)
+                    if let off = clean(lead.property_offered) {
+                        section("IMMOBILE OFFERTO") {
+                            Text(off).font(.system(size: 12.5)).lineSpacing(3).foregroundStyle(UI.text)
+                                .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    // Ricerca immobile (lead) / dettagli immobile (proprietari)
                     if let d = dettagli {
-                        section("RICERCA") {
+                        section(lead.property_offered != nil || lead.size_sqm != nil ? "DETTAGLI IMMOBILE" : "RICERCA") {
                             VStack(alignment: .leading, spacing: 8) { ForEach(d, id: \.1) { infoRow($0.0, $0.1) } }
                         }
                     }
@@ -462,8 +538,13 @@ private struct GZLeadDrawerView: View {
         if let v = clean(lead.interest) { r.append(("tag.fill", v.capitalized)) }
         if let v = clean(lead.property_type) { r.append(("house.fill", v.capitalized)) }
         if let v = clean(lead.zone) { r.append(("mappin.and.ellipse", v)) }
+        if let m = lead.size_sqm { r.append(("ruler", "\(m) m²")) }
         if let v = LeadFmt.budget(lead.budget_min, lead.budget_max) { r.append(("eurosign.circle.fill", v)) }
         if let b = lead.bedrooms { r.append(("bed.double.fill", "\(b) camere")) }
+        if let hl = lead.has_license {
+            r.append(("checkmark.seal.fill", "Licenza: " + (hl ? "Sì" : "No") + (clean(lead.license_type).map { " · \($0)" } ?? "")))
+        }
+        if let tp = lead.three_phase { r.append(("bolt.fill", "Trifase: " + (tp ? "Sì" : "No"))) }
         return r.isEmpty ? nil : r
     }
 
