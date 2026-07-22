@@ -37,6 +37,23 @@ enum UI {
     enum Tint { case neutro, attesa, corso, ok, stop }
 }
 
+/// Avvolge il contenuto in uno ScrollView solo quando serve davvero.
+/// Una vista che scorre da sola, incorporata in una pagina che già scorre,
+/// finisce con due scroll annidati: quello interno riceve altezza libera e il
+/// contenuto collassa o cresce a vuoto. Con `scorre: false` la vista si limita
+/// a impilare, e a scorrere ci pensa la pagina ospite.
+struct ContenitoreScorrevole<Content: View>: View {
+    let scorre: Bool
+    @ViewBuilder var content: Content
+    init(scorre: Bool, @ViewBuilder content: () -> Content) {
+        self.scorre = scorre; self.content = content()
+    }
+    var body: some View {
+        if scorre { ScrollView(showsIndicators: false) { content } }
+        else { content }
+    }
+}
+
 // ── Contenitore di sezione: titolo, contatore, comandi, contenuto ────────────
 // È il mattone della pagina: ogni blocco è una card con la stessa intestazione,
 // così lo schema resta identico ovunque.

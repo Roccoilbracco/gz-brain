@@ -273,6 +273,12 @@ enum PropViewMode { case lista, griglia, mappa }
 
 // ── Lista proprietà (tabella + griglia card + mappa) ─────────────────────────
 struct ProprietaView: View {
+    /// Incorporata dentro un'altra pagina (la dash GZ Ibiza): niente ScrollView
+    /// proprio — sarebbe annidato in quello del progetto — e niente titolo, che
+    /// la pagina ospite ha già il suo.
+    let embedded: Bool
+    /// Vedi CalendarioVisiteView.init: il memberwise sarebbe privato.
+    init(embedded: Bool = false) { self.embedded = embedded }
     @State private var items: [Proprieta] = []
     @State private var loading = true
     @State private var errorMsg: String?
@@ -289,12 +295,14 @@ struct ProprietaView: View {
     }
 
     var body: some View {
-        ScrollView(showsIndicators: false) {
+        ContenitoreScorrevole(scorre: !embedded) {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(spacing: 10) {
-                    Text("PROPRIETÀ").font(.system(size: 19, weight: .heavy)).tracking(5)
-                        .foregroundStyle(Holo.titleText)
-                        .shadow(color: Color(red: 110/255, green: 180/255, blue: 1).opacity(0.7), radius: 9)
+                    if !embedded {
+                        Text("PROPRIETÀ").font(.system(size: 19, weight: .heavy)).tracking(5)
+                            .foregroundStyle(Holo.titleText)
+                            .shadow(color: Color(red: 110/255, green: 180/255, blue: 1).opacity(0.7), radius: 9)
+                    }
                     Spacer()
                     viewToggle
                     HoloSearchField(placeholder: "Cerca immobile…", text: $search)

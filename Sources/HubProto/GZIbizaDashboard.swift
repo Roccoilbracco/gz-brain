@@ -5,6 +5,10 @@ final class GZIbizaModel: ObservableObject {
     @Published var leads: [RELead] = []
     @Published var loading = true
     @Published var error: String?
+    /// Ultima operazione non riuscita. Le mutazioni sono ottimistiche: se il
+    /// salvataggio fallisce e nessuno lo dice, la card resta spostata a schermo
+    /// e il dato sul server è un altro — lo schermo mentirebbe.
+    @Published var azioneFallita: String?
 
     let kind: PipelineKind
     init(kind: PipelineKind = .leads) { self.kind = kind }
@@ -18,21 +22,82 @@ final class GZIbizaModel: ObservableObject {
 
     /// Mutazione ottimistica + PATCH: la card si sposta subito sotto il dito.
     /// Se lo stadio non cambia (drop nella stessa colonna) non tocchiamo il DB.
+    /// Se il PATCH fallisce si torna indietro: meglio vedere la card rimbalzare
+    /// che crederla spostata.
     func setStage(_ id: String, _ stageId: String) async {
         guard let i = leads.firstIndex(where: { $0.id == id }), leads[i].stage != stageId else { return }
+        let precedente = leads[i].stage
         leads[i].stage = stageId
-        try? await HubAPI.setRePipelineStage(kind, id: id, stage: stageId)
+        do { try await HubAPI.setRePipelineStage(kind, id: id, stage: stageId) }
+        catch {
+            if let j = leads.firstIndex(where: { $0.id == id }) { leads[j].stage = precedente }
+            azioneFallita = "Spostamento non salvato: \(error.localizedDescription)"
+        }
     }
 
-    func setNotes(_ id: String, _ notes: String) async {
+    func setNotes(_ id: String, _ notes: String) async -> Bool {
         let v = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        let precedente = leads.first { $0.id == id }?.notes
         if let i = leads.firstIndex(where: { $0.id == id }) { leads[i].notes = v.isEmpty ? nil : v }
-        try? await HubAPI.updateRePipeline(kind, id: id, fields: ["notes": v.isEmpty ? nil : v])
+        do {
+            try await HubAPI.updateRePipeline(kind, id: id, fields: ["notes": v.isEmpty ? nil : v])
+            return true
+        } catch {
+            if let j = leads.firstIndex(where: { $0.id == id }) { leads[j].notes = precedente }
+            azioneFallita = "Nota non salvata: \(error.localizedDescription)"
+            return false
+        }
     }
 
     func remove(_ id: String) async {
+        guard let rimosso = leads.first(where: { $0.id == id }) else { return }
         leads.removeAll { $0.id == id }
-        try? await HubAPI.deleteRePipeline(kind, id: id)
+        do { try await HubAPI.deleteRePipeline(kind, id: id) }
+        catch {
+            leads.append(rimosso)
+            leads.sort { ($0.created_at ?? "") > ($1.created_at ?? "") }
+            azioneFallita = "Eliminazione non riuscita: \(error.localizedDescription)"
+        }
+    }
+}
+
+// Le schede della dash. Oltre alle due pipeline ci sono contatti, immobili e
+// calendario: sono il lavoro quotidiano dell'agenzia e stavano sparsi nella
+// sidebar, lontani dal progetto a cui appartengono.
+enum GZTab: String, CaseIterable, Identifiable {
+    case leads, owners, contatti, proprieta, calendario
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .leads: return "Leads"
+        case .owners: return "Propietari / Inquilini"
+        case .contatti: return "Contatti"
+        case .proprieta: return "Proprietà"
+        case .calendario: return "Calendario"
+        }
+    }
+    var icon: String {
+        switch self {
+        case .leads: return "person.crop.rectangle.stack"
+        case .owners: return "house.and.flag"
+        case .contatti: return "person.crop.circle"
+        case .proprieta: return "house"
+        case .calendario: return "calendar"
+        }
+    }
+    /// Le sole due schede che sono una pipeline kanban; le altre ospitano una
+    /// vista propria e non hanno stadi, filtri fonte né statistiche.
+    var pipeline: PipelineKind? {
+        switch self { case .leads: return .leads; case .owners: return .owners; default: return nil }
+    }
+    var sottotitolo: String {
+        switch self {
+        case .leads: return "Pipeline lead e conversazioni WhatsApp"
+        case .owners: return "Proprietari e inquilini che affidano immobili in gestione"
+        case .contatti: return "Anagrafica di clienti e potenziali clienti, con le ricorrenze"
+        case .proprieta: return "Registro immobili e visibilità sui siti"
+        case .calendario: return "Disponibilità per le visite e appuntamenti fissati"
+        }
     }
 }
 
@@ -40,7 +105,7 @@ final class GZIbizaModel: ObservableObject {
 struct GZIbizaDashboard: View {
     @StateObject private var model = GZIbizaModel(kind: .leads)
     @StateObject private var owners = GZIbizaModel(kind: .owners)
-    @State private var tab: PipelineKind = .leads
+    @State private var tab: GZTab = .leads
     @State private var search = ""
     @State private var fonte: LeadSource?
     @State private var mostraAgente = false
@@ -49,7 +114,8 @@ struct GZIbizaDashboard: View {
     @State private var inModifica: RELead?     // nil = nuovo record
 
     // Il modello della pipeline attualmente mostrata (leads o proprietari/inquilini)
-    private var active: GZIbizaModel { tab == .leads ? model : owners }
+    private var active: GZIbizaModel { tab == .owners ? owners : model }
+    private var kind: PipelineKind { tab.pipeline ?? .leads }
 
     private var filtered: [RELead] {
         active.leads.filter { l in
@@ -62,22 +128,26 @@ struct GZIbizaDashboard: View {
         }
     }
     private func inStage(_ id: String) -> [RELead] { filtered.filter { $0.stage == id } }
-    private func count(_ id: String) -> Int { active.leads.filter { $0.stage == id }.count }
+    // Le statistiche contano sui record filtrati, come il kanban sotto: contando
+    // su tutti, con un filtro attivo la stessa schermata dava due numeri diversi
+    // per la stessa colonna.
+    private func count(_ id: String) -> Int { filtered.filter { $0.stage == id }.count }
+    private var filtroAttivo: Bool { fonte != nil || !search.isEmpty }
     // insieme degli stadi "chiusi" della pipeline attiva (vinto/perso · concluso/archiviato)
     private var closedIds: Set<String> { Set(active.kind.stages.filter { $0.isClosed }.map(\.id)) }
     private var inLavorazione: Int {
-        active.leads.filter { $0.stage != "nuovo" && !closedIds.contains($0.stage) }.count
+        filtered.filter { $0.stage != "nuovo" && !closedIds.contains($0.stage) }.count
     }
-    private var daWhatsApp: Int { active.leads.filter { $0.source == LeadSource.whatsapp.rawValue }.count }
+    private var daWhatsApp: Int { filtered.filter { $0.source == LeadSource.whatsapp.rawValue }.count }
 
     /// Budget/valore complessivo dei record ancora aperti.
     private var valorePipeline: Int {
-        active.leads.filter { !closedIds.contains($0.stage) }
+        filtered.filter { !closedIds.contains($0.stage) }
             .compactMap { $0.budget_max ?? $0.budget_min }.reduce(0, +)
     }
     /// Percentuale di chiusi con esito positivo (vinto / concluso) sul totale dei chiusi.
     private var conversione: Int {
-        let chiusi = active.leads.filter { closedIds.contains($0.stage) }.count
+        let chiusi = filtered.filter { closedIds.contains($0.stage) }.count
         guard chiusi > 0 else { return 0 }
         return Int((Double(count(active.kind.wonStageId)) / Double(chiusi) * 100).rounded())
     }
@@ -87,24 +157,36 @@ struct GZIbizaDashboard: View {
             VStack(alignment: .leading, spacing: 14) {
                 header
                 pipelineTabs
-                statRow
+                if let e = active.azioneFallita { bannerErrore(e) }
 
-                SectionCard(title: tab == .leads ? "Pipeline lead" : "Pipeline proprietari / inquilini",
-                            count: active.leads.count, icon: "square.stack.3d.up") {
-                    filtri
-                } content: {
-                    if active.loading {
-                        HStack { Spacer(); ProgressView().controlSize(.small); Spacer() }.padding(.vertical, 40)
-                    } else if let e = active.error {
-                        Text("Errore: \(e)").font(.system(size: 12)).foregroundStyle(UI.tint(.stop))
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 12)
-                    } else {
-                        board
+                if tab.pipeline != nil {
+                    statRow
+                    SectionCard(title: tab == .leads ? "Pipeline lead" : "Pipeline proprietari / inquilini",
+                                count: filtroAttivo ? filtered.count : active.leads.count,
+                                icon: "square.stack.3d.up") {
+                        filtri
+                    } content: {
+                        if active.loading {
+                            HStack { Spacer(); ProgressView().controlSize(.small); Spacer() }.padding(.vertical, 40)
+                        } else if let e = active.error {
+                            Text("Errore: \(e)").font(.system(size: 12)).foregroundStyle(UI.tint(.stop))
+                                .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 12)
+                        } else {
+                            board
+                        }
+                    }
+                    // WhatsApp: solo per i lead (richieste in arrivo), non per i proprietari
+                    if tab == .leads { WhatsAppSection(slug: "gz-ibiza") }
+                } else {
+                    // Le tre viste già esistenti, ospitate qui invece che nella
+                    // sidebar: sono lavoro di GZ Ibiza, non voci di sistema.
+                    switch tab {
+                    case .contatti:   ContattiView()
+                    case .proprieta:  ProprietaView(embedded: true)
+                    case .calendario: CalendarioVisiteView(embedded: true)
+                    default:          EmptyView()
                     }
                 }
-
-                // WhatsApp: solo per i lead (richieste in arrivo), non per i proprietari
-                if tab == .leads { WhatsAppSection(slug: "gz-ibiza") }
             }
             .blur(radius: selected != nil ? 2 : 0)
             .disabled(selected != nil)
@@ -120,8 +202,9 @@ struct GZIbizaDashboard: View {
                         if var l = selected { l.stage = sid; selected = l }
                     },
                     onNotes: { txt in
-                        Task { await active.setNotes(sel.id, txt) }
-                        if var l = selected { l.notes = txt; selected = l }
+                        let ok = await active.setNotes(sel.id, txt)
+                        if ok, var l = selected { l.notes = txt; selected = l }
+                        return ok
                     },
                     onDelete: {
                         Task { await active.remove(sel.id) }
@@ -147,9 +230,28 @@ struct GZIbizaDashboard: View {
             if tab == .owners {
                 OwnerFormView(existing: inModifica) { await active.load() }
             } else {
-                LeadFormView(existing: inModifica, kind: tab) { await active.load() }
+                LeadFormView(existing: inModifica, kind: kind) { await active.load() }
             }
         }
+    }
+
+    /// L'errore di un salvataggio non riuscito: resta finché non lo si chiude,
+    /// perché è la sola prova che quello che si vede a schermo non è sul server.
+    private func bannerErrore(_ testo: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 12)).foregroundStyle(UI.tint(.stop))
+            Text(testo).font(.system(size: 11.5)).foregroundStyle(UI.text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Aggiorna") { Task { await active.load(); active.azioneFallita = nil } }
+                .buttonStyle(.plain).font(.system(size: 11, weight: .semibold)).foregroundStyle(UI.accent)
+            Button { active.azioneFallita = nil } label: {
+                Image(systemName: "xmark").font(.system(size: 10, weight: .bold)).foregroundStyle(UI.dim)
+            }.buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: 9).fill(UI.tint(.stop).opacity(0.12)))
+        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(UI.tint(.stop).opacity(0.45), lineWidth: 1))
     }
 
     private var header: some View {
@@ -157,34 +259,38 @@ struct GZIbizaDashboard: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("GZ Ibiza")
                     .font(.system(size: 20, weight: .semibold)).foregroundStyle(UI.ink)
-                Text(tab == .leads ? "Pipeline lead e conversazioni WhatsApp"
-                                   : "Proprietari e inquilini che affidano immobili in gestione")
+                Text(tab.sottotitolo)
                     .font(.system(size: 11.5)).foregroundStyle(UI.faint)
             }
             Spacer()
-            GhostButton(label: tab.newLabel, icon: "plus") { inModifica = nil; mostraForm = true }
-            if tab == .leads {
-                GhostButton(label: "Agente", icon: "gearshape.2") { mostraAgente = true }
+            // I comandi della pipeline non hanno senso su contatti, immobili e
+            // calendario: quelle viste hanno i propri.
+            if tab.pipeline != nil {
+                GhostButton(label: kind.newLabel, icon: "plus") { inModifica = nil; mostraForm = true }
+                if tab == .leads {
+                    GhostButton(label: "Agente", icon: "gearshape.2") { mostraAgente = true }
+                }
+                GhostButton(label: "Aggiorna", icon: "arrow.clockwise") { Task { await active.load() } }
             }
-            GhostButton(label: "Aggiorna", icon: "arrow.clockwise") { Task { await active.load() } }
         }
     }
 
-    // Segmented control: Leads ↔ Propietari / Inquilini
+    // Le schede della dash: le due pipeline più contatti, immobili e calendario
     private var pipelineTabs: some View {
         HStack(spacing: 4) {
-            ForEach(PipelineKind.allCases) { k in
+            ForEach(GZTab.allCases) { k in
                 let on = tab == k
                 Button {
                     withAnimation(.easeInOut(duration: 0.15)) { tab = k; selected = nil; search = ""; fonte = nil }
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: k == .leads ? "person.crop.rectangle.stack" : "house.and.flag")
-                            .font(.system(size: 11, weight: .semibold))
-                        Text(k.tabLabel).font(.system(size: 12, weight: .semibold))
-                        Text("\((k == .leads ? model : owners).leads.count)")
-                            .font(.system(size: 10, weight: .bold)).monospacedDigit()
-                            .foregroundStyle(on ? UI.ink.opacity(0.7) : UI.faint)
+                        Image(systemName: k.icon).font(.system(size: 11, weight: .semibold))
+                        Text(k.label).font(.system(size: 12, weight: .semibold)).lineLimit(1).fixedSize()
+                        if let p = k.pipeline {
+                            Text("\((p == .leads ? model : owners).leads.count)")
+                                .font(.system(size: 10, weight: .bold)).monospacedDigit()
+                                .foregroundStyle(on ? UI.ink.opacity(0.7) : UI.faint)
+                        }
                     }
                     .foregroundStyle(on ? UI.ink : UI.dim)
                     .padding(.horizontal, 13).padding(.vertical, 7)
@@ -227,7 +333,7 @@ struct GZIbizaDashboard: View {
                     }
                 }
             }
-            HoloSearchField(placeholder: tab.searchPlaceholder, text: $search, width: 150)
+            HoloSearchField(placeholder: kind.searchPlaceholder, text: $search, width: 150)
         }
     }
 
@@ -374,13 +480,14 @@ private struct GZLeadDrawerView: View {
     let lead: RELead
     let stages: [PipelineStage]
     let onStage: (String) -> Void
-    let onNotes: (String) -> Void
+    let onNotes: (String) async -> Bool
     let onDelete: () -> Void
     let onEdit: () -> Void
     let onClose: () -> Void
 
     @State private var note: String = ""
     @State private var savedFlash = false
+    @State private var confermaElimina = false
     private var stage: PipelineStage { stages.first { $0.id == lead.stage } ?? stages[0] }
     private var src: LeadSource { .from(lead.source) }
 
@@ -477,12 +584,20 @@ private struct GZLeadDrawerView: View {
                                 if savedFlash {
                                     Label("Salvato", systemImage: "checkmark.circle.fill")
                                         .font(.system(size: 10.5, weight: .semibold)).foregroundStyle(UI.tint(.ok))
+                                } else if note != (lead.notes ?? "") {
+                                    // Chiudere il drawer con la nota non salvata la perde
+                                    Label("Non salvata", systemImage: "circle.dashed")
+                                        .font(.system(size: 10.5, weight: .semibold)).foregroundStyle(UI.tint(.attesa))
                                 }
                                 Spacer()
                                 Button {
-                                    onNotes(note)
-                                    savedFlash = true
-                                    Task { try? await Task.sleep(nanoseconds: 1_600_000_000); savedFlash = false }
+                                    // Il «Salvato» compare solo se il server ha davvero accettato
+                                    Task {
+                                        guard await onNotes(note) else { return }
+                                        savedFlash = true
+                                        try? await Task.sleep(nanoseconds: 1_600_000_000)
+                                        savedFlash = false
+                                    }
                                 } label: {
                                     Text("Salva nota").font(.system(size: 11.5, weight: .semibold))
                                         .foregroundStyle(UI.ink)
@@ -516,12 +631,18 @@ private struct GZLeadDrawerView: View {
                     }.buttonStyle(.plain)
                 }
                 GhostButton(label: "Modifica", icon: "pencil", action: onEdit)
-                Button(action: onDelete) {
+                Button { confermaElimina = true } label: {
                     Image(systemName: "trash").font(.system(size: 13)).foregroundStyle(UI.tint(.stop))
                         .frame(width: 42, height: 36)
                         .background(RoundedRectangle(cornerRadius: 9).fill(UI.tint(.stop).opacity(0.12)))
                         .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(UI.tint(.stop).opacity(0.4), lineWidth: 1))
                 }.buttonStyle(.plain)
+                .confirmationDialog("Eliminare questa scheda?", isPresented: $confermaElimina) {
+                    Button("Elimina", role: .destructive, action: onDelete)
+                    Button("Annulla", role: .cancel) {}
+                } message: {
+                    Text("\(lead.name.isEmpty ? "Scheda senza nome" : lead.name) — con note, contatti e storico. L'operazione non si può annullare.")
+                }
             }
             .padding(EdgeInsets(top: 12, leading: 22, bottom: 18, trailing: 22))
         }

@@ -138,6 +138,11 @@ final class CalendarioModel: ObservableObject {
 // ─── Vista ───────────────────────────────────────────────────────────────────
 
 struct CalendarioVisiteView: View {
+    /// Vedi ProprietaView.embedded: stessa ragione.
+    let embedded: Bool
+    /// Esplicito: con proprietà private il memberwise init sarebbe privato e
+    /// la vista non si potrebbe costruire da un altro file.
+    init(embedded: Bool = false) { self.embedded = embedded }
     @StateObject private var model = CalendarioModel()
     @State private var giornoScelto = Calendar.current.startOfDay(for: Date())
     @State private var mostraOrari = false
@@ -189,9 +194,9 @@ struct CalendarioVisiteView: View {
     }
 
     var body: some View {
-        ScrollView(showsIndicators: false) {
+        ContenitoreScorrevole(scorre: !embedded) {
             VStack(alignment: .leading, spacing: 18) {
-                header
+                if !embedded { header }
 
                 if let e = model.error {
                     GlassCard { Text("Errore: \(e)").font(.system(size: 11.5))
