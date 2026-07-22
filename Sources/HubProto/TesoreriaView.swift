@@ -923,7 +923,10 @@ struct TesoreriaView: View {
     // Booking ha già pagato (checkout passato), quello che arriverà diviso per
     // mese, Airbnb a parte perché non ha commissione, e il totale del conto.
     private func otaIncassato(_ contoId: String) -> [RigaOTA] {
-        let mov = model.movimenti.filter { $0.conto_id == contoId && nelPeriodo($0) }
+        let mov = model.movimenti.filter {
+            $0.conto_id == contoId && nelPeriodo($0)
+                && (movStrut == nil || $0.struttura == movStrut!.rawValue)
+        }
         let commissioni = mov.filter { $0.tipo == "uscita" && $0.categoria == "commissione" }
         return mov.filter { $0.tipo == "entrata" }.sorted { $0.data < $1.data }.map { m in
             let rif = rifBooking(m.descrizione)
@@ -938,6 +941,7 @@ struct TesoreriaView: View {
     private func otaDaIncassare(_ contoId: String, fonti: [String]) -> [RigaOTA] {
         prenFiltrate
             .filter { contoDest($0) == contoId && fonti.contains($0.source ?? "")
+                      && (movStrut == nil || $0.struttura == movStrut!.rawValue)
                       && max(0, $0.amount_cents - $0.paid_cents) > 0 }
             .sorted { ($0.checkin ?? "") < ($1.checkin ?? "") }
             .map { b in
@@ -953,6 +957,7 @@ struct TesoreriaView: View {
     private func bookingPerMese(_ contoId: String) -> [(mese: String, righe: [RigaOTA])] {
         var map: [String: [RigaOTA]] = [:]
         for b in prenFiltrate where contoDest(b) == contoId && (b.source ?? "") == "booking"
+                                    && (movStrut == nil || b.struttura == movStrut!.rawValue)
                                     && max(0, b.amount_cents - b.paid_cents) > 0 {
             let k = String((b.checkin ?? "").prefix(7))
             let lordo = max(0, b.amount_cents - b.paid_cents)
@@ -980,6 +985,23 @@ struct TesoreriaView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .background(RoundedRectangle(cornerRadius: 10).fill(PSE.accent.opacity(0.18)))
+
+            // Combinazione impossibile per come sono fatte le cose: questo è il
+            // conto delle OTA, e le OTA le ha solo Via Po. Meglio dirlo che
+            // mostrare tre tabelle vuote.
+            if incassato.isEmpty && perMese.isEmpty && airbnb.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Nessun movimento OTA per \(movStrut?.label ?? "il filtro scelto")")
+                        .font(.system(size: 12, weight: .semibold)).foregroundStyle(PSE.ink)
+                    Text(movStrut == .viaRomagna
+                         ? "Su questo conto arrivano solo i soldi delle OTA, che sono di Via Po: Booking e Airbnb lavorano solo lì. Gli incassi di Via Romagna sono in contante (Cassa) o per bonifico (Beeper)."
+                         : "Per il periodo e la casa selezionati non risulta nessun incasso da Booking o Airbnb.")
+                        .font(.system(size: 11)).foregroundStyle(PSE.faint)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading).padding(16)
+                .background(RoundedRectangle(cornerRadius: 12).fill(PSE.panel))
+                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(PSE.line, lineWidth: 1))
+            }
 
             if !incassato.isEmpty {
                 blocco("BOOKING — GIÀ INCASSATO (checkout passato, Booking ha pagato)", PSE.pos) {
@@ -1092,9 +1114,9 @@ struct TesoreriaView: View {
 
     private var contoNota: String {
         switch contoSel {
-        case "tutti": return "Tutti i conti insieme: Cassa (contante) + Massimo (Booking, lordo entrata / commissione uscita) + Beeper (bonifici). La colonna «Conto» indica dove è transitato il denaro."
-        case "massimo": return "Booking già incassato: importo lordo come entrata, commissione (16,5%) come uscita. Il saldo è il netto. Le prenotazioni future sono in «da incassare» (Riepilogo)."
-        case "beeper": return "Estratto conto bonifici: affitti, depositi (da restituire) e uscite (rata prestito, muratore, Marroni, spese banca)."
+        case "tutti": return "Tutti i conti insieme: Cassa (contante, entrambe le case) + Massimo (le OTA di Via Po) + Beeper (bonifici). La colonna «Conto» indica dove è transitato il denaro."
+        case "massimo": return "Conto delle OTA di Via Po: qui arrivano Booking e Airbnb, e solo di quella casa. Booking entra al lordo con la commissione (16,5%) come uscita, quindi il saldo è il netto; Airbnb non ha commissione. Via Romagna non passa da qui: incassa in contante o per bonifico. Le prenotazioni future sono in «da incassare»."
+        case "beeper": return "Estratto conto bonifici, entrambe le case: affitti bonificati, depositi degli inquilini (da restituire) e uscite (rata prestito, muratore, Marroni, spese banca)."
         default: return "Contante Via Po + Via Romagna: affitti in entrata; pulizia, colazioni, chiavi e idraulico in uscita."
         }
     }
