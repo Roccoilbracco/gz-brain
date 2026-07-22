@@ -189,6 +189,10 @@ struct PSESegmented<T: Hashable>: View {
 // ── Dashboard ────────────────────────────────────────────────────────────────
 struct CamerePSEDashboard: View {
     @State private var items: [Prenotazione] = []
+    // Gli ospiti Educamp sono le "prenotazioni" di Via Romagna: camere condivise
+    // a letto, quindi stanno in una tabella a parte e nel planning si mostrano
+    // per ospite, non per stanza.
+    @State private var educampOspiti: [EducampOspite] = []
     @State private var loading = true
     @State private var strutturaFilter: Struttura? = nil
     @State private var selectedDay = Calendar.current.startOfDay(for: Date())
@@ -505,12 +509,42 @@ struct CamerePSEDashboard: View {
     }
 
     // ── planning mensile: camere (righe) × giorni (colonne) ──
-    private enum GRow: Hashable { case header, title(Struttura), room(Struttura, String), free(Struttura) }
+    private enum GRow: Hashable {
+        case header, title(Struttura), room(Struttura, String), free(Struttura)
+        case educampTitle, educampGuest(String)   // String = id ospite Educamp
+    }
     private var gridRows: [GRow] {
         var r: [GRow] = [.header]
-        for s in strutture { r.append(.title(s)); for rm in roomsFor(s) { r.append(.room(s, rm)) }; r.append(.free(s)) }
+        for s in strutture {
+            r.append(.title(s))
+            for rm in roomsFor(s) { r.append(.room(s, rm)) }
+            r.append(.free(s))
+            // Sotto le stanze di Via Romagna, gli ospiti Educamp del mese: una
+            // riga per persona, perché le camere sono condivise a letto.
+            if s == .viaRomagna {
+                let osp = educampVisibili
+                if !osp.isEmpty {
+                    r.append(.educampTitle)
+                    for o in osp { r.append(.educampGuest(o.id)) }
+                }
+            }
+        }
         return r
     }
+    // Ospiti Educamp il cui soggiorno tocca il mese mostrato (con data valida:
+    // l'annullata ha checkin/checkout nulli e resta fuori).
+    private var educampVisibili: [EducampOspite] {
+        guard strutture.contains(.viaRomagna) else { return [] }
+        let c = Calendar.current
+        guard let range = c.range(of: .day, in: .month, for: monthAnchor),
+              let mStart = c.date(from: c.dateComponents([.year, .month], from: monthAnchor)),
+              let mEnd = c.date(byAdding: .day, value: range.count, to: mStart) else { return [] }
+        return educampOspiti.filter { o in
+            guard let ci = day(o.checkin), let co = day(o.checkout) else { return false }
+            return ci < mEnd && mStart < co      // il soggiorno si sovrappone al mese
+        }.sorted { ($0.gruppo ?? "") + ($0.checkin ?? "") < ($1.gruppo ?? "") + ($1.checkin ?? "") }
+    }
+    private func educampBy(_ id: String) -> EducampOspite? { educampOspiti.first { $0.id == id } }
     private var rowH: CGFloat { 27 }
     private var dayW: CGFloat { 34 }
     private var labelW: CGFloat { 210 }
@@ -518,6 +552,7 @@ struct CamerePSEDashboard: View {
     private var bookingFill: Color { Color(hue: 45/360, saturation: 0.44, brightness: 0.52).opacity(0.34) }
     private var airbnbFill: Color { Color(hue: 22/360, saturation: 0.50, brightness: 0.56).opacity(0.34) }
     private var freeFill: Color { Color(hue: 150/360, saturation: 0.30, brightness: 0.42).opacity(0.20) }
+    private var educampFill: Color { Color(hue: 185/360, saturation: 0.45, brightness: 0.55).opacity(0.40) }
     private var gLine: Color { Color.white.opacity(0.06) }
     // tinta cella occupata in base alla fonte (Booking giallo, Airbnb arancio, resto rosa)
     private func sourceFill(_ s: String?) -> Color {
@@ -532,6 +567,7 @@ struct CamerePSEDashboard: View {
                 HStack(spacing: 10) {
                     legendItem(freeFill, "Libera"); legendItem(occFill, "Diretta")
                     legendItem(bookingFill, "Booking"); legendItem(airbnbFill, "Airbnb")
+                    if strutture.contains(.viaRomagna) { legendItem(educampFill, "Educamp") }
                 }
                 Spacer()
                 HStack(spacing: 6) {
@@ -689,6 +725,22 @@ struct CamerePSEDashboard: View {
                 .frame(width: labelW, height: rowH, alignment: .leading).padding(.leading, 14)
                 .background(PSE.surface)
                 .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
+        case .educampTitle:
+            Text("EDUCAMP · CAMERE CONDIVISE").font(.system(size: 9, weight: .heavy)).tracking(0.5)
+                .foregroundStyle(educampFill.opacity(2)).lineLimit(1)
+                .frame(width: labelW, height: rowH, alignment: .leading).padding(.leading, 12)
+                .background(educampFill.opacity(0.4))
+        case .educampGuest(let id):
+            let o = educampBy(id)
+            HStack(spacing: 5) {
+                Text(o.map { firstName($0.ospite) } ?? "—")
+                    .font(.system(size: 10.5, weight: .medium)).foregroundStyle(PSE.text).lineLimit(1)
+                if let cam = o?.camera, !cam.isEmpty {
+                    Text(cam).font(.system(size: 9)).foregroundStyle(PSE.faint).lineLimit(1)
+                }
+            }
+            .frame(width: labelW, height: rowH, alignment: .leading).padding(.leading, 16)
+            .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
         }
     }
 
@@ -729,6 +781,19 @@ struct CamerePSEDashboard: View {
                 .background(PSE.surface)
                 .overlay(Rectangle().fill(gLine).frame(width: 1), alignment: .trailing)
                 .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
+        case .educampTitle:
+            Rectangle().fill(educampFill.opacity(0.4)).frame(width: dayW, height: rowH)
+                .overlay(Rectangle().fill(gLine).frame(width: 1), alignment: .trailing)
+        case .educampGuest(let id):
+            // barra piena nei giorni del soggiorno; niente nome (è già a sinistra)
+            let dentro: Bool = {
+                guard let o = educampBy(id), let ci = day(o.checkin), let co = day(o.checkout) else { return false }
+                return ci <= d && d < co
+            }()
+            Rectangle().fill(dentro ? educampFill : Color.clear)
+                .frame(width: dayW, height: rowH)
+                .overlay(Rectangle().fill(gLine).frame(width: 1), alignment: .trailing)
+                .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
         }
     }
 
@@ -736,6 +801,7 @@ struct CamerePSEDashboard: View {
     private func load() async {
         loading = true; defer { loading = false }
         do { items = try await HubAPI.listPrenotazioni() } catch { items = [] }
+        educampOspiti = (try? await HubAPI.listEducampOspiti()) ?? []
     }
     private func setStatus(_ b: Prenotazione, _ s: BookingStatus) async {
         if let i = items.firstIndex(where: { $0.id == b.id }) { items[i].status = s.rawValue }
