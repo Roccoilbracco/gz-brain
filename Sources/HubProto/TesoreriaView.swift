@@ -221,7 +221,8 @@ struct TesoreriaView: View {
                             PSESegmented(items: [("tutti", "Tutti i conti")] + model.conti.map { ($0.id, $0.nome) }, selection: $contoSel)
                         } else if sub == .servizi {
                             PSESegmented(items: ServizioTab.allCases.map { ($0, $0.rawValue) }, selection: $servizioSel)
-                        } else if sub == .contoEconomico || sub == .movimenti {
+                        }
+                        if sub == .conti || sub == .contoEconomico || sub == .movimenti {
                             PSESegmented(items: [(nil, "Tutte"), (.viaPo, "Via Po"), (.viaRomagna, "Via Romagna")] as [(Struttura?, String)], selection: $movStrut)
                         }
                         if sub == .conti || sub == .contoEconomico || sub == .movimenti { periodoMenu }
@@ -827,7 +828,7 @@ struct TesoreriaView: View {
     private var tuttiIConti: Bool { contoSel == "tutti" }
     private var contoMovimenti: [TesMovimento] {
         (tuttiIConti ? model.movimenti : model.movimenti.filter { $0.conto_id == contoSel })
-            .filter { nelPeriodo($0) }
+            .filter { nelPeriodo($0) && (movStrut == nil || $0.struttura == movStrut!.rawValue) }
             .sorted { $0.data > $1.data }
     }
     /// Saldo del conto (o di tutti) prima dell'inizio del periodo scelto: senza
@@ -836,7 +837,8 @@ struct TesoreriaView: View {
     private var saldoIniziale: Int {
         guard periodo != "tutto" else { return 0 }
         var t = 0
-        for m in model.movimenti where (tuttiIConti || m.conto_id == contoSel) && m.data < periodo {
+        for m in model.movimenti where (tuttiIConti || m.conto_id == contoSel)
+            && (movStrut == nil || m.struttura == movStrut!.rawValue) && m.data < periodo {
             t += (m.tipo == "entrata") ? m.importo_cents : -m.importo_cents
         }
         return t
@@ -853,25 +855,34 @@ struct TesoreriaView: View {
         let conto = model.conti.first { $0.id == contoSel }
         let iniz = saldoIniziale
         let nome = tuttiIConti ? "TOTALE" : (conto?.nome.uppercased() ?? "")
+        // Filtrando per casa non si guarda più un saldo ma quanto quella casa ha
+        // generato: chiamarlo «saldo» sarebbe falso, il conto non si divide.
+        let perCasa = movStrut != nil
         return VStack(alignment: .leading, spacing: 12) {
             // intestazione: col periodo filtrato l'estratto parte dal saldo
             // iniziale e chiude sul finale, come un vero estratto conto.
             HStack(spacing: 12) {
                 if periodo == "tutto" {
-                    testoCard("SALDO \(nome)", eurc(totE - totU), (totE - totU) < 0 ? PSE.neg : PSE.ink)
+                    testoCard(perCasa ? "GENERATO DA \(movStrut!.label.uppercased())" : "SALDO \(nome)",
+                              eurc(totE - totU), (totE - totU) < 0 ? PSE.neg : PSE.ink)
                     totCard("ENTRATE", totE, PSE.pos)
                     totCard("USCITE", totU, PSE.neg)
                     testoCard("N. MOVIMENTI", "\(mov.count)", PSE.accent)
                 } else {
-                    totCard("SALDO INIZIALE", iniz, iniz < 0 ? PSE.neg : PSE.dim)
+                    totCard(perCasa ? "GENERATO PRIMA DEL PERIODO" : "SALDO INIZIALE", iniz, iniz < 0 ? PSE.neg : PSE.dim)
                     totCard("ENTRATE", totE, PSE.pos)
                     totCard("USCITE", totU, PSE.neg)
-                    testoCard("SALDO FINALE \(nome)", eurc(iniz + totE - totU), (iniz + totE - totU) < 0 ? PSE.neg : PSE.ink)
+                    testoCard(perCasa ? "GENERATO DA \(movStrut!.label.uppercased())" : "SALDO FINALE \(nome)",
+                              eurc(iniz + totE - totU), (iniz + totE - totU) < 0 ? PSE.neg : PSE.ink)
                 }
+            }
+            if perCasa {
+                Text("Filtro casa attivo: questi non sono saldi di conto ma quanto \(movStrut!.label) ha generato e speso. Il denaro sui conti è in comune e non si divide per casa — i saldi veri si vedono togliendo il filtro.")
+                    .font(.system(size: 10.5)).foregroundStyle(PSE.warn)
             }
             // Con «Tutti i conti»: una card di saldo per ciascun conto (saldo pieno,
             // non del periodo: è quello che c'è davvero sul conto oggi)
-            if tuttiIConti {
+            if tuttiIConti && !perCasa {
                 HStack(spacing: 12) {
                     ForEach(model.conti) { c in
                         let s = model.saldo(c.id)
@@ -879,6 +890,7 @@ struct TesoreriaView: View {
                     }
                 }
             }
+            if tuttiIConti && !perCasa { ripartizionePerCasa }
             if mov.isEmpty {
                 EmptyStateCard(icon: "tray", text: periodo == "tutto" ? "Nessun movimento." : "Nessun movimento in \(periodoLabel.lowercased()).")
             } else {
@@ -985,6 +997,90 @@ struct TesoreriaView: View {
                 .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
         }
     }
+    // ── Ripartizione per casa ────────────────────────────────────────────────
+    // Risponde a «da dove vengono e dove si spendono i soldi»: quanto ha
+    // generato ciascuna casa e su quale conto è finito. Il denaro poi sta tutto
+    // insieme sui conti — questa è un'attribuzione, non una divisione.
+    private struct RigaCasa: Identifiable {
+        let id: String, nome: String
+        let entrate: Int, uscite: Int
+        let perConto: [String: Int]      // conto_id → netto
+        var netto: Int { entrate - uscite }
+    }
+    private func rigaCasa(_ nome: String, _ filtro: (TesMovimento) -> Bool) -> RigaCasa {
+        let mov = model.movimenti.filter { nelPeriodo($0) && filtro($0) }
+        var perConto: [String: Int] = [:]
+        var e = 0, u = 0
+        for m in mov {
+            let segno = m.tipo == "entrata" ? m.importo_cents : -m.importo_cents
+            perConto[m.conto_id ?? "—", default: 0] += segno
+            if m.tipo == "entrata" { e += m.importo_cents } else { u += m.importo_cents }
+        }
+        return RigaCasa(id: nome, nome: nome, entrate: e, uscite: u, perConto: perConto)
+    }
+    private var righeCase: [RigaCasa] {
+        Struttura.allCases.map { s in rigaCasa(s.label) { $0.struttura == s.rawValue } }
+        + [rigaCasa("Non attribuito") { $0.struttura == nil || ($0.struttura ?? "").isEmpty }]
+    }
+    private var ripartizionePerCasa: some View {
+        let righe = righeCase
+        let tot = rigaCasa("TOTALE") { _ in true }
+        let nonAttrib = righe.first { $0.nome == "Non attribuito" }?.netto ?? 0
+        return VStack(alignment: .leading, spacing: 0) {
+            Text("DA DOVE VENGONO E DOVE SI SPENDONO — RIPARTIZIONE PER CASA")
+                .font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint)
+                .lineLimit(1).minimumScaleFactor(0.8)
+                .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
+            HStack(spacing: 10) {
+                thc("CASA").frame(width: 130, alignment: .leading)
+                thc("ENTRATE").frame(maxWidth: .infinity, alignment: .trailing)
+                thc("USCITE").frame(maxWidth: .infinity, alignment: .trailing)
+                thc("NETTO").frame(maxWidth: .infinity, alignment: .trailing)
+                ForEach(model.conti) { c in
+                    thc(c.nome.uppercased()).frame(maxWidth: .infinity, alignment: .trailing)
+                }
+            }
+            .padding(.horizontal, 16).padding(.bottom, 8)
+            .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
+            ForEach(righe) { r in
+                casaRow(r, grassetto: false)
+                Divider().overlay(PSE.line).padding(.leading, 16)
+            }
+            casaRow(tot, grassetto: true)
+            if nonAttrib != 0 {
+                Text("«Non attribuito» sono i movimenti senza casa: depositi degli inquilini, rata del prestito, spese bancarie e il bonifico dell'asta. Finché restano così, \(eurc(abs(nonAttrib))) non si sanno leggere per struttura — basta assegnare la casa dal singolo movimento.")
+                    .font(.system(size: 10.5)).foregroundStyle(PSE.warn)
+                    .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 12)
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
+    }
+    private func casaRow(_ r: RigaCasa, grassetto: Bool) -> some View {
+        HStack(spacing: 10) {
+            Text(r.nome).font(.system(size: grassetto ? 11 : 12, weight: grassetto ? .heavy : .semibold))
+                .foregroundStyle(r.nome == "Non attribuito" ? PSE.warn : PSE.ink)
+                .frame(width: 130, alignment: .leading).lineLimit(1)
+            Text("+" + eurc(r.entrate)).font(.system(size: 11.5, weight: grassetto ? .bold : .regular))
+                .foregroundStyle(PSE.pos).monospacedDigit()
+                .frame(maxWidth: .infinity, alignment: .trailing).lineLimit(1).minimumScaleFactor(0.7)
+            Text("−" + eurc(r.uscite)).font(.system(size: 11.5, weight: grassetto ? .bold : .regular))
+                .foregroundStyle(PSE.neg).monospacedDigit()
+                .frame(maxWidth: .infinity, alignment: .trailing).lineLimit(1).minimumScaleFactor(0.7)
+            Text(eurc(r.netto)).font(.system(size: 12.5, weight: .bold))
+                .foregroundStyle(r.netto < 0 ? PSE.neg : PSE.ink).monospacedDigit()
+                .frame(maxWidth: .infinity, alignment: .trailing).lineLimit(1).minimumScaleFactor(0.7)
+            ForEach(model.conti) { c in
+                let v = r.perConto[c.id] ?? 0
+                Text(v == 0 ? "—" : eurc(v)).font(.system(size: 11.5, weight: grassetto ? .bold : .regular))
+                    .foregroundStyle(v == 0 ? PSE.faint : (v < 0 ? PSE.neg : PSE.dim)).monospacedDigit()
+                    .frame(maxWidth: .infinity, alignment: .trailing).lineLimit(1).minimumScaleFactor(0.7)
+            }
+        }
+        .padding(.horizontal, 16).padding(.vertical, grassetto ? 11 : 8)
+        .background(grassetto ? Color.white.opacity(0.04) : .clear)
+    }
+
     private var contoNota: String {
         switch contoSel {
         case "tutti": return "Tutti i conti insieme: Cassa (contante) + Massimo (Booking, lordo entrata / commissione uscita) + Beeper (bonifici). La colonna «Conto» indica dove è transitato il denaro."

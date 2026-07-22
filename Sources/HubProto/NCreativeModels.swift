@@ -95,6 +95,25 @@ struct NCInvoice: Identifiable, Decodable, Equatable {
     }
 }
 
+/// Voce del modulo Personale: una riga qualunque sia la colonna (famiglia,
+/// Giorgio, Niko) e il tipo (appuntamento, da fare, spesa, pasto, obiettivo…).
+struct NCPersonalItem: Identifiable, Decodable, Equatable {
+    let id: String
+    var person: String
+    var kind: String
+    var title: String
+    var notes: String?
+    var day: String?
+    var time_at: String?
+    var slot: String?
+    var done: Bool
+    var priority: Int
+    var repeat_rule: String?
+    var notify_at: String?
+    var month: String?
+    let created_at: String?
+}
+
 struct NCExpense: Identifiable, Decodable, Equatable {
     let id: String
     var client_id: String?
@@ -360,6 +379,9 @@ extension HubAPI {
     static func ncExpenses() async throws -> [NCExpense] {
         try await sb.fetch("nc_expenses?select=*&order=date.desc&limit=3000")
     }
+    static func ncPersonal() async throws -> [NCPersonalItem] {
+        try await sb.fetch("nc_personal_items?select=*&order=day.asc.nullslast,priority.desc,created_at.asc&limit=3000")
+    }
 
     /// CRUD generico sulle tabelle `nc_`: gli id sono uuid, niente da encodare.
     static func ncInsert(_ table: String, _ fields: [String: Any?]) async throws {
@@ -383,6 +405,7 @@ final class NCModel: ObservableObject {
     @Published var content: [NCContent] = []
     @Published var invoices: [NCInvoice] = []
     @Published var expenses: [NCExpense] = []
+    @Published var personal: [NCPersonalItem] = []
     @Published var loading = true
     @Published var error: String?
 
@@ -395,8 +418,10 @@ final class NCModel: ObservableObject {
             async let ct = HubAPI.ncContent()
             async let iv = HubAPI.ncInvoices()
             async let ex = HubAPI.ncExpenses()
-            let (a, b, c, d, e, f) = try await (cl, dl, cp, ct, iv, ex)
-            clients = a; deals = b; campaigns = c; content = d; invoices = e; expenses = f
+            async let pr = HubAPI.ncPersonal()
+            let (a, b, c, d, e, f, g) = try await (cl, dl, cp, ct, iv, ex, pr)
+            clients = a; deals = b; campaigns = c; content = d
+            invoices = e; expenses = f; personal = g
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -435,6 +460,14 @@ final class NCModel: ObservableObject {
         try? await HubAPI.ncUpdate("nc_invoices", id: id, fields)
     }
 
+    /// Spunta/despunta una voce personale: prima l'UI, poi il salvataggio.
+    func togglePersonalDone(_ id: String) async {
+        guard let i = personal.firstIndex(where: { $0.id == id }) else { return }
+        personal[i].done.toggle()
+        try? await HubAPI.ncUpdate("nc_personal_items", id: id,
+                                   ["done": personal[i].done, "updated_at": isoNowString()])
+    }
+
     func delete(_ table: String, id: String) async {
         switch table {
         case "nc_clients": clients.removeAll { $0.id == id }
@@ -443,6 +476,7 @@ final class NCModel: ObservableObject {
         case "nc_content": content.removeAll { $0.id == id }
         case "nc_invoices": invoices.removeAll { $0.id == id }
         case "nc_expenses": expenses.removeAll { $0.id == id }
+        case "nc_personal_items": personal.removeAll { $0.id == id }
         default: break
         }
         try? await HubAPI.ncDelete(table, id: id)

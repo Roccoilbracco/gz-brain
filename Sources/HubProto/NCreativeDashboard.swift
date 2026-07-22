@@ -6,7 +6,7 @@ import SwiftUI
 // ============================================================================
 
 enum NCTab: String, CaseIterable, Identifiable {
-    case overview, clients, pipeline, content, finance
+    case overview, clients, pipeline, content, social, finance, personal
     var id: String { rawValue }
     var label: String {
         switch self {
@@ -14,7 +14,9 @@ enum NCTab: String, CaseIterable, Identifiable {
         case .clients: return "Clients"
         case .pipeline: return "Pipeline"
         case .content: return "Content"
+        case .social: return "Social"
         case .finance: return "Finance"
+        case .personal: return "Personal"
         }
     }
     var icon: String {
@@ -23,7 +25,9 @@ enum NCTab: String, CaseIterable, Identifiable {
         case .clients: return "person.2"
         case .pipeline: return "chart.bar.doc.horizontal"
         case .content: return "calendar"
+        case .social: return "chart.line.uptrend.xyaxis"
         case .finance: return "eurosign.circle"
+        case .personal: return "house"
         }
     }
 }
@@ -50,7 +54,9 @@ struct NCreativeDashboard: View {
                 case .clients: NCClientsView(model: model)
                 case .pipeline: NCPipelineView(model: model)
                 case .content: NCContentView(model: model)
+                case .social: NCSocialView(model: model)
                 case .finance: NCFinanceView(model: model)
+                case .personal: NCPersonalView(model: model)
                 }
             }
         }
