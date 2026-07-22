@@ -84,6 +84,10 @@ struct ProgettoDettaglioView: View {
                 } else if model.project.slug == "wallis-57" {
                     // dash dedicata Wallis 57: richieste dal form del sito + WhatsApp
                     WallisDashboard()
+                } else if model.project.slug == "ncreative" {
+                    // dash dedicata NCREATIVE: CRM dell'agenzia social (clienti,
+                    // pipeline, calendario contenuti, fatture e spese)
+                    NCreativeDashboard()
                 } else if model.project.slug == "gz-ibiza" {
                     // dash dedicata GZ Ibiza: pipeline lead (re_leads) + WhatsApp
                     GZIbizaDashboard()

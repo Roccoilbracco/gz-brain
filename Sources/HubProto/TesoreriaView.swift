@@ -346,10 +346,11 @@ struct TesoreriaView: View {
                     EmptyStateCard(icon: "tray", text: "Nessun movimento per il filtro scelto.")
                 } else {
                     movHeader
-                    ForEach(Array(visibiliMov.enumerated()), id: \.element.id) { i, m in
+                    ForEach(visibiliMov) { m in
                         movRow(m)
-                        if i < visibiliMov.count - 1 { Divider().overlay(PSE.line).padding(.leading, 16) }
+                        Divider().overlay(PSE.line).padding(.leading, 16)
                     }
+                    movTotaleRow
                 }
             }
             .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
@@ -370,6 +371,24 @@ struct TesoreriaView: View {
         .font(.system(size: 8.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
         .padding(.horizontal, 16).padding(.vertical, 9)
         .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
+    }
+    // Riga di chiusura della tabella: entrate, uscite e saldo di ciò che è
+    // effettivamente a schermo, filtri compresi.
+    private var movTotaleRow: some View {
+        let saldo = movEntrate - movUscite
+        return HStack(spacing: 12) {
+            Text("TOTALE — \(visibiliMov.count) MOVIMENTI")
+                .font(.system(size: 10.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.ink)
+            Spacer()
+            Text("+" + eurc(movEntrate)).font(.system(size: 12, weight: .semibold)).foregroundStyle(PSE.pos).monospacedDigit()
+            Text("−" + eurc(movUscite)).font(.system(size: 12, weight: .semibold)).foregroundStyle(PSE.neg).monospacedDigit()
+            Text("=").font(.system(size: 12, weight: .semibold)).foregroundStyle(PSE.faint)
+            Text(eurc(saldo)).font(.system(size: 15, weight: .bold))
+                .foregroundStyle(saldo < 0 ? PSE.neg : PSE.ink).monospacedDigit()
+                .frame(width: 100, alignment: .trailing)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .background(Color.white.opacity(0.04))
     }
     private func movRow(_ m: TesMovimento) -> some View {
         let entrata = m.tipo == "entrata"

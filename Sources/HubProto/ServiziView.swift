@@ -15,6 +15,21 @@ struct Pulizia: Identifiable, Decodable, Equatable {
     var costo_cents: Int
     var sort_order: Int?
 }
+/// Bolletta pagata da noi (luce, gas, acqua, internet, immondizia, IMU, varie).
+/// Sta in una tabella a parte e non nei movimenti perché si paga da un conto
+/// che non è né Cassa né Massimo né Beeper: metterla lì sfalserebbe i saldi.
+struct Bolletta: Identifiable, Decodable, Equatable {
+    let id: String
+    var casa: String
+    var tipo: String
+    var fornitore: String?
+    var scadenza: String?
+    var periodo: String?
+    var importo_cents: Int
+    var pagata: Bool
+    var note: String?
+}
+
 struct Colazione: Identifiable, Decodable, Equatable {
     let id: String
     var ospite: String?
@@ -37,7 +52,23 @@ extension HubAPI {
     static func listColazioni() async throws -> [Colazione] {
         try await sb.fetch("colazioni?select=*&order=sort_order.asc")
     }
+    static func listBollette() async throws -> [Bolletta] {
+        try await sb.fetch("bollette?select=*&order=scadenza.desc")
+    }
 }
+
+/// Le voci di spesa delle utenze, nell'ordine in cui vanno mostrate. Immondizia
+/// e IMU non sono utenze in senso stretto ma stanno qui perché è dove l'utente
+/// va a cercarle.
+let TIPI_BOLLETTA: [(String, String, String)] = [
+    ("luce",       "Luce",       "bolt.fill"),
+    ("gas",        "Gas",        "flame.fill"),
+    ("acqua",      "Acqua",      "drop.fill"),
+    ("internet",   "Internet",   "wifi"),
+    ("immondizia", "Immondizia", "trash.fill"),
+    ("imu",        "IMU",        "building.columns.fill"),
+    ("varie",      "Varie",      "ellipsis.circle.fill"),
+]
 
 private let svYmd: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f }()
 private let svDay: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "it_IT"); f.dateFormat = "dd/MM"; return f }()
@@ -45,7 +76,13 @@ private func svDayStr(_ s: String?) -> String {
     guard let s, let d = svYmd.date(from: String(s.prefix(10))) else { return "—" }
     return svDay.string(from: d)
 }
-private func casaLbl(_ s: String?) -> String { s == "via-po" ? "Via Po" : s == "via-romagna" ? "Via Romagna" : "—" }
+private func casaLbl(_ s: String?) -> String { s == "via-po" ? "Via Po" : s == "via-romagna" ? "Via Romagna" : s == "comune" ? "Comune" : "—" }
+// Le bollette coprono più anni: qui l'anno serve, a differenza delle pulizie.
+private let svDayY: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "it_IT"); f.dateFormat = "dd/MM/yy"; return f }()
+private func svDayYStr(_ s: String?) -> String {
+    guard let s, let d = svYmd.date(from: String(s.prefix(10))) else { return "—" }
+    return svDayY.string(from: d)
+}
 
 enum ServizioTab: String, CaseIterable, Identifiable { case pulizie = "Pulizie", colazioni = "Colazioni", utenze = "Utenze"; var id: String { rawValue } }
 
@@ -53,12 +90,14 @@ enum ServizioTab: String, CaseIterable, Identifiable { case pulizie = "Pulizie",
     @Published var pulizie: [Pulizia] = []
     @Published var colazioni: [Colazione] = []
     @Published var utenze: [EducampRiga] = []
+    @Published var bollette: [Bolletta] = []
     @Published var loading = true
     func load() async {
         loading = true
         pulizie = (try? await HubAPI.listPulizie()) ?? []
         colazioni = (try? await HubAPI.listColazioni()) ?? []
         utenze = (try? await HubAPI.listEducampRighe()) ?? []
+        bollette = (try? await HubAPI.listBollette()) ?? []
         loading = false
     }
 }
@@ -189,12 +228,49 @@ struct ServiziView: View {
         .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
     }
 
-    // ── UTENZE (da Educamp: 8 €/giorno per camera divisi tra i presenti) ──
+    // ── UTENZE ──
+    // Due facce della stessa voce: quello che RECUPERIAMO dagli ospiti Educamp
+    // (8 €/giorno per camera) e quello che PAGHIAMO davvero di bollette.
+    private var bolletteTot: Int { model.bollette.reduce(0) { $0 + $1.importo_cents } }
+    private func bolletteTipo(_ t: String) -> Int {
+        model.bollette.filter { $0.tipo == t }.reduce(0) { $0 + $1.importo_cents }
+    }
+    private func bolletteCasa(_ c: String) -> Int {
+        model.bollette.filter { $0.casa == c }.reduce(0) { $0 + $1.importo_cents }
+    }
+
     private var utenzeView: some View {
         let mesi = Array(Set(model.utenze.map { $0.mese })).sorted()
         let tot = model.utenze.reduce(0) { $0 + $1.utenze_cents }
+        let saldo = tot - bolletteTot
         return VStack(alignment: .leading, spacing: 12) {
-            Text("UTENZE EDUCAMP — VIA ROMAGNA · 8 €/giorno per camera (6 € se una sola persona), interamente nostre")
+            // ══ QUELLO CHE PAGHIAMO ══
+            Text("QUELLO CHE PAGHIAMO — BOLLETTE E TASSE")
+                .font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.neg)
+            HStack(spacing: 12) {
+                card("TOTALE PAGATO", eurc(bolletteTot), PSE.neg)
+                card("VIA PO", eurc(bolletteCasa("via-po")), PSE.dim)
+                card("VIA ROMAGNA", eurc(bolletteCasa("via-romagna")), PSE.dim)
+                card("RECUPERATO DAGLI OSPITI", eurc(tot), PSE.pos)
+                card(saldo >= 0 ? "AVANZO" : "A NOSTRO CARICO", eurc(abs(saldo)), saldo >= 0 ? PSE.pos : PSE.warn)
+            }
+            HStack(spacing: 12) {
+                ForEach(TIPI_BOLLETTA, id: \.0) { t in
+                    tipoCard(t.0, t.1, t.2)
+                }
+            }
+            if model.bollette.isEmpty {
+                EmptyStateCard(icon: "doc.text", text: "Nessuna bolletta registrata.")
+            } else {
+                bolletteTable
+            }
+            Text("Le bollette si pagano dal conto corrente, non da Cassa/Massimo/Beeper: per questo non compaiono tra i movimenti e non toccano i saldi. Acqua, immondizia e IMU non erano nel foglio del maestro — le voci sono pronte, vanno solo riempite.")
+                .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+
+            // ══ QUELLO CHE RECUPERIAMO ══
+            Text("QUELLO CHE RECUPERIAMO — UTENZE ADDEBITATE AGLI OSPITI EDUCAMP")
+                .font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.pos).padding(.top, 8)
+            Text("Via Romagna · 8 €/giorno per camera (6 € se una sola persona)")
                 .font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim)
             HStack(spacing: 12) {
                 card("TOTALE UTENZE", eurc(tot), PSE.accent)
@@ -234,6 +310,62 @@ struct ServiziView: View {
             }
         }
     }
+    // Card compatta per tipo di bolletta: resta visibile anche a zero, così si
+    // vede subito quali voci non sono ancora state registrate.
+    private func tipoCard(_ tipo: String, _ label: String, _ icon: String) -> some View {
+        let v = bolletteTipo(tipo)
+        let vuota = v == 0
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 5) {
+                Image(systemName: icon).font(.system(size: 10)).foregroundStyle(vuota ? PSE.faint : PSE.neg)
+                Text(label.uppercased()).font(.system(size: 8.5, weight: .heavy)).tracking(0.5)
+                    .foregroundStyle(PSE.faint).lineLimit(1)
+            }
+            Text(vuota ? "—" : eurc(v)).font(.system(size: 14, weight: .bold))
+                .foregroundStyle(vuota ? PSE.faint : PSE.ink).monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(PSE.surface))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(PSE.line, lineWidth: 1))
+    }
+
+    private var bolletteTable: some View {
+        tableCard {
+            HStack(spacing: 10) {
+                th("SCADENZA").frame(width: 78, alignment: .leading)
+                th("CASA").frame(width: 96, alignment: .leading)
+                th("TIPO").frame(width: 86, alignment: .leading)
+                th("FORNITORE").frame(width: 110, alignment: .leading)
+                th("PERIODO / NOTA").frame(maxWidth: .infinity, alignment: .leading)
+                th("IMPORTO").frame(width: 84, alignment: .trailing)
+            }
+            .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
+            .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
+            ForEach(Array(model.bollette.enumerated()), id: \.element.id) { i, b in
+                HStack(spacing: 10) {
+                    num(svDayYStr(b.scadenza), PSE.dim).frame(width: 78, alignment: .leading)
+                    td(casaLbl(b.casa)).frame(width: 96, alignment: .leading)
+                    Text(TIPI_BOLLETTA.first { $0.0 == b.tipo }?.1 ?? b.tipo.capitalized)
+                        .font(.system(size: 12, weight: .semibold)).foregroundStyle(PSE.ink)
+                        .frame(width: 86, alignment: .leading).lineLimit(1)
+                    td(b.fornitore ?? "—").frame(width: 110, alignment: .leading)
+                    td(b.periodo ?? b.note ?? "—").frame(maxWidth: .infinity, alignment: .leading)
+                    num(eurc(b.importo_cents), PSE.neg).frame(width: 84, alignment: .trailing)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 7)
+                if i < model.bollette.count - 1 { Divider().overlay(PSE.line).padding(.leading, 16) }
+            }
+            HStack(spacing: 10) {
+                Text("TOTALE BOLLETTE").font(.system(size: 10, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.ink)
+                Spacer()
+                Text(eurc(bolletteTot)).font(.system(size: 14, weight: .bold)).foregroundStyle(PSE.neg).monospacedDigit()
+                    .frame(width: 84, alignment: .trailing)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 11)
+            .background(Color.white.opacity(0.04))
+        }
+    }
+
     private func meseBreve(_ key: String) -> String {
         guard let d = svYmd.date(from: key + "-01") else { return key }
         let f = DateFormatter(); f.locale = Locale(identifier: "it_IT"); f.dateFormat = "MMMM yyyy"
