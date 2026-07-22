@@ -215,6 +215,7 @@ struct StatusChip: View {
     var hue: Double? = nil   // nil = neutro
     var body: some View {
         Text(text.uppercased()).font(.system(size: 9, weight: .heavy)).tracking(0.8)
+            .lineLimit(1).fixedSize(horizontal: true, vertical: false)
             .foregroundStyle(hue == nil ? Csb.itemFg : Holo.hsl(hue!, 60, 72))
             .padding(.horizontal, 10).padding(.vertical, 5)
             .background(RoundedRectangle(cornerRadius: 8).fill(Csb.tabsBg))

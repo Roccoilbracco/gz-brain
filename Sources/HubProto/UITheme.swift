@@ -126,7 +126,10 @@ struct FilterChip: View {
         Button(action: action) {
             HStack(spacing: 5) {
                 if let icon { Image(systemName: icon).font(.system(size: 9)) }
+                // Come per PSESegmented: mai lasciare che una chip stretta mandi
+                // l'etichetta a capo lettera per lettera.
                 Text(label).font(.system(size: 11, weight: .medium))
+                    .lineLimit(1).fixedSize(horizontal: true, vertical: false)
             }
             .foregroundStyle(selected ? UI.ink : UI.dim)
             .padding(.horizontal, 10).padding(.vertical, 5)

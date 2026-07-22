@@ -114,6 +114,9 @@ struct TesoreriaView: View {
     @State private var contoSel: String = "tutti"     // "tutti" = tutti i conti insieme; altrimenti id conto
     @State private var servizioSel: ServizioTab = .pulizie
 
+    /// Il Riepilogo e l'Educamp non hanno filtri: senza questo la seconda riga
+    /// resterebbe vuota lasciando un buco sotto le sezioni.
+    private var mostraFiltri: Bool { sub != .riepilogo && sub != .educamp }
     private func nelPeriodo(_ m: TesMovimento) -> Bool { periodo == "tutto" || m.data.hasPrefix(periodo) }
     private func matchCerca(_ m: TesMovimento) -> Bool {
         let q = cerca.trimmingCharacters(in: .whitespaces).lowercased()
@@ -199,22 +202,33 @@ struct TesoreriaView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 12) {
-                PSESegmented(items: TesSub.allCases.map { ($0, $0.rawValue) }, selection: $sub)
-                if sub == .conti {
-                    PSESegmented(items: [("tutti", "Tutti i conti")] + model.conti.map { ($0.id, $0.nome) }, selection: $contoSel)
-                } else if sub == .servizi {
-                    PSESegmented(items: ServizioTab.allCases.map { ($0, $0.rawValue) }, selection: $servizioSel)
-                } else if sub == .contoEconomico || sub == .movimenti {
-                    PSESegmented(items: [(nil, "Tutte"), (.viaPo, "Via Po"), (.viaRomagna, "Via Romagna")] as [(Struttura?, String)], selection: $movStrut)
+            // Due righe: sopra le sezioni, sotto i filtri della sezione scelta.
+            // Su una riga sola i comandi non ci stavano e le etichette venivano
+            // schiacciate fino ad andare a capo una lettera per riga.
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    PSESegmented(items: TesSub.allCases.map { ($0, $0.rawValue) }, selection: $sub)
+                    Spacer(minLength: 12)
+                    if sub == .movimenti {
+                        Text("\(visibiliMov.count) movimenti").font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(PSE.faint).lineLimit(1).fixedSize()
+                    }
+                    if sub == .conti || sub == .contoEconomico || sub == .movimenti { exportButton }
                 }
-                if sub == .conti || sub == .contoEconomico || sub == .movimenti { periodoMenu }
-                if sub == .movimenti { campoCerca }
-                Spacer()
-                if sub == .movimenti {
-                    Text("\(visibiliMov.count) movimenti").font(.system(size: 11, weight: .medium)).foregroundStyle(PSE.faint)
+                if mostraFiltri {
+                    HStack(spacing: 12) {
+                        if sub == .conti {
+                            PSESegmented(items: [("tutti", "Tutti i conti")] + model.conti.map { ($0.id, $0.nome) }, selection: $contoSel)
+                        } else if sub == .servizi {
+                            PSESegmented(items: ServizioTab.allCases.map { ($0, $0.rawValue) }, selection: $servizioSel)
+                        } else if sub == .contoEconomico || sub == .movimenti {
+                            PSESegmented(items: [(nil, "Tutte"), (.viaPo, "Via Po"), (.viaRomagna, "Via Romagna")] as [(Struttura?, String)], selection: $movStrut)
+                        }
+                        if sub == .conti || sub == .contoEconomico || sub == .movimenti { periodoMenu }
+                        if sub == .movimenti { campoCerca }
+                        Spacer(minLength: 0)
+                    }
                 }
-                if sub == .conti || sub == .contoEconomico || sub == .movimenti { exportButton }
             }
             if model.loading {
                 HStack { Spacer(); ProgressView().controlSize(.large); Spacer() }.padding(.top, 30)
@@ -294,7 +308,9 @@ struct TesoreriaView: View {
     private func testoCard(_ t: String, _ v: String, _ c: Color) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(t).font(.system(size: 9.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
+                .lineLimit(1).minimumScaleFactor(0.7)
             Text(v).font(.system(size: 18, weight: .bold)).foregroundStyle(c).monospacedDigit()
+                .lineLimit(1).minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity, alignment: .leading).padding(14)
         .background(RoundedRectangle(cornerRadius: 12).fill(PSE.surface))
@@ -651,6 +667,7 @@ struct TesoreriaView: View {
     private func blocco<C: View>(_ titolo: String, _ c: Color, @ViewBuilder _ content: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(titolo).font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(c)
+                .lineLimit(1).minimumScaleFactor(0.8)
                 .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
             content()
             Color.clear.frame(height: 6)
@@ -661,8 +678,10 @@ struct TesoreriaView: View {
     private func rigaTotale(_ t: String, _ v: Int, _ c: Color) -> some View {
         HStack {
             Text(t).font(.system(size: 10.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.ink)
-            Spacer()
+                .lineLimit(1).minimumScaleFactor(0.75)
+            Spacer(minLength: 12)
             Text(eurc(v)).font(.system(size: 15, weight: .bold)).foregroundStyle(c).monospacedDigit()
+                .lineLimit(1).fixedSize()
         }
         .padding(.horizontal, 16).padding(.vertical, 11)
         .background(RoundedRectangle(cornerRadius: 10).fill(c.opacity(0.10)))
@@ -674,7 +693,8 @@ struct TesoreriaView: View {
     private func subtotaleBar(_ t: String, _ v: Int, _ c: Color) -> some View {
         HStack {
             Text(t).font(.system(size: 9.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.ink)
-            Spacer()
+                .lineLimit(1).minimumScaleFactor(0.8)
+            Spacer(minLength: 12)
             Text(eurc(v)).font(.system(size: 13, weight: .bold)).foregroundStyle(c).monospacedDigit()
                 .frame(width: 96, alignment: .trailing)
         }

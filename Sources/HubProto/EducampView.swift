@@ -176,6 +176,7 @@ struct EducampView: View {
             }
             Text(eurc(v)).font(.system(size: 15, weight: .bold))
                 .foregroundStyle(futuro ? PSE.warn : PSE.ink).monospacedDigit()
+                .lineLimit(1).minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.vertical, 11)
         .background(RoundedRectangle(cornerRadius: 12).fill(PSE.surface))
@@ -183,8 +184,10 @@ struct EducampView: View {
     }
     private func card(_ t: String, _ v: String, _ c: Color) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(t).font(.system(size: 9, weight: .heavy)).tracking(0.6).foregroundStyle(PSE.faint).lineLimit(1)
+            Text(t).font(.system(size: 9, weight: .heavy)).tracking(0.6).foregroundStyle(PSE.faint)
+                .lineLimit(1).minimumScaleFactor(0.7)
             Text(v).font(.system(size: 16, weight: .bold)).foregroundStyle(c).monospacedDigit()
+                .lineLimit(1).minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity, alignment: .leading).padding(14)
         .background(RoundedRectangle(cornerRadius: 12).fill(PSE.surface))

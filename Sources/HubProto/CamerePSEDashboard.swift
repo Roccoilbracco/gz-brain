@@ -156,6 +156,11 @@ extension HubAPI {
 enum PSEViewMode { case prenotazioni, tesoreria }
 
 // segmented control coerente col tema Camere PSE (niente picker nativo grigio)
+//
+// `lineLimit(1)` + `fixedSize` sono obbligatori: senza, quando la riga di
+// comandi non ha spazio SwiftUI comprime le etichette e le manda a capo una
+// lettera per riga, rendendole illeggibili in verticale. Meglio che il
+// controllo tenga la sua larghezza e sia la riga a doversi riorganizzare.
 struct PSESegmented<T: Hashable>: View {
     let items: [(T, String)]
     @Binding var selection: T
@@ -165,6 +170,8 @@ struct PSESegmented<T: Hashable>: View {
                 let sel = selection == item.0
                 Text(item.1)
                     .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                     .foregroundStyle(sel ? PSE.ink : PSE.dim)
                     .padding(.horizontal, 15).padding(.vertical, 6)
                     .background(RoundedRectangle(cornerRadius: 8).fill(sel ? PSE.accent.opacity(0.9) : Color.clear))
@@ -175,6 +182,7 @@ struct PSESegmented<T: Hashable>: View {
         .padding(3)
         .background(RoundedRectangle(cornerRadius: 11).fill(PSE.surface))
         .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(PSE.line, lineWidth: 1))
+        .fixedSize(horizontal: true, vertical: false)
     }
 }
 
@@ -356,7 +364,9 @@ struct CamerePSEDashboard: View {
     private func kpi(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label).font(.system(size: 9, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint)
+                .lineLimit(1).minimumScaleFactor(0.75)
             Text(value).font(.system(size: 21, weight: .bold)).foregroundStyle(PSE.ink).monospacedDigit()
+                .lineLimit(1).minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
@@ -608,6 +618,7 @@ struct CamerePSEDashboard: View {
                     Text("TOT").frame(width: 44, alignment: .trailing)
                 }
                 .font(.system(size: 8.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
+                .lineLimit(1).minimumScaleFactor(0.8)
                 .padding(.horizontal, 14).padding(.vertical, 9)
                 .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
                 ForEach(righe) { r in
