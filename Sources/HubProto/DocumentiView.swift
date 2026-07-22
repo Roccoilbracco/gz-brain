@@ -67,7 +67,7 @@ struct DocumentiView: View {
         HStack(spacing: 6) {
             FilterChip(label: "Tutte", selected: categoria == nil) { categoria = nil }
             ForEach(DocCategoria.allCases) { c in
-                FilterChip(label: c.label, icon: c.icon, selected: categoria == c) {
+                FilterChip(label: c.labelBreve, icon: c.icon, selected: categoria == c) {
                     categoria = categoria == c ? nil : c
                 }
             }
@@ -217,9 +217,9 @@ struct DocumentiAllegati: View {
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: categoria.icon).font(.system(size: 9))
-                        Text(categoria.label).font(.system(size: 10.5, weight: .semibold))
+                        Text(categoria.labelBreve).font(.system(size: 10.5, weight: .semibold))
                         Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
-                    }.foregroundStyle(UI.dim)
+                    }.foregroundStyle(UI.dim).lineLimit(1).fixedSize()
                 }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
                 Button { Task { await carica() } } label: {
                     HStack(spacing: 4) {

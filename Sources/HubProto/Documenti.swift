@@ -44,28 +44,40 @@ enum DocStato: String, CaseIterable, Identifiable {
 
 /// Le categorie del lavoro immobiliare, nell'ordine in cui servono.
 enum DocCategoria: String, CaseIterable, Identifiable {
-    case encargo, venta, alquiler, traspaso, mandato, nota, altro
+    case encargo, honorarios, colaboracion, venta, alquiler, traspaso, mandato, nota, altro
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .encargo:  return "Encargo"
-        case .venta:    return "Contratto di vendita"
-        case .alquiler: return "Contratto di affitto"
-        case .traspaso: return "Traspaso"
-        case .mandato:  return "Mandato / procura"
-        case .nota:     return "Nota d'incarico"
-        case .altro:    return "Altro"
+        case .encargo:      return "Encargo"
+        case .honorarios:   return "Hoja de reconocimiento de honorarios"
+        case .colaboracion: return "Hoja de colaboración"
+        case .venta:        return "Contratto di vendita"
+        case .alquiler:     return "Contratto di affitto"
+        case .traspaso:     return "Traspaso"
+        case .mandato:      return "Mandato / procura"
+        case .nota:         return "Nota d'incarico"
+        case .altro:        return "Altro"
+        }
+    }
+    /// Etichetta breve per le chip, dove il nome intero non ci sta.
+    var labelBreve: String {
+        switch self {
+        case .honorarios:   return "Honorarios"
+        case .colaboracion: return "Colaboración"
+        default:            return label
         }
     }
     var icon: String {
         switch self {
-        case .encargo:  return "signature"
-        case .venta:    return "house.fill"
-        case .alquiler: return "key.fill"
-        case .traspaso: return "arrow.left.arrow.right"
-        case .mandato:  return "person.text.rectangle"
-        case .nota:     return "doc.plaintext"
-        case .altro:    return "paperclip"
+        case .encargo:      return "signature"
+        case .honorarios:   return "eurosign.circle"
+        case .colaboracion: return "person.2"
+        case .venta:        return "house.fill"
+        case .alquiler:     return "key.fill"
+        case .traspaso:     return "arrow.left.arrow.right"
+        case .mandato:      return "person.text.rectangle"
+        case .nota:         return "doc.plaintext"
+        case .altro:        return "paperclip"
         }
     }
     static func from(_ s: String?) -> DocCategoria { DocCategoria(rawValue: s ?? "") ?? .altro }
