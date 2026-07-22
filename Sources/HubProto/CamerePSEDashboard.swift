@@ -345,6 +345,9 @@ struct CamerePSEDashboard: View {
         HStack(spacing: 12) {
             kpi("IN CASA", "\(items.filter { $0.status == "in_casa" }.count)")
             kpi("CHECK-IN OGGI", "\(attive.filter { isToday($0.checkin) }.count)")
+            // Il check-out di oggi è l'informazione operativa del mattino: dice
+            // quante camere si liberano e quante pulizie ci sono da fare.
+            kpi("CHECK-OUT OGGI", "\(attive.filter { isToday($0.checkout) }.count)")
             kpi("ATTIVE", "\(attive.count)")
             kpi("INCASSATO", eur(incassato))
             kpi("DA INCASSARE", eur(daIncassare))
