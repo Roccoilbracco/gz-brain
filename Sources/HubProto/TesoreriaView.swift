@@ -1,4 +1,6 @@
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 
 // ============================================================================
 // Camere PSE — Tesoreria (dentro il progetto Camere PSE)
@@ -74,7 +76,14 @@ let BREAKFAST_COST = 350   // 3,50 € per persona/notte (solo Booking)
     }
 }
 
-enum TesSub: String, CaseIterable, Identifiable { case riepilogo = "Riepilogo", movimenti = "Movimenti"; var id: String { rawValue } }
+enum TesSub: String, CaseIterable, Identifiable { case riepilogo = "Riepilogo", conti = "Conti", contoEconomico = "Conto economico", educamp = "Educamp", servizi = "Servizi", movimenti = "Movimenti"; var id: String { rawValue } }
+
+// nome mese esteso "MMMM yyyy" da chiave "yyyy-MM"
+private let tesMese: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "it_IT"); f.dateFormat = "MMMM yyyy"; return f }()
+private func meseNome(_ key: String) -> String {
+    guard let d = tesYmd.date(from: key + "-01") else { return key }
+    return tesMese.string(from: d).capitalized
+}
 
 struct TesoreriaView: View {
     let prenotazioni: [Prenotazione]
@@ -85,6 +94,8 @@ struct TesoreriaView: View {
     @State private var editing: TesMovimento?
     @State private var movStrut: Struttura? = nil
     @State private var mese: String = "tutto"
+    @State private var contoSel: String = "tutti"     // "tutti" = tutti i conti insieme; altrimenti id conto
+    @State private var servizioSel: ServizioTab = .pulizie
 
     private let green = Color(hue: 150/360, saturation: 0.4, brightness: 0.62)
     private let red = Color(hue: 5/360, saturation: 0.46, brightness: 0.62)
@@ -175,14 +186,19 @@ struct TesoreriaView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 12) {
                 PSESegmented(items: TesSub.allCases.map { ($0, $0.rawValue) }, selection: $sub)
-                if sub == .movimenti {
+                if sub == .conti {
+                    PSESegmented(items: [("tutti", "Tutti i conti")] + model.conti.map { ($0.id, $0.nome) }, selection: $contoSel)
+                } else if sub == .servizi {
+                    PSESegmented(items: ServizioTab.allCases.map { ($0, $0.rawValue) }, selection: $servizioSel)
+                } else if sub == .contoEconomico || sub == .movimenti {
                     PSESegmented(items: [(nil, "Tutte"), (.viaPo, "Via Po"), (.viaRomagna, "Via Romagna")] as [(Struttura?, String)], selection: $movStrut)
-                    meseMenu
                 }
+                if sub == .movimenti { meseMenu }
                 Spacer()
                 if sub == .movimenti {
                     Text("\(visibiliMov.count) movimenti").font(.system(size: 11, weight: .medium)).foregroundStyle(PSE.faint)
                 }
+                if sub == .conti || sub == .contoEconomico || sub == .movimenti { exportButton }
             }
             if model.loading {
                 HStack { Spacer(); ProgressView().controlSize(.large); Spacer() }.padding(.top, 30)
@@ -190,6 +206,10 @@ struct TesoreriaView: View {
                 ScrollView(showsIndicators: false) {
                     switch sub {
                     case .riepilogo: riepilogo
+                    case .conti: contiView
+                    case .contoEconomico: contoEconomico
+                    case .educamp: EducampView()
+                    case .servizi: ServiziView(tab: $servizioSel)
                     case .movimenti: movimentiList
                     }
                 }
@@ -252,10 +272,11 @@ struct TesoreriaView: View {
         .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
     }
-    private func totCard(_ t: String, _ v: Int, _ c: Color) -> some View {
+    private func totCard(_ t: String, _ v: Int, _ c: Color) -> some View { testoCard(t, eur(v), c) }
+    private func testoCard(_ t: String, _ v: String, _ c: Color) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(t).font(.system(size: 9.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
-            Text(eur(v)).font(.system(size: 18, weight: .bold)).foregroundStyle(c).monospacedDigit()
+            Text(v).font(.system(size: 18, weight: .bold)).foregroundStyle(c).monospacedDigit()
         }
         .frame(maxWidth: .infinity, alignment: .leading).padding(14)
         .background(RoundedRectangle(cornerRadius: 12).fill(PSE.surface))
@@ -372,6 +393,307 @@ struct TesoreriaView: View {
             Text(t).font(.system(size: 8.5, weight: .heavy)).tracking(0.6).foregroundStyle(PSE.faint)
             Text(eur(v)).font(.system(size: 15, weight: .bold)).foregroundStyle(c).monospacedDigit()
         }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // ══ CONTO ECONOMICO ══════════════════════════════════════════════════════
+    // Vista temporale + per categoria: la parte che serve al commercialista e
+    // per capire l'andamento. Rispetta il filtro casa (movStrut), tutti i mesi.
+
+    private var movStrutFiltrati: [TesMovimento] {
+        model.movimenti.filter { movStrut == nil || $0.struttura == movStrut!.rawValue }
+    }
+    // (chiave "yyyy-MM", entrate, uscite) per mese, dal più recente
+    private var mensili: [(key: String, entrate: Int, uscite: Int)] {
+        var map: [String: (e: Int, u: Int)] = [:]
+        for m in movStrutFiltrati {
+            let k = String(m.data.prefix(7)); var v = map[k] ?? (0, 0)
+            if m.tipo == "entrata" { v.e += m.importo_cents } else { v.u += m.importo_cents }
+            map[k] = v
+        }
+        return map.keys.sorted(by: >).map { (key: $0, entrate: map[$0]!.e, uscite: map[$0]!.u) }
+    }
+    private func perCategoria(_ tipo: String) -> [(cat: String, tot: Int)] {
+        var map: [String: Int] = [:]
+        for m in movStrutFiltrati where m.tipo == tipo {
+            let c = (m.categoria?.isEmpty == false) ? m.categoria! : "altro"
+            map[c, default: 0] += m.importo_cents
+        }
+        return map.map { (cat: $0.key, tot: $0.value) }.sorted { $0.tot > $1.tot }
+    }
+    // Debiti e finanziamenti: rimborsi (debito vecchio, mutuo, rata prestito), non
+    // costi di gestione. Vanno tenuti fuori dal margine operativo.
+    private func isDebito(_ cat: String?) -> Bool {
+        let c = (cat ?? "").lowercased()
+        return ["debito", "debiti", "prestito", "mutuo", "rata", "finanziam"].contains { c.contains($0) }
+    }
+    private func perCategoriaUscite(debiti: Bool) -> [(cat: String, tot: Int)] {
+        var map: [String: Int] = [:]
+        for m in movStrutFiltrati where m.tipo == "uscita" && isDebito(m.categoria) == debiti {
+            let c = (m.categoria?.isEmpty == false) ? m.categoria! : "altro"
+            map[c, default: 0] += m.importo_cents
+        }
+        return map.map { (cat: $0.key, tot: $0.value) }.sorted { $0.tot > $1.tot }
+    }
+    private var totEntrate: Int { movStrutFiltrati.filter { $0.tipo == "entrata" }.reduce(0) { $0 + $1.importo_cents } }
+    private var totUscite: Int { movStrutFiltrati.filter { $0.tipo == "uscita" }.reduce(0) { $0 + $1.importo_cents } }
+    private var totCostiOperativi: Int { movStrutFiltrati.filter { $0.tipo == "uscita" && !isDebito($0.categoria) }.reduce(0) { $0 + $1.importo_cents } }
+    private var totDebiti: Int { movStrutFiltrati.filter { $0.tipo == "uscita" && isDebito($0.categoria) }.reduce(0) { $0 + $1.importo_cents } }
+
+    private var contoEconomico: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            let utileOp = totEntrate - totCostiOperativi          // margine di gestione
+            let utileNetto = utileOp - totDebiti                  // dopo debiti/finanziamenti
+            let margineOp = totEntrate > 0 ? Int((Double(utileOp) / Double(totEntrate) * 100).rounded()) : 0
+            // Gestione: entrate vs costi operativi (senza debiti)
+            HStack(spacing: 12) {
+                totCard("ENTRATE", totEntrate, green)
+                totCard("COSTI OPERATIVI", totCostiOperativi, red)
+                totCard("UTILE OPERATIVO", utileOp, utileOp >= 0 ? green : red)
+                testoCard("MARGINE OP.", totEntrate > 0 ? "\(margineOp)%" : "—", PSE.accent)
+            }
+            // Sotto la gestione: debiti/finanziamenti e utile netto reale
+            if totDebiti > 0 {
+                HStack(spacing: 12) {
+                    totCard("DEBITI / FINANZIAMENTI", totDebiti, PSE.warn)
+                    totCard("UTILE NETTO (dopo debiti)", utileNetto, utileNetto >= 0 ? green : red)
+                    Color.clear.frame(maxWidth: .infinity)
+                }
+            }
+
+            Text("ANDAMENTO MENSILE").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint).padding(.top, 6)
+            if mensili.isEmpty {
+                EmptyStateCard(icon: "chart.bar", text: "Nessun movimento registrato.")
+            } else {
+                let maxAbs = max(1, mensili.map { abs($0.entrate - $0.uscite) }.max() ?? 1)
+                VStack(spacing: 0) {
+                    mensiliHeader
+                    ForEach(Array(mensili.enumerated()), id: \.element.key) { i, r in
+                        mensileRow(r, maxAbs: maxAbs)
+                        if i < mensili.count - 1 { Divider().overlay(PSE.line).padding(.leading, 16) }
+                    }
+                }
+                .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
+                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
+            }
+
+            HStack(alignment: .top, spacing: 12) {
+                categoriaCard("COSTI OPERATIVI PER CATEGORIA", perCategoriaUscite(debiti: false), totCostiOperativi, red)
+                categoriaCard("ENTRATE PER CATEGORIA", perCategoria("entrata"), totEntrate, green)
+            }
+            .padding(.top, 6)
+
+            if totDebiti > 0 {
+                categoriaCard("DEBITI E FINANZIAMENTI (rimborsi)", perCategoriaUscite(debiti: true), totDebiti, PSE.warn)
+                    .padding(.top, 2)
+            }
+
+            Text("Conto economico su base cassa. «Utile operativo» = entrate − costi di gestione; i debiti (Marroni, Muratore, mutuo, rata) sono rimborsi e restano fuori dal margine. Filtro casa applicato, tutti i mesi. «Esporta CSV» per il commercialista.")
+                .font(.system(size: 10.5)).foregroundStyle(PSE.faint).padding(.top, 2)
+        }.padding(.bottom, 20)
+    }
+
+    // ══ CONTI — estratto conto per conto (Cassa · Massimo · Beeper) ═══════════
+    // Ogni conto come nel relativo foglio dell'Excel: entrate, uscite, saldo.
+    private var tuttiIConti: Bool { contoSel == "tutti" }
+    private var contoMovimenti: [TesMovimento] {
+        (tuttiIConti ? model.movimenti : model.movimenti.filter { $0.conto_id == contoSel })
+            .sorted { $0.data > $1.data }
+    }
+    private func contoNomeBreve(_ id: String?) -> String {
+        switch id { case "cassa": return "Cassa"; case "massimo": return "Massimo"; case "beeper": return "Beeper"; default: return id ?? "—" }
+    }
+    private var contiView: some View {
+        let mov = contoMovimenti
+        let entrate = mov.filter { $0.tipo == "entrata" }
+        let uscite = mov.filter { $0.tipo == "uscita" }
+        let totE = entrate.reduce(0) { $0 + $1.importo_cents }
+        let totU = uscite.reduce(0) { $0 + $1.importo_cents }
+        let conto = model.conti.first { $0.id == contoSel }
+        return VStack(alignment: .leading, spacing: 12) {
+            // intestazione: saldo + entrate/uscite (per conto singolo o totale)
+            HStack(spacing: 12) {
+                testoCard(tuttiIConti ? "SALDO TOTALE" : "SALDO \(conto?.nome.uppercased() ?? "")",
+                          eur(totE - totU), (totE - totU) < 0 ? red : PSE.ink)
+                totCard("ENTRATE", totE, green)
+                totCard("USCITE", totU, red)
+                testoCard("N. MOVIMENTI", "\(mov.count)", PSE.accent)
+            }
+            // Con «Tutti i conti»: una card di saldo per ciascun conto
+            if tuttiIConti {
+                HStack(spacing: 12) {
+                    ForEach(model.conti) { c in
+                        let s = model.saldo(c.id)
+                        totCard(c.nome.uppercased(), s, s < 0 ? red : PSE.accent)
+                    }
+                }
+            }
+            if mov.isEmpty {
+                EmptyStateCard(icon: "tray", text: "Nessun movimento.")
+            } else {
+                contoLedger("ENTRATE", entrate, totE, green, "+", showConto: tuttiIConti)
+                contoLedger("USCITE", uscite, totU, red, "−", showConto: tuttiIConti)
+                // Riga finale: entrate − uscite = totale rimanente sul conto
+                rimanenteRow(totE, totU)
+            }
+            Text(contoNota).font(.system(size: 10.5)).foregroundStyle(PSE.faint).padding(.top, 2)
+        }.padding(.bottom, 20)
+    }
+    private var contoNota: String {
+        switch contoSel {
+        case "tutti": return "Tutti i conti insieme: Cassa (contante) + Massimo (Booking, lordo entrata / commissione uscita) + Beeper (bonifici). La colonna «Conto» indica dove è transitato il denaro."
+        case "massimo": return "Booking già incassato: importo lordo come entrata, commissione (16,5%) come uscita. Il saldo è il netto. Le prenotazioni future sono in «da incassare» (Riepilogo)."
+        case "beeper": return "Estratto conto bonifici: affitti, depositi (da restituire) e uscite (rata prestito, muratore, Marroni, spese banca)."
+        default: return "Contante Via Po + Via Romagna: affitti in entrata; pulizia, colazioni, chiavi e idraulico in uscita."
+        }
+    }
+    private func contoLedger(_ title: String, _ items: [TesMovimento], _ tot: Int, _ c: Color, _ sign: String, showConto: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text(title).font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint)
+                Spacer()
+                Text(sign + eur(tot)).font(.system(size: 12, weight: .bold)).foregroundStyle(c).monospacedDigit()
+            }
+            .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
+            ForEach(Array(items.enumerated()), id: \.element.id) { i, m in
+                Button { editing = m; showForm = true } label: {
+                    HStack(spacing: 12) {
+                        Text(tesPrettyStr(m.data)).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim).frame(width: 58, alignment: .leading).monospacedDigit()
+                        Text(m.descrizione ?? (m.categoria ?? "—")).font(.system(size: 12.5, weight: .medium)).foregroundStyle(PSE.ink).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                        if showConto {
+                            Text(contoNomeBreve(m.conto_id)).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(PSE.accent).frame(width: 76, alignment: .leading).lineLimit(1)
+                        }
+                        Text(casaLabel(m.struttura)).font(.system(size: 11)).foregroundStyle(PSE.dim).frame(width: 96, alignment: .leading).lineLimit(1)
+                        Text((m.categoria ?? "—").capitalized).font(.system(size: 11)).foregroundStyle(PSE.faint).frame(width: 100, alignment: .leading).lineLimit(1)
+                        Text(sign + eur(m.importo_cents)).font(.system(size: 12.5, weight: .bold)).foregroundStyle(c).monospacedDigit().frame(width: 92, alignment: .trailing)
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 8).contentShape(Rectangle())
+                }.buttonStyle(.plain)
+                if i < items.count - 1 { Divider().overlay(PSE.line).padding(.leading, 16) }
+            }
+            .padding(.bottom, 6)
+        }
+        .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
+    }
+    private func casaLabel(_ s: String?) -> String {
+        s == "via-po" ? "Via Po" : s == "via-romagna" ? "Via Romagna" : "—"
+    }
+    // Riga «totale rimanente» = entrate − uscite
+    private func rimanenteRow(_ totE: Int, _ totU: Int) -> some View {
+        let saldo = totE - totU
+        return HStack(spacing: 16) {
+            Text("TOTALE RIMANENTE").font(.system(size: 11, weight: .heavy)).tracking(1).foregroundStyle(PSE.ink)
+            Spacer()
+            Text("+\(eur(totE))").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(green).monospacedDigit()
+            Text("−\(eur(totU))").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(red).monospacedDigit()
+            Text("=").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.faint)
+            Text(eur(saldo)).font(.system(size: 16, weight: .bold)).foregroundStyle(saldo < 0 ? red : PSE.ink).monospacedDigit()
+                .frame(width: 110, alignment: .trailing)
+        }
+        .padding(.horizontal, 18).padding(.vertical, 14)
+        .background(RoundedRectangle(cornerRadius: 14).fill(PSE.surface))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
+    }
+
+    private var mensiliHeader: some View {
+        HStack(spacing: 12) {
+            Text("MESE").frame(width: 130, alignment: .leading)
+            Text("ENTRATE").frame(width: 90, alignment: .trailing)
+            Text("USCITE").frame(width: 90, alignment: .trailing)
+            Text("UTILE").frame(width: 90, alignment: .trailing)
+            Text("").frame(maxWidth: .infinity)
+        }
+        .font(.system(size: 8.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
+        .padding(.horizontal, 16).padding(.vertical, 9)
+        .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
+    }
+    private func mensileRow(_ r: (key: String, entrate: Int, uscite: Int), maxAbs: Int) -> some View {
+        let utile = r.entrate - r.uscite
+        let frac = min(1, Double(abs(utile)) / Double(maxAbs))
+        return HStack(spacing: 12) {
+            Text(meseNome(r.key)).font(.system(size: 12, weight: .semibold)).foregroundStyle(PSE.ink)
+                .frame(width: 130, alignment: .leading).lineLimit(1)
+            Text("+" + eur(r.entrate)).font(.system(size: 11.5, weight: .medium)).foregroundStyle(green).monospacedDigit().frame(width: 90, alignment: .trailing)
+            Text("−" + eur(r.uscite)).font(.system(size: 11.5, weight: .medium)).foregroundStyle(red).monospacedDigit().frame(width: 90, alignment: .trailing)
+            Text(eur(utile)).font(.system(size: 12.5, weight: .bold)).foregroundStyle(utile >= 0 ? green : red).monospacedDigit().frame(width: 90, alignment: .trailing)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3).fill(PSE.surface).frame(height: 8)
+                    RoundedRectangle(cornerRadius: 3).fill((utile >= 0 ? green : red).opacity(0.75))
+                        .frame(width: max(2, geo.size.width * frac), height: 8)
+                }.frame(maxHeight: .infinity, alignment: .center)
+            }.frame(height: 18)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 9)
+    }
+
+    private func categoriaCard(_ title: String, _ rows: [(cat: String, tot: Int)], _ tot: Int, _ c: Color) -> some View {
+        let maxTot = max(1, rows.first?.tot ?? 1)
+        return VStack(alignment: .leading, spacing: 10) {
+            Text(title).font(.system(size: 9.5, weight: .heavy)).tracking(0.6).foregroundStyle(PSE.faint)
+            if rows.isEmpty {
+                Text("Nessuna voce").font(.system(size: 11)).foregroundStyle(PSE.dim).padding(.vertical, 8)
+            } else {
+                ForEach(rows, id: \.cat) { r in
+                    let pct = tot > 0 ? Int((Double(r.tot) / Double(tot) * 100).rounded()) : 0
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 8) {
+                            Text(r.cat.capitalized).font(.system(size: 12, weight: .medium)).foregroundStyle(PSE.ink).lineLimit(1)
+                            Spacer(minLength: 6)
+                            Text(eur(r.tot)).font(.system(size: 12, weight: .bold)).foregroundStyle(PSE.ink).monospacedDigit()
+                            Text("\(pct)%").font(.system(size: 10, weight: .semibold)).foregroundStyle(PSE.faint).frame(width: 34, alignment: .trailing)
+                        }
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                RoundedRectangle(cornerRadius: 3).fill(PSE.surface).frame(height: 6)
+                                RoundedRectangle(cornerRadius: 3).fill(c.opacity(0.7))
+                                    .frame(width: max(2, geo.size.width * Double(r.tot) / Double(maxTot)), height: 6)
+                            }
+                        }.frame(height: 6)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading).padding(16)
+        .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
+    }
+
+    // ── Export CSV per il commercialista (separatore ; per Excel IT) ──
+    private var exportButton: some View {
+        Button { exportCSV() } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "square.and.arrow.up").font(.system(size: 10, weight: .bold))
+                Text("Esporta CSV").font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundStyle(PSE.dim).padding(.horizontal, 12).padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 10).fill(PSE.surface))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(PSE.line, lineWidth: 1))
+        }.buttonStyle(.plain).help("Esporta i movimenti visibili in CSV")
+    }
+    private func exportCSV() {
+        // Movimenti → set filtrato visibile; Conti → estratto del conto; altro → tutti (filtro casa)
+        let rows: [TesMovimento]
+        switch sub {
+        case .movimenti: rows = visibiliMov
+        case .conti: rows = contoMovimenti
+        default: rows = movStrutFiltrati.sorted { $0.data > $1.data }
+        }
+        func q(_ s: String?) -> String { "\"" + (s ?? "").replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
+        var csv = "\u{FEFF}Data;Tipo;Struttura;Categoria;Descrizione;Conto;Modalità;Importo\n"
+        for m in rows {
+            let conto = model.conti.first { $0.id == m.conto_id }?.nome ?? (m.conto_id ?? "")
+            let casa = m.struttura == "via-po" ? "Via Po" : m.struttura == "via-romagna" ? "Via Romagna" : ""
+            let imp = String(format: "%.2f", Double(m.importo_cents) / 100).replacingOccurrences(of: ".", with: ",")
+            csv += [m.data, m.tipo, casa, m.categoria ?? "", m.descrizione ?? "", conto, m.modalita ?? "", imp]
+                .map { q($0) }.joined(separator: ";") + "\n"
+        }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.commaSeparatedText]
+        panel.nameFieldStringValue = "camere-pse-movimenti.csv"
+        if panel.runModal() == .OK, let url = panel.url {
+            try? csv.data(using: .utf8)?.write(to: url)
+        }
     }
 }
 
