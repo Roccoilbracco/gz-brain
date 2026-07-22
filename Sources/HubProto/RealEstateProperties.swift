@@ -64,11 +64,13 @@ enum PropertyStatus: String, CaseIterable, Identifiable {
 }
 
 enum StoricoEvent: String, CaseIterable, Identifiable {
-    case acquisizione, vendita, affitto, traspaso, variazione_prezzo, ritiro
+    case acquisizione, vendita, affitto, traspaso, variazione_prezzo, rescissione, devoluzione, ritiro
     var id: String { rawValue }
     var label: String {
         switch self {
         case .variazione_prezzo: return "Variazione prezzo"
+        case .rescissione: return "Rescissione contratto"
+        case .devoluzione: return "Devoluzione a proprietari"
         default: return rawValue.capitalized
         }
     }
@@ -79,6 +81,8 @@ enum StoricoEvent: String, CaseIterable, Identifiable {
         case .affitto: return "key.fill"
         case .traspaso: return "arrow.left.arrow.right.circle.fill"
         case .variazione_prezzo: return "tag.fill"
+        case .rescissione: return "doc.badge.ellipsis"
+        case .devoluzione: return "arrow.uturn.backward.circle.fill"
         case .ritiro: return "xmark.circle.fill"
         }
     }
@@ -89,8 +93,15 @@ enum StoricoEvent: String, CaseIterable, Identifiable {
         case .affitto: return 150
         case .traspaso: return 280
         case .variazione_prezzo: return 45
+        case .rescissione: return 25
+        case .devoluzione: return 5
         case .ritiro: return 5
         }
+    }
+    /// Questi eventi tolgono l'immobile dal mercato: registrandoli, lo stato
+    /// passa a «ritirata» così la griglia lo mostra subito come non disponibile.
+    var ritiraImmobile: Bool {
+        switch self { case .rescissione, .devoluzione, .ritiro: return true; default: return false }
     }
     static func from(_ s: String?) -> StoricoEvent { StoricoEvent(rawValue: s ?? "") ?? .vendita }
 }
@@ -271,6 +282,26 @@ struct RemoteImageCarousel: View {
 
 enum PropViewMode { case lista, griglia, mappa }
 
+/// Filtro per disponibilità dell'immobile.
+enum DispFilter: String, CaseIterable, Identifiable {
+    case tutte, disponibili, ritirate
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .tutte: return "Tutte"
+        case .disponibili: return "Disponibili"
+        case .ritirate: return "Non disponibili"
+        }
+    }
+    var hue: Double? {
+        switch self {
+        case .tutte: return nil
+        case .disponibili: return 150   // verde
+        case .ritirate: return 5        // rosso
+        }
+    }
+}
+
 // ── Lista proprietà (tabella + griglia card + mappa) ─────────────────────────
 struct ProprietaView: View {
     /// Incorporata dentro un'altra pagina (la dash GZ Ibiza): niente ScrollView
@@ -286,11 +317,36 @@ struct ProprietaView: View {
     @State private var mode: PropViewMode = .lista
     @State private var geocoding = false
     @State private var geocodeLeft = 0
+    // "tutte" | "disponibili" | "ritirate": la disponibilità dell'immobile
+    @State private var dispFilter: DispFilter = .tutte
+    // nil = tutte le operazioni; altrimenti venta/alquiler/traspaso
+    @State private var opFilter: String?
 
+    /// Un immobile è "disponibile" se non è stato tolto dal mercato. Riservata e
+    /// affittata contano ancora come attivi; venduta e ritirata no.
+    private func isDisponibile(_ p: Proprieta) -> Bool {
+        !["venduta", "ritirata"].contains(p.status)
+    }
     private var filtered: [Proprieta] {
-        items.filter { p in
-            search.isEmpty || [p.title, p.reference, p.zone, p.city, p.address]
+        let base = items.filter { p in
+            let okSearch = search.isEmpty || [p.title, p.reference, p.zone, p.city, p.address]
                 .compactMap { $0 }.joined(separator: " ").localizedCaseInsensitiveContains(search)
+            let okDisp: Bool = {
+                switch dispFilter {
+                case .tutte: return true
+                case .disponibili: return isDisponibile(p)
+                case .ritirate: return !isDisponibile(p)
+                }
+            }()
+            let okOp = opFilter == nil || p.listing_type == opFilter
+            return okSearch && okDisp && okOp
+        }
+        // Prima le disponibili, poi le non disponibili; dentro ogni gruppo per
+        // riferimento, così l'ordine è stabile e non salta a ogni ricarica.
+        return base.sorted { a, b in
+            let da = isDisponibile(a), db = isDisponibile(b)
+            if da != db { return da }
+            return (a.reference ?? "") < (b.reference ?? "")
         }
     }
 
@@ -308,6 +364,9 @@ struct ProprietaView: View {
                     HoloSearchField(placeholder: "Cerca immobile…", text: $search)
                     MenuPillButton(label: "Aggiungi proprietà", icon: "plus") { AppState.shared.route = .proprietaNuova }
                 }
+
+                // I filtri non hanno senso sulla mappa (che mostra solo i pin)
+                if mode != .mappa && errorMsg == nil && !loading { filtriBar }
 
                 if let errorMsg {
                     GlassCard { Text("Errore: \(errorMsg)").foregroundStyle(Color(hex: 0xffb3ad)).padding(20) }
@@ -360,6 +419,35 @@ struct ProprietaView: View {
             }
             Spacer()
         }
+    }
+
+    // ── Barra filtri: disponibilità + operazione, con contatore ──────────────
+    private var filtriBar: some View {
+        HStack(spacing: 8) {
+            ForEach(DispFilter.allCases) { d in
+                pill(d.label, on: dispFilter == d, hue: d.hue) { dispFilter = d }
+            }
+            Rectangle().fill(Holo.cardBorder).frame(width: 1, height: 18).padding(.horizontal, 2)
+            pill("Tutte le operazioni", on: opFilter == nil, hue: nil) { opFilter = nil }
+            ForEach(["vendita", "affitto", "traspaso"], id: \.self) { op in
+                if let d = operationInfo(op) {
+                    pill(d.label, on: opFilter == op, hue: d.hue) { opFilter = opFilter == op ? nil : op }
+                }
+            }
+            Spacer()
+            Text("\(filtered.count) su \(items.count)")
+                .font(.system(size: 11, weight: .semibold)).foregroundStyle(Holo.subDim)
+        }
+    }
+    private func pill(_ label: String, on: Bool, hue: Double?, _ act: @escaping () -> Void) -> some View {
+        let c = hue.map { Holo.hsl($0, 55, 62) } ?? Csb.itemFgOn
+        return Button(action: act) {
+            Text(label).font(.system(size: 11.5, weight: .semibold)).lineLimit(1).fixedSize()
+                .foregroundStyle(on ? (hue == nil ? Csb.itemFgOn : c) : Color(hex: 0x9b988f))
+                .padding(.horizontal, 11).padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: 8).fill(on ? (hue.map { Holo.hsl($0, 45, 45).opacity(0.18) } ?? Csb.tabOn) : Csb.tabsBg))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(on ? (hue == nil ? Csb.tabOnBorder : c.opacity(0.5)) : Holo.cardBorder, lineWidth: 1))
+        }.buttonStyle(.plain)
     }
 
     private var viewToggle: some View {
@@ -904,7 +992,15 @@ struct StoricoFormView: View {
             "price": Int(price), "counterparty": s(counterparty), "agent": s(agent), "notes": s(notes),
             "cliente_id": clienteId,
         ]
-        do { try await HubAPI.addStorico(body); await onSaved(); dismiss() }
+        do {
+            try await HubAPI.addStorico(body)
+            // Rescissione, devoluzione e ritiro tolgono l'immobile dal mercato:
+            // aggiorno lo stato così griglia e filtro lo vedono subito ritirato.
+            if event.ritiraImmobile {
+                try? await HubAPI.updateProprieta(id: proprietaId, fields: ["status": "ritirata"])
+            }
+            await onSaved(); dismiss()
+        }
         catch { saving = false }
     }
 }
