@@ -868,7 +868,102 @@ struct TesoreriaView: View {
                 rimanenteRow(iniz, totE, totU)
             }
             Text(contoNota).font(.system(size: 10.5)).foregroundStyle(PSE.faint).padding(.top, 2)
+
+            // Per il conto OTA, sotto l'estratto, il dettaglio Booking/Airbnb:
+            // già incassato, da incassare mese per mese, e il totale del conto.
+            if let conto, conto.tipo == "ota" {
+                dettaglioContoOTA(conto).padding(.top, 16)
+            }
         }.padding(.bottom, 20)
+    }
+
+    // ══ CONTO OTA — Booking già incassato + da incassare ══════════════════════
+    // Come il foglio «CONTO MASSIMO AFFITTACAMERE · BOOKING + AIRBNB»: quello che
+    // Booking ha già pagato (checkout passato), quello che arriverà diviso per
+    // mese, Airbnb a parte perché non ha commissione, e il totale del conto.
+    private func otaIncassato(_ contoId: String) -> [RigaOTA] {
+        let mov = model.movimenti.filter { $0.conto_id == contoId && nelPeriodo($0) }
+        let commissioni = mov.filter { $0.tipo == "uscita" && $0.categoria == "commissione" }
+        return mov.filter { $0.tipo == "entrata" }.sorted { $0.data < $1.data }.map { m in
+            let rif = rifBooking(m.descrizione)
+            let c = commissioni.first { rif != nil && rifBooking($0.descrizione) == rif }
+            return RigaOTA(id: m.id, periodo: tesPrettyStr(m.data),
+                           ospite: (m.descrizione ?? "").replacingOccurrences(of: "Booking — ", with: ""),
+                           canale: (m.categoria ?? "booking").capitalized,
+                           lordo: m.importo_cents, commissione: c?.importo_cents ?? 0)
+        }
+    }
+    /// Prenotazioni i cui soldi finiranno su questo conto e non sono ancora arrivati.
+    private func otaDaIncassare(_ contoId: String, fonti: [String]) -> [RigaOTA] {
+        prenFiltrate
+            .filter { contoDest($0) == contoId && fonti.contains($0.source ?? "")
+                      && max(0, $0.amount_cents - $0.paid_cents) > 0 }
+            .sorted { ($0.checkin ?? "") < ($1.checkin ?? "") }
+            .map { b in
+                let lordo = max(0, b.amount_cents - b.paid_cents)
+                let comm = (b.source ?? "") == "booking" ? Int((Double(lordo) * 0.165).rounded()) : 0
+                return RigaOTA(id: b.id,
+                               periodo: "\(tesPrettyStr(b.checkin))–\(tesPrettyStr(b.checkout))",
+                               ospite: b.guest_name + (b.camera.map { " (\($0))" } ?? ""),
+                               canale: (b.source ?? "—").capitalized, lordo: lordo, commissione: comm)
+            }
+    }
+    /// Il da-incassare Booking spezzato per mese di check-in, come nel foglio.
+    private func bookingPerMese(_ contoId: String) -> [(mese: String, righe: [RigaOTA])] {
+        var map: [String: [RigaOTA]] = [:]
+        for b in prenFiltrate where contoDest(b) == contoId && (b.source ?? "") == "booking"
+                                    && max(0, b.amount_cents - b.paid_cents) > 0 {
+            let k = String((b.checkin ?? "").prefix(7))
+            let lordo = max(0, b.amount_cents - b.paid_cents)
+            map[k, default: []].append(RigaOTA(
+                id: b.id, periodo: "\(tesPrettyStr(b.checkin))–\(tesPrettyStr(b.checkout))",
+                ospite: b.guest_name + (b.camera.map { " (\($0))" } ?? ""),
+                canale: "Booking", lordo: lordo, commissione: Int((Double(lordo) * 0.165).rounded())))
+        }
+        return map.keys.sorted().map { (mese: $0, righe: map[$0]!.sorted { $0.periodo < $1.periodo }) }
+    }
+
+    @ViewBuilder private func dettaglioContoOTA(_ conto: Conto) -> some View {
+        let incassato = otaIncassato(conto.id)
+        let perMese = bookingPerMese(conto.id)
+        let airbnb = otaDaIncassare(conto.id, fonti: ["airbnb"])
+        let nettoIncassato = incassato.reduce(0) { $0 + $1.netto }
+        let nettoBooking = perMese.flatMap(\.righe).reduce(0) { $0 + $1.netto }
+        let lordoBooking = perMese.flatMap(\.righe).reduce(0) { $0 + $1.lordo }
+        let commBooking = perMese.flatMap(\.righe).reduce(0) { $0 + $1.commissione }
+        let nettoAirbnb = airbnb.reduce(0) { $0 + $1.netto }
+
+        VStack(alignment: .leading, spacing: 10) {
+            Text("\(conto.nome.uppercased()) · BOOKING + AIRBNB")
+                .font(.system(size: 12, weight: .heavy)).tracking(1).foregroundStyle(PSE.ink)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(RoundedRectangle(cornerRadius: 10).fill(PSE.accent.opacity(0.18)))
+
+            if !incassato.isEmpty {
+                blocco("BOOKING — GIÀ INCASSATO (checkout passato, Booking ha pagato)", PSE.pos) {
+                    otaTable(incassato, titoloTot: "SUBTOTALE INCASSATO")
+                }
+            }
+            ForEach(perMese, id: \.mese) { g in
+                blocco("BOOKING — DA INCASSARE · \(meseNome(g.mese).uppercased())", PSE.warn) {
+                    otaTable(g.righe, titoloTot: "SUBTOTALE \(meseNome(g.mese).uppercased())")
+                }
+            }
+            if perMese.count > 1 {
+                rigaTotale("TOTALE BOOKING DA INCASSARE — lordo \(eurc(lordoBooking)), commissioni \(eurc(commBooking))",
+                           nettoBooking, PSE.warn)
+            }
+            if !airbnb.isEmpty {
+                blocco("AIRBNB — DA INCASSARE (nessuna commissione)", PSE.warn) {
+                    otaTable(airbnb, titoloTot: "TOTALE AIRBNB")
+                }
+            }
+            rigaTotale("TOTALE \(conto.nome.uppercased()) (incassato + da incassare + Airbnb, netto)",
+                       nettoIncassato + nettoBooking + nettoAirbnb, PSE.accent)
+            Text("Commissioni Booking 16,5% sul da incassare (stima); su quanto già incassato è la commissione reale registrata come uscita. Airbnb non ha commissione. Il saldo del conto qui sopra è solo l'incassato: \(eurc(nettoIncassato)).")
+                .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+        }
     }
     private var contoNota: String {
         switch contoSel {
