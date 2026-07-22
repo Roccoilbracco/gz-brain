@@ -5,8 +5,10 @@ import UniformTypeIdentifiers
 // ============================================================================
 // Camere PSE — Tesoreria (dentro il progetto Camere PSE)
 // Conti (Cassa / Massimo OTA / Beeper), Movimenti entrate·uscite, Riepilogo,
-// e Servizi (Pulizia 20€/check-out, Colazioni 3,50€/pers·notte Booking) calcolati
-// automaticamente dalle prenotazioni. Sorgente: public.conti + public.movimenti.
+// Conto economico, Educamp e Servizi (Pulizia 20€/check-out, Colazioni
+// 3,50€/pers·notte Booking).
+// Sorgente: public.conti + public.movimenti (+ pulizie/colazioni per i servizi).
+// Tutti gli importi in contabilità si mostrano con i centesimi: eurc().
 // ============================================================================
 
 struct Conto: Identifiable, Decodable, Equatable {
@@ -49,17 +51,26 @@ private let tesPretty: DateFormatter = { let f = DateFormatter(); f.locale = Loc
 private func tesDate(_ s: String?) -> Date? { s.flatMap { tesYmd.date(from: String($0.prefix(10))) } }
 private func tesPrettyStr(_ s: String?) -> String { tesDate(s).map { tesPretty.string(from: $0) } ?? "—" }
 
+// Tariffe dei servizi: le righe vere stanno nelle tabelle public.pulizie e
+// public.colazioni (sezione Servizi), queste restano come riferimento del calcolo.
 let CLEAN_COST = 2000      // 20,00 € per check-out
 let BREAKFAST_COST = 350   // 3,50 € per persona/notte (solo Booking)
 
 @MainActor final class TesoreriaModel: ObservableObject {
     @Published var conti: [Conto] = []
     @Published var movimenti: [TesMovimento] = []
+    // Pulizie e colazioni arrivano dalle stesse tabelle che legge la sezione
+    // Servizi: il Riepilogo non li ricalcola dalle prenotazioni, altrimenti le
+    // due schermate mostrerebbero due numeri diversi per la stessa voce.
+    @Published var pulizie: [Pulizia] = []
+    @Published var colazioni: [Colazione] = []
     @Published var loading = true
     func load() async {
         loading = true
         conti = (try? await HubAPI.listConti()) ?? []
         movimenti = (try? await HubAPI.listMovimenti()) ?? []
+        pulizie = (try? await HubAPI.listPulizie()) ?? []
+        colazioni = (try? await HubAPI.listColazioni()) ?? []
         loading = false
     }
     func saldo(_ contoId: String) -> Int {
@@ -93,30 +104,39 @@ struct TesoreriaView: View {
     @State private var showForm = false
     @State private var editing: TesMovimento?
     @State private var movStrut: Struttura? = nil
-    @State private var mese: String = "tutto"
+    // "tutto" | "2026" (anno) | "2026-07" (mese): il confronto è per prefisso, così
+    // la stessa voce di menu copre sia gli anni sia i mesi.
+    @State private var periodo: String = "tutto"
+    @State private var cerca: String = ""
     @State private var contoSel: String = "tutti"     // "tutti" = tutti i conti insieme; altrimenti id conto
     @State private var servizioSel: ServizioTab = .pulizie
 
-    private let green = Color(hue: 150/360, saturation: 0.4, brightness: 0.62)
-    private let red = Color(hue: 5/360, saturation: 0.46, brightness: 0.62)
-
+    private func nelPeriodo(_ m: TesMovimento) -> Bool { periodo == "tutto" || m.data.hasPrefix(periodo) }
+    private func matchCerca(_ m: TesMovimento) -> Bool {
+        let q = cerca.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return true }
+        return [m.descrizione, m.categoria, m.modalita].contains { ($0 ?? "").lowercased().contains(q) }
+    }
     private var visibiliMov: [TesMovimento] {
         model.movimenti.filter { m in
-            (movStrut == nil || m.struttura == movStrut!.rawValue) &&
-            (mese == "tutto" || String(m.data.prefix(7)) == mese)
+            (movStrut == nil || m.struttura == movStrut!.rawValue) && nelPeriodo(m) && matchCerca(m)
         }
     }
     private var movEntrate: Int { var t = 0; for m in visibiliMov where m.tipo == "entrata" { t += m.importo_cents }; return t }
     private var movUscite: Int { var t = 0; for m in visibiliMov where m.tipo == "uscita" { t += m.importo_cents }; return t }
+    private var anniDisponibili: [String] { Set(model.movimenti.map { String($0.data.prefix(4)) }).sorted(by: >) }
     private var mesiDisponibili: [(String, String)] {
         let keys = Set(model.movimenti.map { String($0.data.prefix(7)) })
-        let f = DateFormatter(); f.locale = Locale(identifier: "it_IT"); f.dateFormat = "MMMM yyyy"
-        return keys.sorted().compactMap { k in
-            guard let d = tesYmd.date(from: k + "-01") else { return nil }
-            return (k, f.string(from: d).capitalized)
+        return keys.sorted(by: >).compactMap { k in
+            guard tesYmd.date(from: k + "-01") != nil else { return nil }
+            return (k, meseNome(k))
         }
     }
-    private var meseLabel: String { mese == "tutto" ? "Tutti i mesi" : (mesiDisponibili.first { $0.0 == mese }?.1 ?? mese) }
+    private var periodoLabel: String {
+        if periodo == "tutto" { return "Tutti i periodi" }
+        if periodo.count == 4 { return "Anno \(periodo)" }
+        return mesiDisponibili.first { $0.0 == periodo }?.1 ?? periodo
+    }
     private func casaStats(_ s: Struttura) -> (inc: Int, spese: Int) {
         var inc = 0, spese = 0
         for m in model.movimenti where m.struttura == s.rawValue {
@@ -126,23 +146,12 @@ struct TesoreriaView: View {
     }
     private var prenFiltrate: [Prenotazione] { prenotazioni.filter { $0.status != "cancellata" } }
 
-    // ── servizi calcolati ──
-    private var puliziaFatte: Int { checkouts.filter { $0 <= today }.count * CLEAN_COST }
-    private var puliziePreviste: Int { checkouts.filter { $0 > today }.count * CLEAN_COST }
-    private var checkouts: [Date] { prenFiltrate.compactMap { tesDate($0.checkout) } }
-    private var today: Date { Calendar.current.startOfDay(for: Date()) }
+    // ── servizi: stessi dati della sezione Servizi (tabelle pulizie/colazioni) ──
+    private var puliziaFatte: Int { model.pulizie.filter { $0.stato == "fatta" }.reduce(0) { $0 + $1.costo_cents } }
+    private var puliziePreviste: Int { model.pulizie.filter { $0.stato != "fatta" }.reduce(0) { $0 + $1.costo_cents } }
     private var colazioni: (servite: Int, totale: Int) {
-        var serv = 0, tot = 0
-        for b in prenFiltrate where (b.source ?? "") == "booking" {
-            guard let ci = tesDate(b.checkin), let co = tesDate(b.checkout), co > ci else { continue }
-            let g = max(1, b.guests ?? 1)
-            let nTot = Calendar.current.dateComponents([.day], from: ci, to: co).day ?? 0
-            let end = min(co, today)
-            let nServ = end > ci ? (Calendar.current.dateComponents([.day], from: ci, to: end).day ?? 0) : 0
-            tot += nTot * g * BREAKFAST_COST
-            serv += nServ * g * BREAKFAST_COST
-        }
-        return (serv, tot)
+        (model.colazioni.reduce(0) { $0 + $1.costo_servito_cents },
+         model.colazioni.reduce(0) { $0 + $1.costo_totale_cents })
     }
     // conto di destinazione dei soldi di una prenotazione (OTA→Massimo, dirette→scelto/Beeper)
     private func contoDest(_ b: Prenotazione) -> String {
@@ -157,12 +166,12 @@ struct TesoreriaView: View {
         }
         return t
     }
-    // da incassare del periodo/casa selezionati (checkin nel mese, filtro casa)
+    // da incassare del periodo/casa selezionati (checkin nel periodo, filtro casa)
     private var daIncassarePeriodo: Int {
         var t = 0
         for b in prenFiltrate {
             if let s = movStrut, b.struttura != s.rawValue { continue }
-            if mese != "tutto" && String((b.checkin ?? "").prefix(7)) != mese { continue }
+            if periodo != "tutto" && !(b.checkin ?? "").hasPrefix(periodo) { continue }
             t += max(0, b.amount_cents - b.paid_cents)
         }
         return t
@@ -181,6 +190,9 @@ struct TesoreriaView: View {
         return t
     }
     private var daIncassareDirette: Int { daIncassareSource(["diretto", "sito", "whatsapp", "telefono", "email"]) }
+    // Booking trattiene il 16,5%: quanto del «da incassare» lordo non arriverà mai
+    // sul conto. Airbnb e dirette non hanno commissione.
+    private var commissioneAttesa: Int { Int((Double(daIncassareSource(["booking"])) * 0.165).rounded()) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -193,7 +205,8 @@ struct TesoreriaView: View {
                 } else if sub == .contoEconomico || sub == .movimenti {
                     PSESegmented(items: [(nil, "Tutte"), (.viaPo, "Via Po"), (.viaRomagna, "Via Romagna")] as [(Struttura?, String)], selection: $movStrut)
                 }
-                if sub == .movimenti { meseMenu }
+                if sub == .conti || sub == .contoEconomico || sub == .movimenti { periodoMenu }
+                if sub == .movimenti { campoCerca }
                 Spacer()
                 if sub == .movimenti {
                     Text("\(visibiliMov.count) movimenti").font(.system(size: 11, weight: .medium)).foregroundStyle(PSE.faint)
@@ -231,15 +244,15 @@ struct TesoreriaView: View {
                 ForEach(model.conti) { c in contoCard(c) }
             }
             HStack(spacing: 12) {
-                totCard("TOTALE CONTI (incassato)", model.totaleConti, PSE.accent)
-                totCard("POTENZIALE (con da incassare)", model.totaleConti + daIncassareTot, Color(hue: 150/360, saturation: 0.34, brightness: 0.60))
+                totCard("TOTALE CONTI (incassato, netto)", model.totaleConti, PSE.accent)
+                totCard("POTENZIALE (+ da incassare lordo)", model.totaleConti + daIncassareTot, PSE.pos)
             }
-            Text("DA INCASSARE — prenotazioni confermate, soldi non ancora incassati").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.warn).padding(.top, 6)
+            Text("DA INCASSARE — prenotazioni confermate, soldi non ancora incassati · IMPORTI LORDI OTA").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.warn).padding(.top, 6)
             HStack(spacing: 12) {
-                totCard("BOOKING", daIncassareSource(["booking"]), PSE.warn)
+                totCard("BOOKING (lordo)", daIncassareSource(["booking"]), PSE.warn)
                 totCard("AIRBNB", daIncassareSource(["airbnb"]), PSE.warn)
                 totCard("DIRETTE", daIncassareDirette, PSE.warn)
-                totCard("TOTALE", daIncassareTot, green)
+                totCard("TOTALE (lordo)", daIncassareTot, PSE.pos)
             }
             Text("PER CASA — entrate, spese e utile registrati").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint).padding(.top, 6)
             HStack(spacing: 12) {
@@ -252,8 +265,10 @@ struct TesoreriaView: View {
                 servCard("PULIZIA — PREVISTE", puliziePreviste, "sparkles", PSE.warn)
                 servCard("COLAZIONI BOOKING", colazioni.totale, "cup.and.saucer.fill", PSE.accent)
             }
-            Text("OTA (Booking/Airbnb) → conto Massimo · dirette → Beeper o Cassa (scelto per prenotazione). Pulizia 20 €/check-out. Le colazioni Booking (3,50 €/pers·notte) sono aggiunte automaticamente ai Movimenti.")
+            Text("I saldi dei conti sono NETTI (su Massimo la commissione Booking è già registrata come uscita); il «da incassare» invece è LORDO, quello che il cliente paga all'OTA. Su Booking arriverà circa il 16,5% in meno — oggi ≈ \(eurc(commissioneAttesa)) — mentre Airbnb e le dirette non hanno commissione. Perciò il «potenziale» è un tetto, non l'incasso atteso.")
                 .font(.system(size: 10.5)).foregroundStyle(PSE.faint).padding(.top, 2)
+            Text("OTA (Booking/Airbnb) → conto Massimo · dirette → Beeper o Cassa (scelto per prenotazione). Pulizia 20 €/check-out. Le colazioni Booking (3,50 €/pers·notte) sono aggiunte automaticamente ai Movimenti.")
+                .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
         }.padding(.bottom, 20)
     }
     private func contoCard(_ c: Conto) -> some View {
@@ -261,9 +276,9 @@ struct TesoreriaView: View {
         let inc = daIncassare(c.id)
         return VStack(alignment: .leading, spacing: 7) {
             Text(c.nome.uppercased()).font(.system(size: 10, weight: .heavy)).tracking(0.5).foregroundStyle(PSE.faint).lineLimit(1)
-            Text(eur(s)).font(.system(size: 22, weight: .bold)).foregroundStyle(s < 0 ? Color(hue: 5/360, saturation: 0.5, brightness: 0.62) : PSE.ink).monospacedDigit()
+            Text(eurc(s)).font(.system(size: 22, weight: .bold)).foregroundStyle(s < 0 ? PSE.neg : PSE.ink).monospacedDigit()
             if inc > 0 {
-                Text("+ \(eur(inc)) da incassare").font(.system(size: 11, weight: .semibold)).foregroundStyle(PSE.warn)
+                Text("+ \(eurc(inc)) da incassare\(c.tipo == "ota" ? " (lordo)" : "")").font(.system(size: 11, weight: .semibold)).foregroundStyle(PSE.warn)
             } else {
                 Text(c.tipo == "cassa" ? "Contante" : c.tipo == "ota" ? "Booking + Airbnb" : "Banca").font(.system(size: 10)).foregroundStyle(PSE.dim)
             }
@@ -272,7 +287,7 @@ struct TesoreriaView: View {
         .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
     }
-    private func totCard(_ t: String, _ v: Int, _ c: Color) -> some View { testoCard(t, eur(v), c) }
+    private func totCard(_ t: String, _ v: Int, _ c: Color) -> some View { testoCard(t, eurc(v), c) }
     private func testoCard(_ t: String, _ v: String, _ c: Color) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(t).font(.system(size: 9.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
@@ -284,28 +299,47 @@ struct TesoreriaView: View {
     }
 
     // ── Movimenti ──
-    private var meseMenu: some View {
+    private var periodoMenu: some View {
         Menu {
-            Button("Tutti i mesi") { mese = "tutto" }
-            ForEach(mesiDisponibili, id: \.0) { m in Button(m.1) { mese = m.0 } }
+            Button("Tutti i periodi") { periodo = "tutto" }
+            Divider()
+            ForEach(anniDisponibili, id: \.self) { a in Button("Anno \(a)") { periodo = a } }
+            Divider()
+            ForEach(mesiDisponibili, id: \.0) { m in Button(m.1) { periodo = m.0 } }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "calendar").font(.system(size: 10))
-                Text(meseLabel).font(.system(size: 12, weight: .semibold))
+                Text(periodoLabel).font(.system(size: 12, weight: .semibold))
                 Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold))
             }
-            .foregroundStyle(PSE.dim).padding(.horizontal, 12).padding(.vertical, 8)
+            .foregroundStyle(periodo == "tutto" ? PSE.dim : PSE.ink).padding(.horizontal, 12).padding(.vertical, 8)
             .background(RoundedRectangle(cornerRadius: 10).fill(PSE.surface))
-            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(PSE.line, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(periodo == "tutto" ? PSE.line : PSE.accent.opacity(0.7), lineWidth: 1))
         }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+    }
+    private var campoCerca: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").font(.system(size: 10)).foregroundStyle(PSE.faint)
+            TextField("Cerca", text: $cerca)
+                .textFieldStyle(.plain).font(.system(size: 12))
+                .foregroundStyle(PSE.ink).frame(width: 130)
+            if !cerca.isEmpty {
+                Button { cerca = "" } label: {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 10)).foregroundStyle(PSE.faint)
+                }.buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 10).fill(PSE.surface))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(PSE.line, lineWidth: 1))
     }
     private var movimentiList: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
-                totCard("ENTRATE", movEntrate, green)
-                totCard("USCITE", movUscite, red)
+                totCard("ENTRATE", movEntrate, PSE.pos)
+                totCard("USCITE", movUscite, PSE.neg)
                 totCard("SALDO PERIODO", movEntrate - movUscite, PSE.accent)
-                totCard("DA INCASSARE", daIncassarePeriodo, PSE.warn)
+                totCard("DA INCASSARE (lordo)", daIncassarePeriodo, PSE.warn)
             }
             VStack(spacing: 0) {
                 if visibiliMov.isEmpty {
@@ -349,9 +383,9 @@ struct TesoreriaView: View {
                 Text(contoNome).font(.system(size: 11)).foregroundStyle(PSE.dim).frame(width: 150, alignment: .leading).lineLimit(1)
                 Text((m.categoria ?? "—").capitalized).font(.system(size: 11)).foregroundStyle(PSE.faint).frame(width: 100, alignment: .leading).lineLimit(1)
                 Text((m.modalita ?? "—").capitalized).font(.system(size: 11)).foregroundStyle(PSE.faint).frame(width: 84, alignment: .leading).lineLimit(1)
-                Text((entrata ? "+" : "−") + eur(m.importo_cents))
+                Text((entrata ? "+" : "−") + eurc(m.importo_cents))
                     .font(.system(size: 13, weight: .bold)).monospacedDigit()
-                    .foregroundStyle(entrata ? Color(hue: 150/360, saturation: 0.4, brightness: 0.62) : Color(hue: 5/360, saturation: 0.46, brightness: 0.62))
+                    .foregroundStyle(entrata ? PSE.pos : PSE.neg)
                     .frame(width: 92, alignment: .trailing)
             }
             .padding(.horizontal, 16).padding(.vertical, 9).contentShape(Rectangle())
@@ -363,7 +397,7 @@ struct TesoreriaView: View {
             Image(systemName: icon).font(.system(size: 16)).foregroundStyle(c)
             VStack(alignment: .leading, spacing: 3) {
                 Text(t).font(.system(size: 9.5, weight: .heavy)).tracking(0.6).foregroundStyle(PSE.faint)
-                Text(eur(v)).font(.system(size: 18, weight: .bold)).foregroundStyle(PSE.ink).monospacedDigit()
+                Text(eurc(v)).font(.system(size: 18, weight: .bold)).foregroundStyle(PSE.ink).monospacedDigit()
             }
             Spacer()
         }
@@ -379,9 +413,9 @@ struct TesoreriaView: View {
         return VStack(alignment: .leading, spacing: 12) {
             Text(s.label.uppercased()).font(.system(size: 11, weight: .heavy)).tracking(0.6).foregroundStyle(PSE.ink)
             HStack(spacing: 0) {
-                miniStat("ENTRATE", st.inc, green)
-                miniStat("SPESE", st.spese, red)
-                miniStat("UTILE", utile, utile >= 0 ? green : red)
+                miniStat("ENTRATE", st.inc, PSE.pos)
+                miniStat("SPESE", st.spese, PSE.neg)
+                miniStat("UTILE", utile, utile >= 0 ? PSE.pos : PSE.neg)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading).padding(16)
@@ -391,7 +425,7 @@ struct TesoreriaView: View {
     private func miniStat(_ t: String, _ v: Int, _ c: Color) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(t).font(.system(size: 8.5, weight: .heavy)).tracking(0.6).foregroundStyle(PSE.faint)
-            Text(eur(v)).font(.system(size: 15, weight: .bold)).foregroundStyle(c).monospacedDigit()
+            Text(eurc(v)).font(.system(size: 15, weight: .bold)).foregroundStyle(c).monospacedDigit()
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -400,7 +434,7 @@ struct TesoreriaView: View {
     // per capire l'andamento. Rispetta il filtro casa (movStrut), tutti i mesi.
 
     private var movStrutFiltrati: [TesMovimento] {
-        model.movimenti.filter { movStrut == nil || $0.struttura == movStrut!.rawValue }
+        model.movimenti.filter { (movStrut == nil || $0.struttura == movStrut!.rawValue) && nelPeriodo($0) }
     }
     // (chiave "yyyy-MM", entrate, uscite) per mese, dal più recente
     private var mensili: [(key: String, entrate: Int, uscite: Int)] {
@@ -446,16 +480,16 @@ struct TesoreriaView: View {
             let margineOp = totEntrate > 0 ? Int((Double(utileOp) / Double(totEntrate) * 100).rounded()) : 0
             // Gestione: entrate vs costi operativi (senza debiti)
             HStack(spacing: 12) {
-                totCard("ENTRATE", totEntrate, green)
-                totCard("COSTI OPERATIVI", totCostiOperativi, red)
-                totCard("UTILE OPERATIVO", utileOp, utileOp >= 0 ? green : red)
+                totCard("ENTRATE", totEntrate, PSE.pos)
+                totCard("COSTI OPERATIVI", totCostiOperativi, PSE.neg)
+                totCard("UTILE OPERATIVO", utileOp, utileOp >= 0 ? PSE.pos : PSE.neg)
                 testoCard("MARGINE OP.", totEntrate > 0 ? "\(margineOp)%" : "—", PSE.accent)
             }
             // Sotto la gestione: debiti/finanziamenti e utile netto reale
             if totDebiti > 0 {
                 HStack(spacing: 12) {
                     totCard("DEBITI / FINANZIAMENTI", totDebiti, PSE.warn)
-                    totCard("UTILE NETTO (dopo debiti)", utileNetto, utileNetto >= 0 ? green : red)
+                    totCard("UTILE NETTO (dopo debiti)", utileNetto, utileNetto >= 0 ? PSE.pos : PSE.neg)
                     Color.clear.frame(maxWidth: .infinity)
                 }
             }
@@ -477,8 +511,8 @@ struct TesoreriaView: View {
             }
 
             HStack(alignment: .top, spacing: 12) {
-                categoriaCard("COSTI OPERATIVI PER CATEGORIA", perCategoriaUscite(debiti: false), totCostiOperativi, red)
-                categoriaCard("ENTRATE PER CATEGORIA", perCategoria("entrata"), totEntrate, green)
+                categoriaCard("COSTI OPERATIVI PER CATEGORIA", perCategoriaUscite(debiti: false), totCostiOperativi, PSE.neg)
+                categoriaCard("ENTRATE PER CATEGORIA", perCategoria("entrata"), totEntrate, PSE.pos)
             }
             .padding(.top, 6)
 
@@ -487,7 +521,7 @@ struct TesoreriaView: View {
                     .padding(.top, 2)
             }
 
-            Text("Conto economico su base cassa. «Utile operativo» = entrate − costi di gestione; i debiti (Marroni, Muratore, mutuo, rata) sono rimborsi e restano fuori dal margine. Filtro casa applicato, tutti i mesi. «Esporta CSV» per il commercialista.")
+            Text("Conto economico su base cassa. «Utile operativo» = entrate − costi di gestione; i debiti (Marroni, Muratore, mutuo, rata) sono rimborsi e restano fuori dal margine. Periodo: \(periodoLabel.lowercased()), filtro casa applicato. «Esporta CSV» per il commercialista.")
                 .font(.system(size: 10.5)).foregroundStyle(PSE.faint).padding(.top, 2)
         }.padding(.bottom, 20)
     }
@@ -497,7 +531,19 @@ struct TesoreriaView: View {
     private var tuttiIConti: Bool { contoSel == "tutti" }
     private var contoMovimenti: [TesMovimento] {
         (tuttiIConti ? model.movimenti : model.movimenti.filter { $0.conto_id == contoSel })
+            .filter { nelPeriodo($0) }
             .sorted { $0.data > $1.data }
+    }
+    /// Saldo del conto (o di tutti) prima dell'inizio del periodo scelto: senza
+    /// questo, filtrare per mese farebbe leggere come «saldo» il solo movimento
+    /// del mese, che non è il saldo del conto.
+    private var saldoIniziale: Int {
+        guard periodo != "tutto" else { return 0 }
+        var t = 0
+        for m in model.movimenti where (tuttiIConti || m.conto_id == contoSel) && m.data < periodo {
+            t += (m.tipo == "entrata") ? m.importo_cents : -m.importo_cents
+        }
+        return t
     }
     private func contoNomeBreve(_ id: String?) -> String {
         switch id { case "cassa": return "Cassa"; case "massimo": return "Massimo"; case "beeper": return "Beeper"; default: return id ?? "—" }
@@ -509,31 +555,41 @@ struct TesoreriaView: View {
         let totE = entrate.reduce(0) { $0 + $1.importo_cents }
         let totU = uscite.reduce(0) { $0 + $1.importo_cents }
         let conto = model.conti.first { $0.id == contoSel }
+        let iniz = saldoIniziale
+        let nome = tuttiIConti ? "TOTALE" : (conto?.nome.uppercased() ?? "")
         return VStack(alignment: .leading, spacing: 12) {
-            // intestazione: saldo + entrate/uscite (per conto singolo o totale)
+            // intestazione: col periodo filtrato l'estratto parte dal saldo
+            // iniziale e chiude sul finale, come un vero estratto conto.
             HStack(spacing: 12) {
-                testoCard(tuttiIConti ? "SALDO TOTALE" : "SALDO \(conto?.nome.uppercased() ?? "")",
-                          eur(totE - totU), (totE - totU) < 0 ? red : PSE.ink)
-                totCard("ENTRATE", totE, green)
-                totCard("USCITE", totU, red)
-                testoCard("N. MOVIMENTI", "\(mov.count)", PSE.accent)
+                if periodo == "tutto" {
+                    testoCard("SALDO \(nome)", eurc(totE - totU), (totE - totU) < 0 ? PSE.neg : PSE.ink)
+                    totCard("ENTRATE", totE, PSE.pos)
+                    totCard("USCITE", totU, PSE.neg)
+                    testoCard("N. MOVIMENTI", "\(mov.count)", PSE.accent)
+                } else {
+                    totCard("SALDO INIZIALE", iniz, iniz < 0 ? PSE.neg : PSE.dim)
+                    totCard("ENTRATE", totE, PSE.pos)
+                    totCard("USCITE", totU, PSE.neg)
+                    testoCard("SALDO FINALE \(nome)", eurc(iniz + totE - totU), (iniz + totE - totU) < 0 ? PSE.neg : PSE.ink)
+                }
             }
-            // Con «Tutti i conti»: una card di saldo per ciascun conto
+            // Con «Tutti i conti»: una card di saldo per ciascun conto (saldo pieno,
+            // non del periodo: è quello che c'è davvero sul conto oggi)
             if tuttiIConti {
                 HStack(spacing: 12) {
                     ForEach(model.conti) { c in
                         let s = model.saldo(c.id)
-                        totCard(c.nome.uppercased(), s, s < 0 ? red : PSE.accent)
+                        totCard("\(c.nome.uppercased()) — SALDO OGGI", s, s < 0 ? PSE.neg : PSE.accent)
                     }
                 }
             }
             if mov.isEmpty {
-                EmptyStateCard(icon: "tray", text: "Nessun movimento.")
+                EmptyStateCard(icon: "tray", text: periodo == "tutto" ? "Nessun movimento." : "Nessun movimento in \(periodoLabel.lowercased()).")
             } else {
-                contoLedger("ENTRATE", entrate, totE, green, "+", showConto: tuttiIConti)
-                contoLedger("USCITE", uscite, totU, red, "−", showConto: tuttiIConti)
-                // Riga finale: entrate − uscite = totale rimanente sul conto
-                rimanenteRow(totE, totU)
+                contoLedger("ENTRATE", entrate, totE, PSE.pos, "+", showConto: tuttiIConti)
+                contoLedger("USCITE", uscite, totU, PSE.neg, "−", showConto: tuttiIConti)
+                // Riga finale: saldo iniziale + entrate − uscite = saldo finale
+                rimanenteRow(iniz, totE, totU)
             }
             Text(contoNota).font(.system(size: 10.5)).foregroundStyle(PSE.faint).padding(.top, 2)
         }.padding(.bottom, 20)
@@ -551,7 +607,7 @@ struct TesoreriaView: View {
             HStack {
                 Text(title).font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint)
                 Spacer()
-                Text(sign + eur(tot)).font(.system(size: 12, weight: .bold)).foregroundStyle(c).monospacedDigit()
+                Text(sign + eurc(tot)).font(.system(size: 12, weight: .bold)).foregroundStyle(c).monospacedDigit()
             }
             .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
             ForEach(Array(items.enumerated()), id: \.element.id) { i, m in
@@ -564,13 +620,13 @@ struct TesoreriaView: View {
                         }
                         Text(casaLabel(m.struttura)).font(.system(size: 11)).foregroundStyle(PSE.dim).frame(width: 96, alignment: .leading).lineLimit(1)
                         Text((m.categoria ?? "—").capitalized).font(.system(size: 11)).foregroundStyle(PSE.faint).frame(width: 100, alignment: .leading).lineLimit(1)
-                        Text(sign + eur(m.importo_cents)).font(.system(size: 12.5, weight: .bold)).foregroundStyle(c).monospacedDigit().frame(width: 92, alignment: .trailing)
+                        Text(sign + eurc(m.importo_cents)).font(.system(size: 12.5, weight: .bold)).foregroundStyle(c).monospacedDigit().frame(width: 92, alignment: .trailing)
                     }
                     .padding(.horizontal, 16).padding(.vertical, 8).contentShape(Rectangle())
                 }.buttonStyle(.plain)
                 if i < items.count - 1 { Divider().overlay(PSE.line).padding(.leading, 16) }
             }
-            .padding(.bottom, 6)
+            Color.clear.frame(height: 6)
         }
         .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
@@ -578,17 +634,21 @@ struct TesoreriaView: View {
     private func casaLabel(_ s: String?) -> String {
         s == "via-po" ? "Via Po" : s == "via-romagna" ? "Via Romagna" : "—"
     }
-    // Riga «totale rimanente» = entrate − uscite
-    private func rimanenteRow(_ totE: Int, _ totU: Int) -> some View {
-        let saldo = totE - totU
+    // Riga di chiusura: saldo iniziale + entrate − uscite = saldo finale
+    private func rimanenteRow(_ iniz: Int, _ totE: Int, _ totU: Int) -> some View {
+        let saldo = iniz + totE - totU
         return HStack(spacing: 16) {
-            Text("TOTALE RIMANENTE").font(.system(size: 11, weight: .heavy)).tracking(1).foregroundStyle(PSE.ink)
+            Text(periodo == "tutto" ? "TOTALE RIMANENTE" : "SALDO FINALE").font(.system(size: 11, weight: .heavy)).tracking(1).foregroundStyle(PSE.ink)
             Spacer()
-            Text("+\(eur(totE))").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(green).monospacedDigit()
-            Text("−\(eur(totU))").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(red).monospacedDigit()
+            if periodo != "tutto" {
+                Text(eurc(iniz)).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim).monospacedDigit()
+                    .help("Saldo prima dell'inizio del periodo")
+            }
+            Text("+\(eurc(totE))").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.pos).monospacedDigit()
+            Text("−\(eurc(totU))").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.neg).monospacedDigit()
             Text("=").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.faint)
-            Text(eur(saldo)).font(.system(size: 16, weight: .bold)).foregroundStyle(saldo < 0 ? red : PSE.ink).monospacedDigit()
-                .frame(width: 110, alignment: .trailing)
+            Text(eurc(saldo)).font(.system(size: 16, weight: .bold)).foregroundStyle(saldo < 0 ? PSE.neg : PSE.ink).monospacedDigit()
+                .frame(width: 120, alignment: .trailing)
         }
         .padding(.horizontal, 18).padding(.vertical, 14)
         .background(RoundedRectangle(cornerRadius: 14).fill(PSE.surface))
@@ -613,13 +673,13 @@ struct TesoreriaView: View {
         return HStack(spacing: 12) {
             Text(meseNome(r.key)).font(.system(size: 12, weight: .semibold)).foregroundStyle(PSE.ink)
                 .frame(width: 130, alignment: .leading).lineLimit(1)
-            Text("+" + eur(r.entrate)).font(.system(size: 11.5, weight: .medium)).foregroundStyle(green).monospacedDigit().frame(width: 90, alignment: .trailing)
-            Text("−" + eur(r.uscite)).font(.system(size: 11.5, weight: .medium)).foregroundStyle(red).monospacedDigit().frame(width: 90, alignment: .trailing)
-            Text(eur(utile)).font(.system(size: 12.5, weight: .bold)).foregroundStyle(utile >= 0 ? green : red).monospacedDigit().frame(width: 90, alignment: .trailing)
+            Text("+" + eurc(r.entrate)).font(.system(size: 11.5, weight: .medium)).foregroundStyle(PSE.pos).monospacedDigit().frame(width: 90, alignment: .trailing)
+            Text("−" + eurc(r.uscite)).font(.system(size: 11.5, weight: .medium)).foregroundStyle(PSE.neg).monospacedDigit().frame(width: 90, alignment: .trailing)
+            Text(eurc(utile)).font(.system(size: 12.5, weight: .bold)).foregroundStyle(utile >= 0 ? PSE.pos : PSE.neg).monospacedDigit().frame(width: 90, alignment: .trailing)
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 3).fill(PSE.surface).frame(height: 8)
-                    RoundedRectangle(cornerRadius: 3).fill((utile >= 0 ? green : red).opacity(0.75))
+                    RoundedRectangle(cornerRadius: 3).fill((utile >= 0 ? PSE.pos : PSE.neg).opacity(0.75))
                         .frame(width: max(2, geo.size.width * frac), height: 8)
                 }.frame(maxHeight: .infinity, alignment: .center)
             }.frame(height: 18)
@@ -640,7 +700,7 @@ struct TesoreriaView: View {
                         HStack(spacing: 8) {
                             Text(r.cat.capitalized).font(.system(size: 12, weight: .medium)).foregroundStyle(PSE.ink).lineLimit(1)
                             Spacer(minLength: 6)
-                            Text(eur(r.tot)).font(.system(size: 12, weight: .bold)).foregroundStyle(PSE.ink).monospacedDigit()
+                            Text(eurc(r.tot)).font(.system(size: 12, weight: .bold)).foregroundStyle(PSE.ink).monospacedDigit()
                             Text("\(pct)%").font(.system(size: 10, weight: .semibold)).foregroundStyle(PSE.faint).frame(width: 34, alignment: .trailing)
                         }
                         GeometryReader { geo in
@@ -688,9 +748,14 @@ struct TesoreriaView: View {
             csv += [m.data, m.tipo, casa, m.categoria ?? "", m.descrizione ?? "", conto, m.modalita ?? "", imp]
                 .map { q($0) }.joined(separator: ";") + "\n"
         }
+        // nome file parlante: sezione + casa + periodo, così i CSV per il
+        // commercialista non finiscono tutti con lo stesso nome
+        var parti = ["camere-pse", sub == .conti ? "conti-\(contoSel)" : sub == .contoEconomico ? "conto-economico" : "movimenti"]
+        if let s = movStrut { parti.append(s.rawValue) }
+        if periodo != "tutto" { parti.append(periodo) }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.commaSeparatedText]
-        panel.nameFieldStringValue = "camere-pse-movimenti.csv"
+        panel.nameFieldStringValue = parti.joined(separator: "_") + ".csv"
         if panel.runModal() == .OK, let url = panel.url {
             try? csv.data(using: .utf8)?.write(to: url)
         }
@@ -713,6 +778,7 @@ private struct TesMovimentoForm: View {
     @State private var modalita = "contante"
     @State private var struttura = "—"
     @State private var saving = false
+    @State private var confermaElimina = false
 
     private let modalitaOpts = ["contante", "booking", "airbnb", "bonifico"]
 
@@ -738,10 +804,16 @@ private struct TesMovimentoForm: View {
 
                 HStack(spacing: 10) {
                     if existing != nil {
-                        Button { Task { await del() } } label: {
+                        Button { confermaElimina = true } label: {
                             Text("Elimina").font(.system(size: 13)).foregroundStyle(Color(hex: 0xffb3ad))
                                 .padding(.horizontal, 14).padding(.vertical, 9)
                         }.buttonStyle(.plain)
+                        .confirmationDialog("Eliminare questo movimento?", isPresented: $confermaElimina) {
+                            Button("Elimina movimento", role: .destructive) { Task { await del() } }
+                            Button("Annulla", role: .cancel) {}
+                        } message: {
+                            Text("\(existing?.descrizione ?? existing?.categoria ?? "Movimento") · \(eurc(existing?.importo_cents ?? 0)). L'operazione non si può annullare.")
+                        }
                     }
                     Spacer()
                     Button("Annulla") { dismiss() }.buttonStyle(.plain)

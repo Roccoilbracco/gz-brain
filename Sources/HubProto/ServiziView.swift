@@ -66,7 +66,6 @@ enum ServizioTab: String, CaseIterable, Identifiable { case pulizie = "Pulizie",
 struct ServiziView: View {
     @Binding var tab: ServizioTab
     @StateObject private var model = ServiziModel()
-    private let green = Color(hue: 150/360, saturation: 0.4, brightness: 0.62)
 
     var body: some View {
         Group {
@@ -99,7 +98,7 @@ struct ServiziView: View {
             Text("PULIZIA E LAVANDERIA — 20 € per ogni check-out (per camera)")
                 .font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim)
             HStack(spacing: 12) {
-                card("FATTE (uscita in cassa)", eur(totF), green)
+                card("FATTE (uscita in cassa)", eur(totF), PSE.pos)
                 card("PREVISTE (future)", eur(totP), PSE.warn)
                 card("TOTALE", eur(totF + totP), PSE.ink)
                 card("N. CHECK-OUT", "\(model.pulizie.count)", PSE.accent)
@@ -148,9 +147,9 @@ struct ServiziView: View {
             Text("COLAZIONI — 3,50 € per persona / giorno (solo prenotazioni Booking)")
                 .font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim)
             HStack(spacing: 12) {
-                card("GIÀ SERVITE (uscita)", eur2(serv), green)
-                card("PREVISTE (future)", eur2(tot - serv), PSE.warn)
-                card("TOTALE", eur2(tot), PSE.ink)
+                card("GIÀ SERVITE (uscita)", eurc(serv), PSE.pos)
+                card("PREVISTE (future)", eurc(tot - serv), PSE.warn)
+                card("TOTALE", eurc(tot), PSE.ink)
                 card("N. PRENOTAZIONI", "\(model.colazioni.count)", PSE.accent)
             }
             tableCard {
@@ -163,8 +162,8 @@ struct ServiziView: View {
                         num("\(svDayStr(cz.arrivo))–\(svDayStr(cz.partenza))", PSE.dim).frame(width: 96, alignment: .leading)
                         num("\(cz.notti ?? 0)", PSE.dim).frame(width: 44, alignment: .trailing)
                         num("\(cz.persone ?? 0)", PSE.dim).frame(width: 54, alignment: .trailing)
-                        num(eur2(cz.costo_totale_cents), PSE.text).frame(width: 74, alignment: .trailing)
-                        num(eur2(cz.costo_servito_cents), green).frame(width: 78, alignment: .trailing)
+                        num(eurc(cz.costo_totale_cents), PSE.text).frame(width: 74, alignment: .trailing)
+                        num(eurc(cz.costo_servito_cents), PSE.pos).frame(width: 78, alignment: .trailing)
                         statoPill(cz.stato)
                     }
                     .padding(.horizontal, 16).padding(.vertical, 7)
@@ -198,9 +197,9 @@ struct ServiziView: View {
             Text("UTENZE EDUCAMP — VIA ROMAGNA · 8 €/giorno per camera (6 € se una sola persona), interamente nostre")
                 .font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim)
             HStack(spacing: 12) {
-                card("TOTALE UTENZE", eur2(tot), PSE.accent)
+                card("TOTALE UTENZE", eurc(tot), PSE.accent)
                 ForEach(mesi, id: \.self) { m in
-                    card(meseBreve(m).uppercased(), eur2(model.utenze.filter { $0.mese == m }.reduce(0) { $0 + $1.utenze_cents }), PSE.dim)
+                    card(meseBreve(m).uppercased(), eurc(model.utenze.filter { $0.mese == m }.reduce(0) { $0 + $1.utenze_cents }), PSE.dim)
                 }
             }
             ForEach(mesi, id: \.self) { m in
@@ -208,9 +207,9 @@ struct ServiziView: View {
                 let sub = righe.reduce(0) { $0 + $1.utenze_cents }
                 tableCard {
                     HStack {
-                        Text(meseBreve(m).uppercased()).font(.system(size: 10, weight: .heavy)).tracking(0.8).foregroundStyle(Holo.hsl(210, 55, 68))
+                        Text(meseBreve(m).uppercased()).font(.system(size: 10, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.accent)
                         Spacer()
-                        Text(eur2(sub)).font(.system(size: 12, weight: .bold)).foregroundStyle(PSE.accent).monospacedDigit()
+                        Text(eurc(sub)).font(.system(size: 12, weight: .bold)).foregroundStyle(PSE.accent).monospacedDigit()
                     }.padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
                     HStack(spacing: 10) {
                         th("OSPITE").frame(maxWidth: .infinity, alignment: .leading)
@@ -226,7 +225,7 @@ struct ServiziView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
                             td(r.camera ?? "—").frame(width: 200, alignment: .leading)
                             num("\(r.giorni ?? 0)", PSE.dim).frame(width: 60, alignment: .trailing)
-                            num(eur2(r.utenze_cents), PSE.accent).frame(width: 90, alignment: .trailing)
+                            num(eurc(r.utenze_cents), PSE.accent).frame(width: 90, alignment: .trailing)
                         }
                         .padding(.horizontal, 16).padding(.vertical, 7)
                         if i < righe.count - 1 { Divider().overlay(PSE.line).padding(.leading, 16) }
@@ -260,10 +259,10 @@ struct ServiziView: View {
         let done = (s == "fatta" || s == "servite")
         return Text((s ?? "—").capitalized)
             .font(.system(size: 9.5, weight: .heavy)).tracking(0.5)
-            .foregroundStyle(done ? green : PSE.warn)
+            .foregroundStyle(done ? PSE.pos : PSE.warn)
             .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(Capsule().fill((done ? green : PSE.warn).opacity(0.14)))
-            .overlay(Capsule().strokeBorder((done ? green : PSE.warn).opacity(0.45), lineWidth: 1))
+            .background(Capsule().fill((done ? PSE.pos : PSE.warn).opacity(0.14)))
+            .overlay(Capsule().strokeBorder((done ? PSE.pos : PSE.warn).opacity(0.45), lineWidth: 1))
             .frame(width: 78, alignment: .leading)
     }
     private func th(_ t: String) -> some View {

@@ -44,10 +44,6 @@ extension HubAPI {
     }
 }
 
-// importo in euro con 2 decimali (l'Educamp ha frazioni: 367,33 €)
-func eur2(_ cents: Int) -> String {
-    "€" + String(format: "%.2f", Double(cents) / 100).replacingOccurrences(of: ".", with: ",")
-}
 private let eduYmd: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f }()
 private let eduMese: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "it_IT"); f.dateFormat = "MMMM yyyy"; return f }()
 private let eduDay: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "it_IT"); f.dateFormat = "dd/MM/yy"; return f }()
@@ -121,11 +117,11 @@ struct EducampView: View {
         let totOsp = model.righe.reduce(0) { $0 + $1.totale_ospite_cents }
         let nettoNoi = model.righe.reduce(0) { $0 + $1.netto_noi_cents }
         return HStack(spacing: 12) {
-            card("TOTALE DOVUTO OSPITI", eur2(totOsp), PSE.ink)
-            card("NETTO PER NOI", eur2(nettoNoi), Color(hue: 150/360, saturation: 0.4, brightness: 0.62))
-            card("COMMISSIONI DA CONSEGNARE", eur2(comm), PSE.warn)
-            card("UTENZE (nostre)", eur2(utenze), PSE.accent)
-            card("AFFITTO LORDO", eur2(lordo), PSE.dim)
+            card("TOTALE DOVUTO OSPITI", eurc(totOsp), PSE.ink)
+            card("NETTO PER NOI", eurc(nettoNoi), PSE.pos)
+            card("COMMISSIONI DA CONSEGNARE", eurc(comm), PSE.warn)
+            card("UTENZE (nostre)", eurc(utenze), PSE.accent)
+            card("AFFITTO LORDO", eurc(lordo), PSE.dim)
         }
     }
     private func card(_ t: String, _ v: String, _ c: Color) -> some View {
@@ -172,7 +168,7 @@ struct EducampView: View {
                 .padding(.horizontal, 16).padding(.vertical, 7)
                 if i < model.ospiti.count - 1 { Divider().overlay(PSE.line).padding(.leading, 16) }
             }
-            .padding(.bottom, 6)
+            Color.clear.frame(height: 6)
         }
         .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
@@ -184,14 +180,14 @@ struct EducampView: View {
         let sub = subtotali(righe)
         return VStack(alignment: .leading, spacing: 0) {
             Text("\(eduMeseNome(mese).uppercased())  ·  mese contato come 30 giorni")
-                .font(.system(size: 10, weight: .heavy)).tracking(0.8).foregroundStyle(Holo.hsl(210, 55, 68))
+                .font(.system(size: 10, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.accent)
                 .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
             meseHeader
             ForEach(Array(righe.enumerated()), id: \.element.id) { i, r in
                 meseRow(r)
                 if i < righe.count - 1 { Divider().overlay(PSE.line).padding(.leading, 16) }
             }
-            Divider().overlay(PSE.line.opacity(2))
+            Divider().overlay(PSE.line)
             subtotaleRow(sub, label: "SUBTOTALE \(eduMeseNome(mese).uppercased())")
         }
         .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
@@ -214,18 +210,17 @@ struct EducampView: View {
         .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
     }
     private func meseRow(_ r: EducampRiga) -> some View {
-        let green = Color(hue: 150/360, saturation: 0.4, brightness: 0.62)
         return HStack(spacing: 8) {
             Text(r.ospite).font(.system(size: 12, weight: .semibold)).foregroundStyle(PSE.ink)
                 .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
             td(r.camera ?? "—").frame(width: wCamera, alignment: .leading)
             num("\(r.giorni ?? 0)", PSE.dim).frame(width: wGiorni, alignment: .trailing)
-            num(eur2(r.lordo_cents), PSE.text).frame(width: wSoldi, alignment: .trailing)
-            num("−" + eur2(r.commissione_cents), PSE.warn).frame(width: wComm, alignment: .trailing)
-            num(eur2(r.netto_cents), PSE.text).frame(width: wSoldi, alignment: .trailing)
-            num(eur2(r.utenze_cents), PSE.accent).frame(width: wComm, alignment: .trailing)
-            num(eur2(r.totale_ospite_cents), PSE.ink).frame(width: wSoldi, alignment: .trailing)
-            num(eur2(r.netto_noi_cents), green).frame(width: wSoldi, alignment: .trailing).bold()
+            num(eurc(r.lordo_cents), PSE.text).frame(width: wSoldi, alignment: .trailing)
+            num("−" + eurc(r.commissione_cents), PSE.warn).frame(width: wComm, alignment: .trailing)
+            num(eurc(r.netto_cents), PSE.text).frame(width: wSoldi, alignment: .trailing)
+            num(eurc(r.utenze_cents), PSE.accent).frame(width: wComm, alignment: .trailing)
+            num(eurc(r.totale_ospite_cents), PSE.ink).frame(width: wSoldi, alignment: .trailing)
+            num(eurc(r.netto_noi_cents), PSE.pos).frame(width: wSoldi, alignment: .trailing).bold()
         }
         .padding(.horizontal, 16).padding(.vertical, 7)
     }
@@ -237,18 +232,17 @@ struct EducampView: View {
         }
     }
     private func subtotaleRow(_ s: (g: Int, lo: Int, co: Int, ne: Int, ut: Int, to: Int, nn: Int), label: String) -> some View {
-        let green = Color(hue: 150/360, saturation: 0.4, brightness: 0.62)
         return HStack(spacing: 8) {
             Text(label).font(.system(size: 10, weight: .heavy)).tracking(0.5).foregroundStyle(PSE.ink)
                 .frame(maxWidth: .infinity, alignment: .leading)
             td("").frame(width: wCamera)
             num("\(s.g)", PSE.ink).frame(width: wGiorni, alignment: .trailing).bold()
-            num(eur2(s.lo), PSE.ink).frame(width: wSoldi, alignment: .trailing).bold()
-            num("−" + eur2(s.co), PSE.warn).frame(width: wComm, alignment: .trailing).bold()
-            num(eur2(s.ne), PSE.ink).frame(width: wSoldi, alignment: .trailing).bold()
-            num(eur2(s.ut), PSE.accent).frame(width: wComm, alignment: .trailing).bold()
-            num(eur2(s.to), PSE.ink).frame(width: wSoldi, alignment: .trailing).bold()
-            num(eur2(s.nn), green).frame(width: wSoldi, alignment: .trailing).bold()
+            num(eurc(s.lo), PSE.ink).frame(width: wSoldi, alignment: .trailing).bold()
+            num("−" + eurc(s.co), PSE.warn).frame(width: wComm, alignment: .trailing).bold()
+            num(eurc(s.ne), PSE.ink).frame(width: wSoldi, alignment: .trailing).bold()
+            num(eurc(s.ut), PSE.accent).frame(width: wComm, alignment: .trailing).bold()
+            num(eurc(s.to), PSE.ink).frame(width: wSoldi, alignment: .trailing).bold()
+            num(eurc(s.nn), PSE.pos).frame(width: wSoldi, alignment: .trailing).bold()
         }
         .padding(.horizontal, 16).padding(.vertical, 9)
         .background(Color.white.opacity(0.03))
@@ -281,17 +275,16 @@ struct EducampView: View {
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
     }
     private func riepRow(_ label: String, _ s: (g: Int, lo: Int, co: Int, ne: Int, ut: Int, to: Int, nn: Int), grande: Bool = false) -> some View {
-        let green = Color(hue: 150/360, saturation: 0.4, brightness: 0.62)
         return HStack(spacing: 8) {
             Text(label).font(.system(size: grande ? 11 : 12, weight: grande ? .heavy : .semibold)).foregroundStyle(PSE.ink)
                 .frame(maxWidth: .infinity, alignment: .leading)
             num("\(s.g)", PSE.dim).frame(width: wCamera - 60, alignment: .trailing)
-            num(eur2(s.lo), PSE.text).frame(width: wSoldi, alignment: .trailing)
-            num("−" + eur2(s.co), PSE.warn).frame(width: wComm, alignment: .trailing)
-            num(eur2(s.ne), PSE.text).frame(width: wSoldi, alignment: .trailing)
-            num(eur2(s.ut), PSE.accent).frame(width: wComm, alignment: .trailing)
-            num(eur2(s.to), PSE.ink).frame(width: wSoldi, alignment: .trailing)
-            num(eur2(s.nn), green).frame(width: wSoldi, alignment: .trailing).bold()
+            num(eurc(s.lo), PSE.text).frame(width: wSoldi, alignment: .trailing)
+            num("−" + eurc(s.co), PSE.warn).frame(width: wComm, alignment: .trailing)
+            num(eurc(s.ne), PSE.text).frame(width: wSoldi, alignment: .trailing)
+            num(eurc(s.ut), PSE.accent).frame(width: wComm, alignment: .trailing)
+            num(eurc(s.to), PSE.ink).frame(width: wSoldi, alignment: .trailing)
+            num(eurc(s.nn), PSE.pos).frame(width: wSoldi, alignment: .trailing).bold()
         }
         .padding(.horizontal, 16).padding(.vertical, grande ? 11 : 8)
         .background(grande ? Color.white.opacity(0.04) : .clear)

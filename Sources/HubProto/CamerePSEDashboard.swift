@@ -80,8 +80,15 @@ func payState(amount: Int, paid: Int) -> PayState {
     return paid >= amount ? .pagato : .acconto
 }
 
-// cents → "€X"
+// cents → "€X" (arrotondato all'euro: viste operative, prezzi di listino)
 func eur(_ cents: Int) -> String { LeadFmt.euro(cents / 100) }
+
+// cents → "€1.076,77" — in contabilità i centesimi si mostrano sempre, altrimenti
+// le righe non sommano al totale mostrato.
+func eurc(_ cents: Int) -> String {
+    let neg = cents < 0, a = abs(cents)
+    return "€" + (neg ? "-" : "") + LeadFmt.euro(a / 100).dropFirst() + "," + String(format: "%02d", a % 100)
+}
 
 // ── Tema sobrio e professionale (poco colore, tinte desaturate) ──
 enum PSE {
@@ -94,6 +101,8 @@ enum PSE {
     static let accent = Color(red: 0.44, green: 0.56, blue: 0.74)     // slate blue sobrio
     static let warn = Color(hex: 0xd97757)   // arancio del brand (come sidebar/avatar): da confermare / azioni
     static let panel = Color(hex: 0x0f141e)
+    static let pos = Color(hue: 150/360, saturation: 0.40, brightness: 0.62)  // entrate
+    static let neg = Color(hue: 5/360,   saturation: 0.46, brightness: 0.62)  // uscite
 
     // tinte di stato desaturate (professionali, non fluo)
     static func status(_ s: BookingStatus) -> Color {
