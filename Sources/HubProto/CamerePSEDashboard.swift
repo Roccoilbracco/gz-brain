@@ -297,6 +297,7 @@ struct CamerePSEDashboard: View {
                         calendarStrip
                         daySection
                         planningSection
+                        giorniLiberiSection
                     }
                 }
                 Spacer(minLength: 0)
@@ -542,6 +543,114 @@ struct CamerePSEDashboard: View {
     }
     private func legendItem(_ c: Color, _ t: String) -> some View {
         HStack(spacing: 4) { RoundedRectangle(cornerRadius: 2).fill(c).frame(width: 12, height: 10); Text(t).font(.system(size: 10)).foregroundStyle(PSE.faint) }
+    }
+
+    // ── Riepilogo giorni liberi per camera ──────────────────────────────────
+    // Il planning dice giorno per giorno chi c'è; questo dice il contrario, cioè
+    // dove si può ancora vendere. Stesse assegnazioni del reticolo, così le due
+    // viste non possono discordare. Mese mostrato + il successivo.
+    private func giorniLiberi(_ s: Struttura, _ room: String, mese: Date) -> [Int] {
+        let c = Calendar.current
+        guard let r = c.range(of: .day, in: .month, for: mese) else { return [] }
+        return r.compactMap { g in
+            guard let d = c.date(byAdding: .day, value: g - 1, to: mese) else { return nil }
+            return bookingFor(s, room, d) == nil ? g : nil
+        }
+    }
+    /// [3,4,5,6,7,27,28,29,30] → "3–7, 27–30"
+    private func intervalli(_ giorni: [Int]) -> String {
+        guard let primo = giorni.first else { return "Nessuno" }
+        var out: [String] = [], inizio = primo, prec = primo
+        for g in giorni.dropFirst() {
+            if g == prec + 1 { prec = g; continue }
+            out.append(inizio == prec ? "\(inizio)" : "\(inizio)–\(prec)")
+            inizio = g; prec = g
+        }
+        out.append(inizio == prec ? "\(inizio)" : "\(inizio)–\(prec)")
+        return out.joined(separator: ", ")
+    }
+    private var meseSuccessivo: Date {
+        Calendar.current.date(byAdding: .month, value: 1, to: monthAnchor) ?? monthAnchor
+    }
+    private struct RigaLibera: Identifiable {
+        let id: String, casa: String, camera: String
+        let g1: [Int], g2: [Int]
+    }
+    private var righeLibere: [RigaLibera] {
+        strutture.flatMap { s in
+            roomsFor(s).map { rm in
+                RigaLibera(id: "\(s.rawValue)|\(rm)", casa: s.label, camera: rm,
+                           g1: giorniLiberi(s, rm, mese: monthAnchor),
+                           g2: giorniLiberi(s, rm, mese: meseSuccessivo))
+            }
+        }
+    }
+
+    private var giorniLiberiSection: some View {
+        let righe = righeLibere
+        let m1 = fmt("MMMM").string(from: monthAnchor).capitalized
+        let m2 = fmt("MMMM").string(from: meseSuccessivo).capitalized
+        let tot1 = righe.reduce(0) { $0 + $1.g1.count }
+        let tot2 = righe.reduce(0) { $0 + $1.g2.count }
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("GIORNI LIBERI PER CAMERA")
+                .font(.system(size: 13.5, weight: .bold)).foregroundStyle(PSE.ink)
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    Text("CASA").frame(width: 96, alignment: .leading)
+                    Text("CAMERA").frame(width: 200, alignment: .leading)
+                    Text("\(m1.uppercased()) — GIORNI LIBERI").frame(maxWidth: .infinity, alignment: .leading)
+                    Text("TOT").frame(width: 44, alignment: .trailing)
+                    Text("\(m2.uppercased()) — GIORNI LIBERI").frame(maxWidth: .infinity, alignment: .leading)
+                    Text("TOT").frame(width: 44, alignment: .trailing)
+                }
+                .font(.system(size: 8.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
+                .padding(.horizontal, 14).padding(.vertical, 9)
+                .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
+                ForEach(righe) { r in
+                    HStack(spacing: 10) {
+                        Text(r.casa).font(.system(size: 10.5)).foregroundStyle(PSE.dim)
+                            .frame(width: 96, alignment: .leading).lineLimit(1)
+                        Text(r.camera).font(.system(size: 11.5, weight: .medium)).foregroundStyle(PSE.ink)
+                            .frame(width: 200, alignment: .leading).lineLimit(1)
+                        liberiCella(r.g1).frame(maxWidth: .infinity, alignment: .leading)
+                        totLiberi(r.g1.count).frame(width: 44, alignment: .trailing)
+                        liberiCella(r.g2).frame(maxWidth: .infinity, alignment: .leading)
+                        totLiberi(r.g2.count).frame(width: 44, alignment: .trailing)
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    Divider().overlay(gLine).padding(.leading, 14)
+                }
+                HStack(spacing: 10) {
+                    Text("TOTALE NOTTI LIBERE").font(.system(size: 10.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.ink)
+                    Spacer()
+                    Text(m1).font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+                    Text("\(tot1)").font(.system(size: 15, weight: .bold)).foregroundStyle(PSE.ink).monospacedDigit()
+                        .frame(width: 44, alignment: .trailing)
+                    Text(m2).font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+                    Text("\(tot2)").font(.system(size: 15, weight: .bold)).foregroundStyle(PSE.ink).monospacedDigit()
+                        .frame(width: 44, alignment: .trailing)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 12)
+                .background(Color.white.opacity(0.04))
+            }
+            .background(RoundedRectangle(cornerRadius: 12).fill(PSE.panel))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(PSE.line, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            Text("Le date seguono le assegnazioni del planning qui sopra: cambiando mese con le frecce cambiano anche queste due colonne.")
+                .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+        }
+    }
+    @ViewBuilder private func liberiCella(_ giorni: [Int]) -> some View {
+        if giorni.isEmpty {
+            Text("Nessuno").font(.system(size: 11)).foregroundStyle(PSE.faint)
+        } else {
+            Text(intervalli(giorni)).font(.system(size: 11.5)).foregroundStyle(PSE.text).lineLimit(2)
+        }
+    }
+    private func totLiberi(_ n: Int) -> some View {
+        Text("\(n)").font(.system(size: 12.5, weight: .bold)).monospacedDigit()
+            .foregroundStyle(n == 0 ? PSE.faint : PSE.pos)
     }
     private func shiftMonth(_ n: Int) {
         if let d = Calendar.current.date(byAdding: .month, value: n, to: monthAnchor) { withAnimation(.easeOut(duration: 0.15)) { monthAnchor = d } }

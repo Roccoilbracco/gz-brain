@@ -228,88 +228,58 @@ struct ServiziView: View {
         .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
     }
 
-    // ── UTENZE ──
-    // Due facce della stessa voce: quello che RECUPERIAMO dagli ospiti Educamp
-    // (8 €/giorno per camera) e quello che PAGHIAMO davvero di bollette.
-    private var bolletteTot: Int { model.bollette.reduce(0) { $0 + $1.importo_cents } }
+    // ── UTENZE — quello che PAGHIAMO di bollette ──
+    // Le utenze Educamp sono un'altra cosa (soldi da riprendere dagli inquilini
+    // di Via Romagna) e stanno in una scheda a parte: qui non si sommano e non
+    // si nettano, perché confonderebbero due conti diversi.
+    /// Il conteggio parte da luglio 2026: le bollette precedenti restano
+    /// archiviate ma vanno sistemate a parte.
+    private static let INIZIO_CONTEGGIO = "2026-07-01"
+    private var bolletteCorrenti: [Bolletta] {
+        model.bollette.filter { ($0.scadenza ?? "") >= Self.INIZIO_CONTEGGIO }
+    }
+    private var bolletteStorico: [Bolletta] {
+        model.bollette.filter { ($0.scadenza ?? "") < Self.INIZIO_CONTEGGIO }
+    }
+    private var bolletteTot: Int { bolletteCorrenti.reduce(0) { $0 + $1.importo_cents } }
     private func bolletteTipo(_ t: String) -> Int {
-        model.bollette.filter { $0.tipo == t }.reduce(0) { $0 + $1.importo_cents }
+        bolletteCorrenti.filter { $0.tipo == t }.reduce(0) { $0 + $1.importo_cents }
     }
     private func bolletteCasa(_ c: String) -> Int {
-        model.bollette.filter { $0.casa == c }.reduce(0) { $0 + $1.importo_cents }
+        bolletteCorrenti.filter { $0.casa == c }.reduce(0) { $0 + $1.importo_cents }
     }
 
     private var utenzeView: some View {
-        let mesi = Array(Set(model.utenze.map { $0.mese })).sorted()
-        let tot = model.utenze.reduce(0) { $0 + $1.utenze_cents }
-        let saldo = tot - bolletteTot
-        return VStack(alignment: .leading, spacing: 12) {
-            // ══ QUELLO CHE PAGHIAMO ══
-            Text("QUELLO CHE PAGHIAMO — BOLLETTE E TASSE")
-                .font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.neg)
+        VStack(alignment: .leading, spacing: 12) {
+            Text("UTENZE CHE PAGHIAMO NOI — DA LUGLIO 2026")
+                .font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim)
             HStack(spacing: 12) {
                 card("TOTALE PAGATO", eurc(bolletteTot), PSE.neg)
                 card("VIA PO", eurc(bolletteCasa("via-po")), PSE.dim)
                 card("VIA ROMAGNA", eurc(bolletteCasa("via-romagna")), PSE.dim)
-                card("RECUPERATO DAGLI OSPITI", eurc(tot), PSE.pos)
-                card(saldo >= 0 ? "AVANZO" : "A NOSTRO CARICO", eurc(abs(saldo)), saldo >= 0 ? PSE.pos : PSE.warn)
+                card("N. BOLLETTE", "\(bolletteCorrenti.count)", PSE.accent)
             }
             HStack(spacing: 12) {
                 ForEach(TIPI_BOLLETTA, id: \.0) { t in
                     tipoCard(t.0, t.1, t.2)
                 }
             }
-            if model.bollette.isEmpty {
-                EmptyStateCard(icon: "doc.text", text: "Nessuna bolletta registrata.")
+            if bolletteCorrenti.isEmpty {
+                EmptyStateCard(icon: "doc.text", text: "Nessuna bolletta da luglio 2026 in poi.")
             } else {
-                bolletteTable
+                bolletteTable(bolletteCorrenti, titolo: "BOLLETTE DA LUGLIO 2026")
             }
-            Text("Le bollette si pagano dal conto corrente, non da Cassa/Massimo/Beeper: per questo non compaiono tra i movimenti e non toccano i saldi. Acqua, immondizia e IMU non erano nel foglio del maestro — le voci sono pronte, vanno solo riempite.")
+            Text("Si pagano dal conto corrente, non da Cassa/Massimo/Beeper: per questo non compaiono tra i movimenti e non toccano i saldi. Acqua, immondizia e IMU non erano nel foglio del maestro — le voci sono pronte, vanno solo riempite. Le utenze addebitate agli inquilini Educamp sono un'altra cosa e stanno nella scheda Educamp.")
                 .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
 
-            // ══ QUELLO CHE RECUPERIAMO ══
-            Text("QUELLO CHE RECUPERIAMO — UTENZE ADDEBITATE AGLI OSPITI EDUCAMP")
-                .font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.pos).padding(.top, 8)
-            Text("Via Romagna · 8 €/giorno per camera (6 € se una sola persona)")
-                .font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim)
-            HStack(spacing: 12) {
-                card("TOTALE UTENZE", eurc(tot), PSE.accent)
-                ForEach(mesi, id: \.self) { m in
-                    card(meseBreve(m).uppercased(), eurc(model.utenze.filter { $0.mese == m }.reduce(0) { $0 + $1.utenze_cents }), PSE.dim)
-                }
-            }
-            ForEach(mesi, id: \.self) { m in
-                let righe = model.utenze.filter { $0.mese == m }.sorted { ($0.sort_order ?? 0) < ($1.sort_order ?? 0) }
-                let sub = righe.reduce(0) { $0 + $1.utenze_cents }
-                tableCard {
-                    HStack {
-                        Text(meseBreve(m).uppercased()).font(.system(size: 10, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.accent)
-                        Spacer()
-                        Text(eurc(sub)).font(.system(size: 12, weight: .bold)).foregroundStyle(PSE.accent).monospacedDigit()
-                    }.padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
-                    HStack(spacing: 10) {
-                        th("OSPITE").frame(maxWidth: .infinity, alignment: .leading)
-                        th("CAMERA").frame(width: 200, alignment: .leading)
-                        th("GIORNI").frame(width: 60, alignment: .trailing)
-                        th("UTENZE").frame(width: 90, alignment: .trailing)
-                    }
-                    .padding(.horizontal, 16).padding(.bottom, 8)
-                    .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
-                    ForEach(Array(righe.enumerated()), id: \.element.id) { i, r in
-                        HStack(spacing: 10) {
-                            Text(r.ospite).font(.system(size: 12, weight: .medium)).foregroundStyle(PSE.ink)
-                                .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
-                            td(r.camera ?? "—").frame(width: 200, alignment: .leading)
-                            num("\(r.giorni ?? 0)", PSE.dim).frame(width: 60, alignment: .trailing)
-                            num(eurc(r.utenze_cents), PSE.accent).frame(width: 90, alignment: .trailing)
-                        }
-                        .padding(.horizontal, 16).padding(.vertical, 7)
-                        if i < righe.count - 1 { Divider().overlay(PSE.line).padding(.leading, 16) }
-                    }
-                }
+            if !bolletteStorico.isEmpty {
+                Text("PRIMA DI LUGLIO 2026 — ARCHIVIO, FUORI DAL CONTEGGIO")
+                    .font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint).padding(.top, 10)
+                bolletteTable(bolletteStorico, titolo: nil, spenta: true)
             }
         }
     }
+
     // Card compatta per tipo di bolletta: resta visibile anche a zero, così si
     // vede subito quali voci non sono ancora state registrate.
     private func tipoCard(_ tipo: String, _ label: String, _ icon: String) -> some View {
@@ -329,8 +299,15 @@ struct ServiziView: View {
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(PSE.line, lineWidth: 1))
     }
 
-    private var bolletteTable: some View {
-        tableCard {
+    /// `spenta` = tabella d'archivio: stessi dati, colori attenuati e nessun
+    /// totale, così non si confonde con quello che conta.
+    private func bolletteTable(_ righe: [Bolletta], titolo: String?, spenta: Bool = false) -> some View {
+        let tot = righe.reduce(0) { $0 + $1.importo_cents }
+        return tableCard {
+            if let titolo {
+                Text(titolo).font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint)
+                    .padding(.horizontal, 16).padding(.top, 12)
+            }
             HStack(spacing: 10) {
                 th("SCADENZA").frame(width: 78, alignment: .leading)
                 th("CASA").frame(width: 96, alignment: .leading)
@@ -341,28 +318,31 @@ struct ServiziView: View {
             }
             .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
             .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
-            ForEach(Array(model.bollette.enumerated()), id: \.element.id) { i, b in
+            ForEach(Array(righe.enumerated()), id: \.element.id) { i, b in
                 HStack(spacing: 10) {
                     num(svDayYStr(b.scadenza), PSE.dim).frame(width: 78, alignment: .leading)
                     td(casaLbl(b.casa)).frame(width: 96, alignment: .leading)
                     Text(TIPI_BOLLETTA.first { $0.0 == b.tipo }?.1 ?? b.tipo.capitalized)
-                        .font(.system(size: 12, weight: .semibold)).foregroundStyle(PSE.ink)
+                        .font(.system(size: 12, weight: .semibold)).foregroundStyle(spenta ? PSE.dim : PSE.ink)
                         .frame(width: 86, alignment: .leading).lineLimit(1)
                     td(b.fornitore ?? "—").frame(width: 110, alignment: .leading)
                     td(b.periodo ?? b.note ?? "—").frame(maxWidth: .infinity, alignment: .leading)
-                    num(eurc(b.importo_cents), PSE.neg).frame(width: 84, alignment: .trailing)
+                    num(eurc(b.importo_cents), spenta ? PSE.dim : PSE.neg).frame(width: 84, alignment: .trailing)
                 }
                 .padding(.horizontal, 16).padding(.vertical, 7)
-                if i < model.bollette.count - 1 { Divider().overlay(PSE.line).padding(.leading, 16) }
+                if i < righe.count - 1 { Divider().overlay(PSE.line).padding(.leading, 16) }
             }
             HStack(spacing: 10) {
-                Text("TOTALE BOLLETTE").font(.system(size: 10, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.ink)
+                Text(spenta ? "TOTALE ARCHIVIO (non conteggiato)" : "TOTALE BOLLETTE")
+                    .font(.system(size: 10, weight: .heavy)).tracking(0.8)
+                    .foregroundStyle(spenta ? PSE.faint : PSE.ink)
                 Spacer()
-                Text(eurc(bolletteTot)).font(.system(size: 14, weight: .bold)).foregroundStyle(PSE.neg).monospacedDigit()
+                Text(eurc(tot)).font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(spenta ? PSE.dim : PSE.neg).monospacedDigit()
                     .frame(width: 84, alignment: .trailing)
             }
             .padding(.horizontal, 16).padding(.vertical, 11)
-            .background(Color.white.opacity(0.04))
+            .background(Color.white.opacity(spenta ? 0.02 : 0.04))
         }
     }
 

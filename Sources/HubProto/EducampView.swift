@@ -59,11 +59,15 @@ private func eduDayStr(_ s: String?) -> String {
 @MainActor final class EducampModel: ObservableObject {
     @Published var ospiti: [EducampOspite] = []
     @Published var righe: [EducampRiga] = []
+    // Le bollette servono qui per il confronto: quanto riprendiamo dagli
+    // inquilini contro quanto esce davvero di utenze.
+    @Published var bollette: [Bolletta] = []
     @Published var loading = true
     func load() async {
         loading = true
         ospiti = (try? await HubAPI.listEducampOspiti()) ?? []
         righe = (try? await HubAPI.listEducampRighe()) ?? []
+        bollette = (try? await HubAPI.listBollette()) ?? []
         loading = false
     }
     var mesi: [String] { Array(Set(righe.map { $0.mese })).sorted() }
@@ -87,6 +91,7 @@ struct EducampView: View {
                     VStack(alignment: .leading, spacing: 14) {
                         intestazione
                         kpi
+                        utenzeBlocco
                         elencoOspiti
                         ForEach(model.mesi, id: \.self) { m in meseTable(m) }
                         riepilogoMese
@@ -120,9 +125,61 @@ struct EducampView: View {
             card("TOTALE DOVUTO OSPITI", eurc(totOsp), PSE.ink)
             card("NETTO PER NOI", eurc(nettoNoi), PSE.pos)
             card("COMMISSIONI DA CONSEGNARE", eurc(comm), PSE.warn)
-            card("UTENZE (nostre)", eurc(utenze), PSE.accent)
+            card("UTENZE DA INCASSARE DAGLI INQUILINI", eurc(utenze), PSE.accent)
             card("AFFITTO LORDO", eurc(lordo), PSE.dim)
         }
+    }
+
+    // ── Utenze: quanto riprendiamo, quando, e quanto esce davvero ───────────
+    // Il grosso del recupero arriva ad agosto/settembre/ottobre, quindi il mese
+    // per mese conta più del totale.
+    private var utenzeBlocco: some View {
+        let perMese = model.mesi.map { m in (m, model.righe(m).reduce(0) { $0 + $1.utenze_cents }) }
+        let daIncassare = perMese.reduce(0) { $0 + $1.1 }
+        let meseCorrente = String(eduYmd.string(from: Date()).prefix(7))
+        // Solo le bollette da luglio 2026: il pregresso si sistema a parte.
+        let spese = model.bollette.filter { ($0.scadenza ?? "") >= "2026-07-01" }
+        let speseTot = spese.reduce(0) { $0 + $1.importo_cents }
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("UTENZE — DA INCASSARE DAGLI INQUILINI")
+                .font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.accent)
+            HStack(spacing: 10) {
+                card("TOTALE DA INCASSARE", eurc(daIncassare), PSE.accent)
+                ForEach(perMese, id: \.0) { m, v in
+                    meseUtenzaCard(m, v, futuro: m > meseCorrente)
+                }
+            }
+            Text("SPESE UTENZE — QUELLO CHE PAGHIAMO NOI (da luglio 2026)")
+                .font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.neg).padding(.top, 4)
+            HStack(spacing: 10) {
+                card("TOTALE BOLLETTE", speseTot > 0 ? eurc(speseTot) : "—", speseTot > 0 ? PSE.neg : PSE.faint)
+                ForEach(TIPI_BOLLETTA, id: \.0) { t in
+                    let v = spese.filter { $0.tipo == t.0 }.reduce(0) { $0 + $1.importo_cents }
+                    card(t.1.uppercased(), v > 0 ? eurc(v) : "—", v > 0 ? PSE.ink : PSE.faint)
+                }
+            }
+            Text("Le utenze addebitate agli inquilini (8 €/giorno per camera) e le bollette che paghiamo sono due conti distinti e non si compensano qui: il dettaglio bolletta per bolletta sta in Servizi → Utenze.")
+                .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+        }
+    }
+    // Il mese non ancora arrivato si vede a colpo d'occhio: è denaro atteso.
+    private func meseUtenzaCard(_ mese: String, _ v: Int, futuro: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 4) {
+                Text(eduMeseNome(mese).uppercased()).font(.system(size: 8.5, weight: .heavy)).tracking(0.5)
+                    .foregroundStyle(PSE.faint).lineLimit(1)
+                if futuro {
+                    Text("ATTESO").font(.system(size: 7, weight: .heavy)).tracking(0.4).foregroundStyle(PSE.warn)
+                        .padding(.horizontal, 4).padding(.vertical, 1)
+                        .background(Capsule().fill(PSE.warn.opacity(0.15)))
+                }
+            }
+            Text(eurc(v)).font(.system(size: 15, weight: .bold))
+                .foregroundStyle(futuro ? PSE.warn : PSE.ink).monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.vertical, 11)
+        .background(RoundedRectangle(cornerRadius: 12).fill(PSE.surface))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(futuro ? PSE.warn.opacity(0.35) : PSE.line, lineWidth: 1))
     }
     private func card(_ t: String, _ v: String, _ c: Color) -> some View {
         VStack(alignment: .leading, spacing: 6) {
