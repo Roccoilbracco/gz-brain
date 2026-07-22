@@ -46,9 +46,6 @@ struct SidebarView: View {
     private var isClienti: Bool {
         switch state.route { case .clienti, .cliente: return true; default: return false }
     }
-    private var isProprieta: Bool {
-        switch state.route { case .proprietaHub, .proprieta, .proprietaNuova: return true; default: return false }
-    }
     private var isImpostazioni: Bool { state.route == .impostazioni }
     private var isDash: Bool { !isClienti && !isImpostazioni && state.sidebarMode == .dash }
     private var isCode: Bool { !isClienti && !isImpostazioni && state.sidebarMode == .code }
@@ -83,23 +80,10 @@ struct SidebarView: View {
             .background(RoundedRectangle(cornerRadius: 11).fill(Csb.tabsBg))
             .padding(.bottom, 12)
 
-            // voce Contatti: anagrafica clienti e potenziali clienti, con ricorrenze
-            navRow("Contatti", icon: "person.crop.circle", on: state.route == .contatti) {
-                state.route = .contatti
-            }
-            .padding(.bottom, 6)
-
-            // voce Proprietà: registro immobili (globale) + visibilità sui siti
-            navRow("Proprietà", icon: "house", on: isProprieta) {
-                state.route = .proprietaHub
-            }
-            .padding(.bottom, 6)
-
-            // voce Calendario: disponibilità per le visite + appuntamenti fissati
-            navRow("Calendario", icon: "calendar", on: state.route == .calendario) {
-                state.route = .calendario
-            }
-            .padding(.bottom, 14)
+            // Contatti, Proprietà e Calendario non stanno più qui: sono schede
+            // dentro la dash GZ Ibiza, il progetto a cui appartengono. Le route
+            // restano valide (ci arrivano i link dalle schede), solo che non
+            // hanno più una voce di menù.
 
             Text("PROGETTI").font(.system(size: 9, weight: .heavy)).tracking(1.5)
                 .foregroundStyle(Csb.tagFg).padding(.leading, 6).padding(.bottom, 6)
