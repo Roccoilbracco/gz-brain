@@ -584,9 +584,15 @@ struct TesoreriaView: View {
         guard let pid = m.prenotazione_id else { return nil }
         return prenotazioni.first { $0.id == pid }
     }
-    /// Entrate in contante: tutto ciò che non passa dal conto OTA.
+    /// Entrate in contante: solo quelle passate dalla cassa.
     private func diretteContante(_ s: Struttura) -> [TesMovimento] {
-        movCasa(s).filter { $0.tipo == "entrata" && $0.conto_id != "massimo" }.sorted { $0.data < $1.data }
+        movCasa(s).filter { $0.tipo == "entrata" && $0.conto_id == "cassa" }.sorted { $0.data < $1.data }
+    }
+    /// Entrate arrivate in banca (Beeper): affitti bonificati, depositi, giroconti.
+    /// Stavano mescolate al contante e il blocco diceva «contante» anche per loro.
+    private func entrateBonifico(_ s: Struttura) -> [TesMovimento] {
+        movCasa(s).filter { $0.tipo == "entrata" && $0.conto_id != "cassa" && $0.conto_id != "massimo" }
+            .sorted { $0.data < $1.data }
     }
     /// Uscite registrate, senza le commissioni OTA: quelle sono già dedotte nel
     /// blocco Booking (che mostra il netto) e conteggiarle qui le raddoppierebbe.
@@ -637,12 +643,14 @@ struct TesoreriaView: View {
 
     @ViewBuilder private func dettaglioCasa(_ s: Struttura) -> some View {
         let dirette = diretteContante(s)
+        let bonifici = entrateBonifico(s)
         let incassato = bookingIncassato(s)
         let uscite = usciteCasa(s)
         let future = daIncassareRighe(s)
         let totDirette = dirette.reduce(0) { $0 + $1.importo_cents }
+        let totBonifici = bonifici.reduce(0) { $0 + $1.importo_cents }
         let totIncassatoNetto = incassato.reduce(0) { $0 + $1.netto }
-        let totGenerate = totDirette + totIncassatoNetto
+        let totGenerate = totDirette + totBonifici + totIncassatoNetto
         let totUscite = uscite.reduce(0) { $0 + $1.importo_cents }
         let totFutureNetto = future.reduce(0) { $0 + $1.netto }
 
@@ -653,9 +661,10 @@ struct TesoreriaView: View {
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .background(RoundedRectangle(cornerRadius: 10).fill(PSE.accent.opacity(0.18)))
 
-            if !dirette.isEmpty { blocco("ENTRATE GENERATE — DIRETTE (contante)", PSE.pos) { direttaTable(dirette, totale: totDirette) } }
+            if !dirette.isEmpty { blocco("ENTRATE GENERATE — DIRETTE (contante)", PSE.pos) { direttaTable(dirette, totale: totDirette, titoloTot: "SUBTOTALE DIRETTE (contante)") } }
+            if !bonifici.isEmpty { blocco("ENTRATE GENERATE — BONIFICI (banca)", PSE.pos) { direttaTable(bonifici, totale: totBonifici, titoloTot: "SUBTOTALE BONIFICI (banca)") } }
             if !incassato.isEmpty { blocco("OTA — GIÀ INCASSATO (commissioni dedotte)", PSE.pos) { otaTable(incassato, titoloTot: "SUBTOTALE INCASSATO") } }
-            rigaTotale("TOTALE ENTRATE GENERATE (dirette + OTA netto)", totGenerate, PSE.pos)
+            rigaTotale("TOTALE ENTRATE GENERATE (contante + bonifici + OTA netto)", totGenerate, PSE.pos)
             if !uscite.isEmpty { blocco("USCITE (già registrate)", PSE.neg) { uscitaTable(uscite, totale: totUscite) } }
             rigaTotale("SALDO GENERATO (entrate − uscite)", totGenerate - totUscite, totGenerate - totUscite >= 0 ? PSE.pos : PSE.neg)
             if !future.isEmpty {
@@ -705,7 +714,7 @@ struct TesoreriaView: View {
 
     // Dirette: notti e prezzo per notte arrivano dal soggiorno agganciato; dove
     // il movimento non è agganciato a nessuna prenotazione restano vuoti.
-    private func direttaTable(_ righe: [TesMovimento], totale: Int) -> some View {
+    private func direttaTable(_ righe: [TesMovimento], totale: Int, titoloTot: String) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 thc("DATA").frame(width: 62, alignment: .leading)
@@ -735,7 +744,7 @@ struct TesoreriaView: View {
                 .padding(.horizontal, 16).padding(.vertical, 7)
                 Divider().overlay(PSE.line).padding(.leading, 16)
             }
-            subtotaleBar("SUBTOTALE DIRETTE (contante)", totale, PSE.pos)
+            subtotaleBar(titoloTot, totale, PSE.pos)
         }
     }
 

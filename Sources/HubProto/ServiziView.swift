@@ -42,6 +42,7 @@ struct Colazione: Identifiable, Decodable, Equatable {
     var notti_servite: Int?
     var costo_servito_cents: Int
     var stato: String?
+    var casa: String?
     var sort_order: Int?
 }
 
@@ -86,6 +87,9 @@ private func svDayYStr(_ s: String?) -> String {
 
 enum ServizioTab: String, CaseIterable, Identifiable { case pulizie = "Pulizie", colazioni = "Colazioni", utenze = "Utenze"; var id: String { rawValue } }
 
+/// Le due strutture, nell'ordine in cui vanno mostrate come sotto-finestre.
+let CASE_PSE: [(String, String)] = [("via-po", "Via Po"), ("via-romagna", "Via Romagna")]
+
 @MainActor final class ServiziModel: ObservableObject {
     @Published var pulizie: [Pulizia] = []
     @Published var colazioni: [Colazione] = []
@@ -126,92 +130,147 @@ struct ServiziView: View {
     }
 
     // ── PULIZIE ──
+    // Una finestra per casa: i conti delle due strutture non si mescolano mai,
+    // e in cima resta il totale complessivo per non perdere il quadro d'insieme.
     private var pulizieView: some View {
-        let fatte = model.pulizie.filter { $0.stato == "fatta" }
-        let previste = model.pulizie.filter { $0.stato == "prevista" }
-        let totF = fatte.reduce(0) { $0 + $1.costo_cents }
-        let totP = previste.reduce(0) { $0 + $1.costo_cents }
-        let vpF = fatte.filter { $0.casa == "via-po" }.reduce(0) { $0 + $1.costo_cents }
-        let vrF = fatte.filter { $0.casa == "via-romagna" }.reduce(0) { $0 + $1.costo_cents }
-        return VStack(alignment: .leading, spacing: 12) {
+        let totF = model.pulizie.filter { $0.stato == "fatta" }.reduce(0) { $0 + $1.costo_cents }
+        let totP = model.pulizie.filter { $0.stato != "fatta" }.reduce(0) { $0 + $1.costo_cents }
+        return VStack(alignment: .leading, spacing: 14) {
             Text("PULIZIA E LAVANDERIA — 20 € per ogni check-out (per camera)")
                 .font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim)
             HStack(spacing: 12) {
-                card("FATTE (uscita in cassa)", eur(totF), PSE.pos)
-                card("PREVISTE (future)", eur(totP), PSE.warn)
-                card("TOTALE", eur(totF + totP), PSE.ink)
+                card("FATTE — TOTALE (uscita in cassa)", eurc(totF), PSE.pos)
+                card("PREVISTE — TOTALE (future)", eurc(totP), PSE.warn)
+                card("TOTALE", eurc(totF + totP), PSE.ink)
                 card("N. CHECK-OUT", "\(model.pulizie.count)", PSE.accent)
             }
-            HStack(spacing: 12) {
-                card("FATTE — VIA PO", eur(vpF), PSE.accent)
-                card("FATTE — VIA ROMAGNA", eur(vrF), PSE.accent)
-                Color.clear.frame(maxWidth: .infinity); Color.clear.frame(maxWidth: .infinity)
-            }
-            tableCard {
-                pulHeader
-                ForEach(Array(model.pulizie.enumerated()), id: \.element.id) { i, p in
-                    HStack(spacing: 10) {
-                        num(svDayStr(p.data), PSE.dim).frame(width: 54, alignment: .leading)
-                        td(casaLbl(p.casa)).frame(width: 96, alignment: .leading)
-                        Text(p.descrizione ?? "—").font(.system(size: 12)).foregroundStyle(PSE.ink)
-                            .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
-                        statoPill(p.stato)
-                        num(eur(p.costo_cents), PSE.text).frame(width: 70, alignment: .trailing)
-                    }
-                    .padding(.horizontal, 16).padding(.vertical, 7)
-                    if i < model.pulizie.count - 1 { Divider().overlay(PSE.line).padding(.leading, 16) }
-                }
+            ForEach(CASE_PSE, id: \.0) { slug, nome in
+                pulizieCasa(slug, nome)
             }
             Text("Solo le pulizie «Fatte» sono conteggiate come uscita in cassa; le «Previste» sono costi futuri.")
                 .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
         }
     }
+    private func pulizieCasa(_ slug: String, _ nome: String) -> some View {
+        let righe = model.pulizie.filter { $0.casa == slug }
+            .sorted { ($0.data ?? "") > ($1.data ?? "") }
+        let fatte = righe.filter { $0.stato == "fatta" }.reduce(0) { $0 + $1.costo_cents }
+        let previste = righe.filter { $0.stato != "fatta" }.reduce(0) { $0 + $1.costo_cents }
+        return VStack(alignment: .leading, spacing: 0) {
+            intestazioneCasa(nome, "\(righe.count) check-out")
+            HStack(spacing: 12) {
+                card("FATTE", eurc(fatte), PSE.pos)
+                card("PREVISTE", eurc(previste), PSE.warn)
+                card("TOTALE", eurc(fatte + previste), PSE.ink)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 12)
+            if righe.isEmpty {
+                Text("Nessuna pulizia registrata.").font(.system(size: 11)).foregroundStyle(PSE.faint)
+                    .padding(.horizontal, 16).padding(.bottom, 14)
+            } else {
+                tableCard {
+                    pulHeader
+                    ForEach(Array(righe.enumerated()), id: \.element.id) { i, p in
+                        HStack(spacing: 10) {
+                            num(svDayStr(p.data), PSE.dim).frame(width: 54, alignment: .leading)
+                            Text(p.descrizione ?? "—").font(.system(size: 12)).foregroundStyle(PSE.ink)
+                                .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
+                            statoPill(p.stato)
+                            num(eurc(p.costo_cents), PSE.text).frame(width: 74, alignment: .trailing)
+                        }
+                        .padding(.horizontal, 16).padding(.vertical, 7)
+                        if i < righe.count - 1 { Divider().overlay(PSE.line).padding(.leading, 16) }
+                    }
+                }
+                .padding(.horizontal, 12).padding(.bottom, 12)
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.02)))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
+    }
     private var pulHeader: some View {
         HStack(spacing: 10) {
             th("DATA").frame(width: 54, alignment: .leading)
-            th("CASA").frame(width: 96, alignment: .leading)
             th("CAMERA / OSPITE").frame(maxWidth: .infinity, alignment: .leading)
             th("STATO").frame(width: 78, alignment: .leading)
-            th("COSTO").frame(width: 70, alignment: .trailing)
+            th("COSTO").frame(width: 74, alignment: .trailing)
         }
         .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
         .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
+    }
+    // intestazione della sotto-finestra di una casa
+    private func intestazioneCasa(_ nome: String, _ dettaglio: String) -> some View {
+        HStack {
+            Text(nome.uppercased()).font(.system(size: 11.5, weight: .heavy)).tracking(1)
+                .foregroundStyle(PSE.ink).lineLimit(1)
+            Spacer()
+            Text(dettaglio).font(.system(size: 10.5)).foregroundStyle(PSE.faint).lineLimit(1)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 11)
+        .background(PSE.accent.opacity(0.16))
     }
 
     // ── COLAZIONI ──
     private var colazioniView: some View {
         let serv = model.colazioni.reduce(0) { $0 + $1.costo_servito_cents }
         let tot = model.colazioni.reduce(0) { $0 + $1.costo_totale_cents }
-        return VStack(alignment: .leading, spacing: 12) {
+        return VStack(alignment: .leading, spacing: 14) {
             Text("COLAZIONI — 3,50 € per persona / giorno (solo prenotazioni Booking)")
                 .font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim)
             HStack(spacing: 12) {
-                card("GIÀ SERVITE (uscita)", eurc(serv), PSE.pos)
-                card("PREVISTE (future)", eurc(tot - serv), PSE.warn)
+                card("GIÀ SERVITE — TOTALE (uscita)", eurc(serv), PSE.pos)
+                card("PREVISTE — TOTALE (future)", eurc(tot - serv), PSE.warn)
                 card("TOTALE", eurc(tot), PSE.ink)
                 card("N. PRENOTAZIONI", "\(model.colazioni.count)", PSE.accent)
             }
-            tableCard {
-                colHeader
-                ForEach(Array(model.colazioni.enumerated()), id: \.element.id) { i, cz in
-                    HStack(spacing: 10) {
-                        Text(cz.ospite ?? "—").font(.system(size: 12, weight: .medium)).foregroundStyle(PSE.ink)
-                            .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
-                        td(cz.camera ?? "—").frame(width: 120, alignment: .leading)
-                        num("\(svDayStr(cz.arrivo))–\(svDayStr(cz.partenza))", PSE.dim).frame(width: 96, alignment: .leading)
-                        num("\(cz.notti ?? 0)", PSE.dim).frame(width: 44, alignment: .trailing)
-                        num("\(cz.persone ?? 0)", PSE.dim).frame(width: 54, alignment: .trailing)
-                        num(eurc(cz.costo_totale_cents), PSE.text).frame(width: 74, alignment: .trailing)
-                        num(eurc(cz.costo_servito_cents), PSE.pos).frame(width: 78, alignment: .trailing)
-                        statoPill(cz.stato)
-                    }
-                    .padding(.horizontal, 16).padding(.vertical, 7)
-                    if i < model.colazioni.count - 1 { Divider().overlay(PSE.line).padding(.leading, 16) }
-                }
+            ForEach(CASE_PSE, id: \.0) { slug, nome in
+                colazioniCasa(slug, nome)
             }
-            Text("Solo le colazioni «già servite» sono conteggiate come spesa. Le prenotazioni dirette e Airbnb non hanno colazione.")
+            Text("Solo le colazioni «già servite» sono conteggiate come spesa. Le prenotazioni dirette e Airbnb non hanno colazione, quindi Via Romagna — che non ha canali OTA — resta a zero.")
                 .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
         }
+    }
+    private func colazioniCasa(_ slug: String, _ nome: String) -> some View {
+        let righe = model.colazioni.filter { $0.casa == slug }
+            .sorted { ($0.arrivo ?? "") > ($1.arrivo ?? "") }
+        let serv = righe.reduce(0) { $0 + $1.costo_servito_cents }
+        let tot = righe.reduce(0) { $0 + $1.costo_totale_cents }
+        return VStack(alignment: .leading, spacing: 0) {
+            intestazioneCasa(nome, "\(righe.count) prenotazioni")
+            HStack(spacing: 12) {
+                card("GIÀ SERVITE", eurc(serv), PSE.pos)
+                card("PREVISTE", eurc(tot - serv), PSE.warn)
+                card("TOTALE", eurc(tot), PSE.ink)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 12)
+            if righe.isEmpty {
+                Text("Nessuna colazione: qui non ci sono prenotazioni Booking.")
+                    .font(.system(size: 11)).foregroundStyle(PSE.faint)
+                    .padding(.horizontal, 16).padding(.bottom, 14)
+            } else {
+                tableCard {
+                    colHeader
+                    ForEach(Array(righe.enumerated()), id: \.element.id) { i, cz in
+                        HStack(spacing: 10) {
+                            Text(cz.ospite ?? "—").font(.system(size: 12, weight: .medium)).foregroundStyle(PSE.ink)
+                                .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
+                            td(cz.camera ?? "—").frame(width: 120, alignment: .leading)
+                            num("\(svDayStr(cz.arrivo))–\(svDayStr(cz.partenza))", PSE.dim).frame(width: 96, alignment: .leading)
+                            num("\(cz.notti ?? 0)", PSE.dim).frame(width: 44, alignment: .trailing)
+                            num("\(cz.persone ?? 0)", PSE.dim).frame(width: 54, alignment: .trailing)
+                            num(eurc(cz.costo_totale_cents), PSE.text).frame(width: 74, alignment: .trailing)
+                            num(eurc(cz.costo_servito_cents), PSE.pos).frame(width: 78, alignment: .trailing)
+                            statoPill(cz.stato)
+                        }
+                        .padding(.horizontal, 16).padding(.vertical, 7)
+                        if i < righe.count - 1 { Divider().overlay(PSE.line).padding(.leading, 16) }
+                    }
+                }
+                .padding(.horizontal, 12).padding(.bottom, 12)
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.02)))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
     }
     private var colHeader: some View {
         HStack(spacing: 10) {
