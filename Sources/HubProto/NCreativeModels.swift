@@ -95,6 +95,20 @@ struct NCInvoice: Identifiable, Decodable, Equatable {
     }
 }
 
+/// Riga di budget per categoria. `month` nullo = budget annuale, che in confronto
+/// col consuntivo vale un dodicesimo al mese.
+struct NCBudget: Identifiable, Decodable, Equatable {
+    let id: String
+    var year: Int
+    var month: Int?
+    var category: String
+    var amount_cents: Int
+    var notes: String?
+
+    /// Quota mensile: il budget annuale si spalma sui dodici mesi.
+    var monthlyCents: Int { month == nil ? amount_cents / 12 : amount_cents }
+}
+
 /// Voce del modulo Personale: una riga qualunque sia la colonna (famiglia,
 /// Giorgio, Niko) e il tipo (appuntamento, da fare, spesa, pasto, obiettivo…).
 struct NCPersonalItem: Identifiable, Decodable, Equatable {
@@ -379,6 +393,9 @@ extension HubAPI {
     static func ncExpenses() async throws -> [NCExpense] {
         try await sb.fetch("nc_expenses?select=*&order=date.desc&limit=3000")
     }
+    static func ncBudget() async throws -> [NCBudget] {
+        try await sb.fetch("nc_budget?select=*&order=year.desc,month.asc.nullsfirst,category.asc&limit=1000")
+    }
     static func ncPersonal() async throws -> [NCPersonalItem] {
         try await sb.fetch("nc_personal_items?select=*&order=day.asc.nullslast,priority.desc,created_at.asc&limit=3000")
     }
@@ -386,6 +403,12 @@ extension HubAPI {
     /// CRUD generico sulle tabelle `nc_`: gli id sono uuid, niente da encodare.
     static func ncInsert(_ table: String, _ fields: [String: Any?]) async throws {
         try await sb.mutate(table, method: "POST", body: fields)
+    }
+    /// INSERT che, se la riga esiste già (stessa chiave `onConflict`), la aggiorna:
+    /// rilogare le metriche dello stesso giorno corregge invece di duplicare.
+    static func ncUpsert(_ table: String, _ fields: [String: Any?], onConflict: String) async throws {
+        try await sb.mutate("\(table)?on_conflict=\(onConflict)", method: "POST", body: fields,
+                            prefer: "resolution=merge-duplicates,return=minimal")
     }
     static func ncUpdate(_ table: String, id: String, _ fields: [String: Any?]) async throws {
         try await sb.mutate("\(table)?id=eq.\(id)", method: "PATCH", body: fields)
@@ -406,6 +429,7 @@ final class NCModel: ObservableObject {
     @Published var invoices: [NCInvoice] = []
     @Published var expenses: [NCExpense] = []
     @Published var personal: [NCPersonalItem] = []
+    @Published var budget: [NCBudget] = []
     @Published var loading = true
     @Published var error: String?
 
@@ -419,9 +443,11 @@ final class NCModel: ObservableObject {
             async let iv = HubAPI.ncInvoices()
             async let ex = HubAPI.ncExpenses()
             async let pr = HubAPI.ncPersonal()
+            async let bu = HubAPI.ncBudget()
             let (a, b, c, d, e, f, g) = try await (cl, dl, cp, ct, iv, ex, pr)
             clients = a; deals = b; campaigns = c; content = d
             invoices = e; expenses = f; personal = g
+            budget = try await bu
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -477,6 +503,7 @@ final class NCModel: ObservableObject {
         case "nc_invoices": invoices.removeAll { $0.id == id }
         case "nc_expenses": expenses.removeAll { $0.id == id }
         case "nc_personal_items": personal.removeAll { $0.id == id }
+        case "nc_budget": budget.removeAll { $0.id == id }
         default: break
         }
         try? await HubAPI.ncDelete(table, id: id)
@@ -503,6 +530,24 @@ final class NCModel: ObservableObject {
     }
     func billedCents(month: String) -> Int { invoices(month: month).reduce(0) { $0 + $1.amount_cents } }
     func spentCents(month: String) -> Int { expenses(month: month).reduce(0) { $0 + $1.amount_cents } }
+    func spentCents(month: String, category: String) -> Int {
+        expenses(month: month).filter { $0.category == category }.reduce(0) { $0 + $1.amount_cents }
+    }
+    /// Budget del mese per categoria: la riga mensile ha la precedenza su quella annuale.
+    func budgetCents(month: String, category: String) -> Int {
+        let parts = month.split(separator: "-")
+        guard let y = Int(parts.first ?? ""), parts.count > 1, let m = Int(parts[1]) else { return 0 }
+        let righe = budget.filter { $0.year == y && $0.category == category }
+        if let mensile = righe.first(where: { $0.month == m }) { return mensile.amount_cents }
+        return righe.first(where: { $0.month == nil })?.monthlyCents ?? 0
+    }
+    /// Categorie con un budget o una spesa nel mese: le sole che vale la pena mostrare.
+    func budgetCategories(month: String) -> [String] {
+        let conBudget = Set(budget.filter { month.hasPrefix("\($0.year)") }.map(\.category))
+        let conSpesa = Set(expenses(month: month).map(\.category))
+        return NCExpenseCategory.allCases.map(\.rawValue)
+            .filter { conBudget.contains($0) || conSpesa.contains($0) }
+    }
     func profitCents(month: String) -> Int { collectedCents(month: month) - spentCents(month: month) }
 
     /// Prossimo numero fattura dell'anno in corso: "2026-007".

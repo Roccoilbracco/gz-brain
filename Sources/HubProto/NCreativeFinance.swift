@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 // ============================================================================
 // NCREATIVE — Finance: fatture emesse, spese e conto del mese.
@@ -15,6 +16,8 @@ struct NCFinanceView: View {
     @State private var fatturaInModifica: NCInvoice?
     @State private var mostraSpesa = false
     @State private var spesaInModifica: NCExpense?
+    @State private var mostraBudget = false
+    @State private var budgetInModifica: NCBudget?
     @State private var avviso: String?
 
     private var meseKey: String { ncMonthKey(mese) }
@@ -44,6 +47,7 @@ struct NCFinanceView: View {
                 navBtn("chevron.right") { shift(1) }
                 GhostButton(label: "This month") { mese = Date() }
                 Spacer()
+                GhostButton(label: "Export Excel", icon: "tablecells") { esportaExcel() }
                 FilterChip(label: soloMese ? "Month only" : "All time", selected: soloMese) {
                     soloMese.toggle()
                 }
@@ -59,6 +63,33 @@ struct NCFinanceView: View {
 
             if let avviso {
                 Text(avviso).font(.system(size: 11)).foregroundStyle(UI.tint(.ok))
+            }
+
+            SectionCard(title: "Budget vs actual", count: model.budgetCategories(month: meseKey).count,
+                        icon: "chart.pie") {
+                GhostButton(label: "Set budget", icon: "slider.horizontal.3") {
+                    budgetInModifica = nil; mostraBudget = true
+                }
+            } content: {
+                let cats = model.budgetCategories(month: meseKey)
+                if cats.isEmpty {
+                    NCEmpty(text: "No budget set. Define one per category and this table fills itself.")
+                } else {
+                    VStack(spacing: 5) {
+                        NCHeaderRow(cols: [("Category", nil), ("Budget", 100), ("Actual", 100),
+                                           ("Left", 100), ("Used", 120)])
+                        ForEach(cats, id: \.self) { cat in
+                            let b = model.budgetCents(month: meseKey, category: cat)
+                            let a = model.spentCents(month: meseKey, category: cat)
+                            NCBudgetRow(category: NCExpenseCategory.from(cat), budget: b, actual: a) {
+                                budgetInModifica = model.budget.first {
+                                    $0.category == cat && meseKey.hasPrefix("\($0.year)")
+                                }
+                                mostraBudget = true
+                            }
+                        }
+                    }
+                }
             }
 
             SectionCard(title: "Invoices", count: fatture.count, icon: "doc.text") {
@@ -158,6 +189,92 @@ struct NCFinanceView: View {
         .sheet(isPresented: $mostraSpesa, onDismiss: { spesaInModifica = nil }) {
             NCExpenseForm(existing: spesaInModifica, month: mese, model: model)
         }
+        .sheet(isPresented: $mostraBudget, onDismiss: { budgetInModifica = nil }) {
+            NCBudgetForm(existing: budgetInModifica, month: mese, model: model)
+        }
+    }
+
+    /// Genera il foglio Excel del mese: riepilogo, budget, fatture, spese.
+    private func esportaExcel() {
+        let sp = NSSavePanel()
+        sp.nameFieldStringValue = "NCREATIVE-\(meseKey).xlsx"
+        sp.allowedContentTypes = [.init(filenameExtension: "xlsx") ?? .data]
+        guard sp.runModal() == .OK, let url = sp.url else { return }
+        do {
+            try XLSXWriter.write(fogli(), to: url)
+            avviso = "Excel saved: \(url.lastPathComponent)"
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } catch {
+            avviso = "Export failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func fogli() -> [XLSheet] {
+        let mk = meseKey
+        // 1 — riepilogo del mese
+        var riepilogo: [[XLCell]] = [
+            [.head("NCREATIVE — \(ncMonthLabel(mese))")],
+            [],
+            [.head("Metric"), .head("Amount")],
+            [.text("Billed (net)"), .money(model.billedCents(month: mk))],
+            [.text("Collected"), .money(model.collectedCents(month: mk))],
+            [.text("Expenses"), .money(model.spentCents(month: mk))],
+            [.text("Profit"), .money(model.profitCents(month: mk))],
+            [.text("Outstanding (all time)"), .money(model.outstandingCents)],
+            [.text("MRR"), .money(model.mrrCents)],
+            [.text("Active clients"), .number(Double(model.activeClients.count))],
+            [],
+            [.head("Category"), .head("Budget"), .head("Actual"), .head("Difference")],
+        ]
+        for cat in model.budgetCategories(month: mk) {
+            let b = model.budgetCents(month: mk, category: cat)
+            let a = model.spentCents(month: mk, category: cat)
+            riepilogo.append([.text(NCExpenseCategory.from(cat).label), .money(b), .money(a), .money(b - a)])
+        }
+
+        // 2 — fatture del mese
+        var fatture: [[XLCell]] = [[.head("Number"), .head("Client"), .head("Issued"), .head("Due"),
+                                    .head("Description"), .head("Net"), .head("VAT %"), .head("Total"),
+                                    .head("Status"), .head("Paid on")]]
+        for f in model.invoices(month: mk).sorted(by: { $0.issue_date < $1.issue_date }) {
+            fatture.append([
+                .text(ncClean(f.number) ?? ""), .text(model.clientName(f.client_id)),
+                .text(f.issue_date), .text(f.due_date ?? ""), .text(ncClean(f.description) ?? ""),
+                .money(f.amount_cents), .number(f.vat_pct), .money(f.totalCents),
+                .text(f.isOverdue ? "overdue" : f.status), .text(f.paid_date ?? ""),
+            ])
+        }
+
+        // 3 — spese del mese
+        var spese: [[XLCell]] = [[.head("Date"), .head("Category"), .head("Vendor"),
+                                  .head("Description"), .head("Client"), .head("Amount"), .head("Recurring")]]
+        for e in model.expenses(month: mk).sorted(by: { $0.date < $1.date }) {
+            spese.append([
+                .text(e.date), .text(NCExpenseCategory.from(e.category).label),
+                .text(ncClean(e.vendor) ?? ""), .text(ncClean(e.description) ?? ""),
+                .text(model.clientName(e.client_id)), .money(e.amount_cents),
+                .text(e.recurring ? "yes" : "no"),
+            ])
+        }
+
+        // 4 — andamento dei dodici mesi dell'anno
+        let anno = String(mk.prefix(4))
+        var annuale: [[XLCell]] = [[.head("Month"), .head("Billed"), .head("Collected"),
+                                    .head("Expenses"), .head("Profit")]]
+        for m in 1...12 {
+            let key = "\(anno)-" + String(format: "%02d", m)
+            annuale.append([
+                .text(key), .money(model.billedCents(month: key)), .money(model.collectedCents(month: key)),
+                .money(model.spentCents(month: key)), .money(model.profitCents(month: key)),
+            ])
+        }
+
+        return [
+            XLSheet(name: "Summary", rows: riepilogo, widths: [26, 14, 14, 14]),
+            XLSheet(name: "Invoices", rows: fatture, widths: [12, 24, 12, 12, 30, 12, 8, 12, 10, 12]),
+            XLSheet(name: "Expenses", rows: spese, widths: [12, 14, 20, 30, 20, 12, 10]),
+            XLSheet(name: anno, rows: annuale, widths: [12, 14, 14, 14, 14]),
+        ]
     }
 
     /// Genera le bozze di fattura del mese per i clienti attivi con retainer,
@@ -196,6 +313,121 @@ struct NCFinanceView: View {
     }
     private func shift(_ n: Int) {
         if let d = Calendar.current.date(byAdding: .month, value: n, to: mese) { mese = d }
+    }
+}
+
+// ── Riga budget: barra di consumo, rossa quando si sfora ────────────────────
+
+private struct NCBudgetRow: View {
+    let category: NCExpenseCategory
+    let budget: Int
+    let actual: Int
+    let onOpen: () -> Void
+    @State private var hover = false
+
+    private var quota: Double { budget > 0 ? Double(actual) / Double(budget) : 0 }
+    private var sforato: Bool { budget > 0 && actual > budget }
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(spacing: 10) {
+                Label(category.label, systemImage: category.icon)
+                    .font(.system(size: 12)).foregroundStyle(UI.ink)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(budget > 0 ? ncEuro(budget) : "—")
+                    .font(.system(size: 11.5)).monospacedDigit()
+                    .foregroundStyle(budget > 0 ? UI.text : UI.faint)
+                    .frame(width: 100, alignment: .leading)
+                Text(ncEuro(actual)).font(.system(size: 11.5, weight: .semibold)).monospacedDigit()
+                    .foregroundStyle(UI.ink).frame(width: 100, alignment: .leading)
+                Text(budget > 0 ? ncEuro(budget - actual) : "—")
+                    .font(.system(size: 11.5)).monospacedDigit()
+                    .foregroundStyle(sforato ? UI.tint(.stop) : (budget > 0 ? UI.tint(.ok) : UI.faint))
+                    .frame(width: 100, alignment: .leading)
+                HStack(spacing: 6) {
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(UI.surfaceHi)
+                            Capsule().fill(sforato ? UI.tint(.stop) : UI.accent)
+                                .frame(width: geo.size.width * CGFloat(min(quota, 1)))
+                        }
+                    }
+                    .frame(height: 6)
+                    Text(budget > 0 ? "\(Int((quota * 100).rounded()))%" : "—")
+                        .font(.system(size: 10, weight: .semibold)).monospacedDigit()
+                        .foregroundStyle(sforato ? UI.tint(.stop) : UI.dim)
+                        .frame(width: 38, alignment: .trailing)
+                }
+                .frame(width: 120)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 8).fill(hover ? UI.surfaceHi : UI.surface))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(UI.line, lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+    }
+}
+
+// ── Form budget ──────────────────────────────────────────────────────────────
+
+struct NCBudgetForm: View {
+    let existing: NCBudget?
+    let month: Date
+    @ObservedObject var model: NCModel
+
+    @State private var category = NCExpenseCategory.ads.rawValue
+    @State private var amount = ""
+    @State private var periodo = "year"          // year | month
+    @State private var notes = ""
+
+    private var eliminazione: (() async -> Void)? {
+        guard let b = existing else { return nil }
+        return { await model.delete("nc_budget", id: b.id); await model.load() }
+    }
+    private var anno: Int { Calendar.current.component(.year, from: month) }
+    private var mese: Int { Calendar.current.component(.month, from: month) }
+
+    var body: some View {
+        NCSheet(
+            title: existing == nil ? "Set budget" : "Edit budget",
+            canSave: ncCents(amount) > 0,
+            onDelete: eliminazione,
+            onSave: salva
+        ) {
+            NCChips(label: "Category", options: NCExpenseCategory.allCases.map { ($0.rawValue, $0.label) },
+                    selection: $category)
+            NCChips(label: "Applies to",
+                    options: [("year", "Whole \(anno) (split over 12 months)"),
+                              ("month", "Only \(ncMonthLabel(month))")],
+                    selection: $periodo)
+            NCMoneyField(label: periodo == "year" ? "Yearly budget" : "Monthly budget", text: $amount)
+            if periodo == "year", ncCents(amount) > 0 {
+                Text("≈ \(ncEuro(ncCents(amount) / 12)) per month")
+                    .font(.system(size: 11)).foregroundStyle(UI.dim)
+            }
+            NCTextArea(label: "Notes", text: $notes)
+        }
+        .onAppear(perform: precompila)
+    }
+
+    private func precompila() {
+        guard let b = existing else { return }
+        category = b.category; notes = b.notes ?? ""
+        periodo = b.month == nil ? "year" : "month"
+        amount = String(format: "%.2f", Double(b.amount_cents) / 100)
+    }
+
+    private func salva() async throws {
+        let fields: [String: Any?] = [
+            "year": anno, "month": periodo == "year" ? nil : mese,
+            "category": category, "amount_cents": ncCents(amount), "notes": ncBlank(notes),
+        ]
+        if let b = existing { try await HubAPI.ncUpdate("nc_budget", id: b.id, fields) }
+        // stesso anno+mese+categoria: si aggiorna la riga esistente invece di fallire sull'unique
+        else { try await HubAPI.ncUpsert("nc_budget", fields, onConflict: "year,month,category") }
+        await model.load()
     }
 }
 
