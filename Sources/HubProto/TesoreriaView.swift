@@ -28,6 +28,9 @@ struct TesMovimento: Identifiable, Decodable, Equatable {
     var importo_cents: Int
     var modalita: String?
     var conto_id: String?
+    /// Soggiorno che ha generato il movimento, quando lo conosciamo: serve a
+    /// mostrare notti e prezzo per notte nel dettaglio per casa.
+    var prenotazione_id: String?
 }
 
 extension HubAPI {
@@ -542,7 +545,261 @@ struct TesoreriaView: View {
 
             Text("Conto economico su base cassa. «Utile operativo» = entrate − costi di gestione; i debiti (Marroni, Muratore, mutuo, rata) sono rimborsi e restano fuori dal margine. Periodo: \(periodoLabel.lowercased()), filtro casa applicato. «Esporta CSV» per il commercialista.")
                 .font(.system(size: 10.5)).foregroundStyle(PSE.faint).padding(.top, 2)
+
+            // Sotto la sintesi, il dettaglio riga per riga come nel foglio Excel.
+            ForEach(caseDaMostrare, id: \.self) { s in
+                dettaglioCasa(s).padding(.top, 16)
+            }
         }.padding(.bottom, 20)
+    }
+
+    // ══ DETTAGLIO PER CASA — entrate e uscite voce per voce ═══════════════════
+    // Riproduce il foglio «VIA PO — ENTRATE E USCITE»: dirette in contante,
+    // Booking già incassato con la sua commissione, uscite registrate, e le
+    // entrate future ancora da incassare. I numeri escono dagli stessi movimenti
+    // del conto economico qui sopra, così i due blocchi non possono discordare.
+    private var caseDaMostrare: [Struttura] { movStrut.map { [$0] } ?? Struttura.allCases }
+
+    private func movCasa(_ s: Struttura) -> [TesMovimento] {
+        model.movimenti.filter { $0.struttura == s.rawValue && nelPeriodo($0) }
+    }
+    private func prenDi(_ m: TesMovimento) -> Prenotazione? {
+        guard let pid = m.prenotazione_id else { return nil }
+        return prenotazioni.first { $0.id == pid }
+    }
+    /// Entrate in contante: tutto ciò che non passa dal conto OTA.
+    private func diretteContante(_ s: Struttura) -> [TesMovimento] {
+        movCasa(s).filter { $0.tipo == "entrata" && $0.conto_id != "massimo" }.sorted { $0.data < $1.data }
+    }
+    /// Uscite registrate, senza le commissioni OTA: quelle sono già dedotte nel
+    /// blocco Booking (che mostra il netto) e conteggiarle qui le raddoppierebbe.
+    private func usciteCasa(_ s: Struttura) -> [TesMovimento] {
+        movCasa(s).filter { $0.tipo == "uscita" && $0.categoria != "commissione" }.sorted { $0.data < $1.data }
+    }
+
+    private struct RigaOTA: Identifiable {
+        let id: String, periodo: String, ospite: String, canale: String
+        let lordo: Int, commissione: Int
+        var netto: Int { lordo - commissione }
+    }
+    /// Il riferimento Booking «#123456» in fondo alla descrizione: è ciò che
+    /// lega l'incasso alla sua commissione.
+    private func rifBooking(_ s: String?) -> String? {
+        guard let t = (s ?? "").split(separator: "#").last, !t.isEmpty, t.allSatisfy({ $0.isNumber }) else { return nil }
+        return String(t)
+    }
+    private func bookingIncassato(_ s: Struttura) -> [RigaOTA] {
+        let commissioni = movCasa(s).filter { $0.tipo == "uscita" && $0.categoria == "commissione" }
+        return movCasa(s).filter { $0.tipo == "entrata" && $0.conto_id == "massimo" }
+            .sorted { $0.data < $1.data }
+            .map { m in
+                let rif = rifBooking(m.descrizione)
+                let c = commissioni.first { rif != nil && rifBooking($0.descrizione) == rif }
+                let nome = (m.descrizione ?? "").replacingOccurrences(of: "Booking — ", with: "")
+                return RigaOTA(id: m.id, periodo: tesPrettyStr(m.data), ospite: nome,
+                               canale: (m.categoria ?? "booking").capitalized,
+                               lordo: m.importo_cents, commissione: c?.importo_cents ?? 0)
+            }
+    }
+    /// Prenotazioni confermate non ancora incassate: il lordo è quello che paga
+    /// il cliente, il netto quello che arriva dopo la commissione Booking.
+    private func daIncassareRighe(_ s: Struttura) -> [RigaOTA] {
+        prenFiltrate
+            .filter { $0.struttura == s.rawValue && max(0, $0.amount_cents - $0.paid_cents) > 0 }
+            .sorted { ($0.checkin ?? "") < ($1.checkin ?? "") }
+            .map { b in
+                let lordo = max(0, b.amount_cents - b.paid_cents)
+                let src = b.source ?? "diretto"
+                let comm = src == "booking" ? Int((Double(lordo) * 0.165).rounded()) : 0
+                return RigaOTA(id: b.id,
+                               periodo: "\(tesPrettyStr(b.checkin))–\(tesPrettyStr(b.checkout))",
+                               ospite: b.guest_name + (b.camera.map { " (\($0))" } ?? ""),
+                               canale: src.capitalized, lordo: lordo, commissione: comm)
+            }
+    }
+
+    @ViewBuilder private func dettaglioCasa(_ s: Struttura) -> some View {
+        let dirette = diretteContante(s)
+        let incassato = bookingIncassato(s)
+        let uscite = usciteCasa(s)
+        let future = daIncassareRighe(s)
+        let totDirette = dirette.reduce(0) { $0 + $1.importo_cents }
+        let totIncassatoNetto = incassato.reduce(0) { $0 + $1.netto }
+        let totGenerate = totDirette + totIncassatoNetto
+        let totUscite = uscite.reduce(0) { $0 + $1.importo_cents }
+        let totFutureNetto = future.reduce(0) { $0 + $1.netto }
+
+        VStack(alignment: .leading, spacing: 10) {
+            Text("\(s.label.uppercased()) — ENTRATE E USCITE")
+                .font(.system(size: 12, weight: .heavy)).tracking(1).foregroundStyle(PSE.ink)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(RoundedRectangle(cornerRadius: 10).fill(PSE.accent.opacity(0.18)))
+
+            if !dirette.isEmpty { blocco("ENTRATE GENERATE — DIRETTE (contante)", PSE.pos) { direttaTable(dirette, totale: totDirette) } }
+            if !incassato.isEmpty { blocco("OTA — GIÀ INCASSATO (commissioni dedotte)", PSE.pos) { otaTable(incassato, titoloTot: "SUBTOTALE INCASSATO") } }
+            rigaTotale("TOTALE ENTRATE GENERATE (dirette + OTA netto)", totGenerate, PSE.pos)
+            if !uscite.isEmpty { blocco("USCITE (già registrate)", PSE.neg) { uscitaTable(uscite, totale: totUscite) } }
+            rigaTotale("SALDO GENERATO (entrate − uscite)", totGenerate - totUscite, totGenerate - totUscite >= 0 ? PSE.pos : PSE.neg)
+            if !future.isEmpty {
+                blocco("ENTRATE FUTURE — DA INCASSARE", PSE.warn) { otaTable(future, titoloTot: "TOTALE DA INCASSARE") }
+                rigaTotale("TOTALE POTENZIALE (generato + futuro netto)", totGenerate - totUscite + totFutureNetto, PSE.accent)
+            }
+        }
+    }
+
+    private func blocco<C: View>(_ titolo: String, _ c: Color, @ViewBuilder _ content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(titolo).font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(c)
+                .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
+            content()
+            Color.clear.frame(height: 6)
+        }
+        .background(RoundedRectangle(cornerRadius: 12).fill(PSE.panel))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(PSE.line, lineWidth: 1))
+    }
+    private func rigaTotale(_ t: String, _ v: Int, _ c: Color) -> some View {
+        HStack {
+            Text(t).font(.system(size: 10.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.ink)
+            Spacer()
+            Text(eurc(v)).font(.system(size: 15, weight: .bold)).foregroundStyle(c).monospacedDigit()
+        }
+        .padding(.horizontal, 16).padding(.vertical, 11)
+        .background(RoundedRectangle(cornerRadius: 10).fill(c.opacity(0.10)))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(c.opacity(0.30), lineWidth: 1))
+    }
+    private func thc(_ t: String) -> some View {
+        Text(t).font(.system(size: 8.5, weight: .heavy)).tracking(0.7).foregroundStyle(PSE.faint).lineLimit(1)
+    }
+    private func subtotaleBar(_ t: String, _ v: Int, _ c: Color) -> some View {
+        HStack {
+            Text(t).font(.system(size: 9.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.ink)
+            Spacer()
+            Text(eurc(v)).font(.system(size: 13, weight: .bold)).foregroundStyle(c).monospacedDigit()
+                .frame(width: 96, alignment: .trailing)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 9)
+        .background(Color.white.opacity(0.04))
+    }
+
+    // Dirette: notti e prezzo per notte arrivano dal soggiorno agganciato; dove
+    // il movimento non è agganciato a nessuna prenotazione restano vuoti.
+    private func direttaTable(_ righe: [TesMovimento], totale: Int) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                thc("DATA").frame(width: 62, alignment: .leading)
+                thc("DESCRIZIONE").frame(maxWidth: .infinity, alignment: .leading)
+                thc("NOTTI").frame(width: 48, alignment: .trailing)
+                thc("PREZZO/NOTTE").frame(width: 92, alignment: .trailing)
+                thc("TOTALE").frame(width: 96, alignment: .trailing)
+            }
+            .padding(.horizontal, 16).padding(.bottom, 8)
+            .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
+            ForEach(righe) { m in
+                let p = prenDi(m)
+                let n = p.flatMap { nights($0.checkin, $0.checkout) }
+                HStack(spacing: 10) {
+                    Text(tesPrettyStr(m.data)).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim)
+                        .frame(width: 62, alignment: .leading).monospacedDigit()
+                    Text(m.descrizione ?? (m.categoria ?? "—")).font(.system(size: 12)).foregroundStyle(PSE.ink)
+                        .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
+                    Text(n.map { "\($0)" } ?? "—").font(.system(size: 11.5)).foregroundStyle(PSE.dim)
+                        .frame(width: 48, alignment: .trailing).monospacedDigit()
+                    Text(n.flatMap { $0 > 0 ? eurc(m.importo_cents / $0) : nil } ?? "—")
+                        .font(.system(size: 11.5)).foregroundStyle(PSE.dim)
+                        .frame(width: 92, alignment: .trailing).monospacedDigit()
+                    Text(eurc(m.importo_cents)).font(.system(size: 12.5, weight: .bold)).foregroundStyle(PSE.pos)
+                        .frame(width: 96, alignment: .trailing).monospacedDigit()
+                }
+                .padding(.horizontal, 16).padding(.vertical, 7)
+                Divider().overlay(PSE.line).padding(.leading, 16)
+            }
+            subtotaleBar("SUBTOTALE DIRETTE (contante)", totale, PSE.pos)
+        }
+    }
+
+    private func otaTable(_ righe: [RigaOTA], titoloTot: String) -> some View {
+        let lordo = righe.reduce(0) { $0 + $1.lordo }
+        let comm = righe.reduce(0) { $0 + $1.commissione }
+        return VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                thc("PERIODO").frame(width: 96, alignment: .leading)
+                thc("OSPITE").frame(maxWidth: .infinity, alignment: .leading)
+                thc("LORDO").frame(width: 88, alignment: .trailing)
+                thc("COMMISSIONE").frame(width: 96, alignment: .trailing)
+                thc("NETTO").frame(width: 96, alignment: .trailing)
+                thc("CANALE").frame(width: 72, alignment: .leading)
+            }
+            .padding(.horizontal, 16).padding(.bottom, 8)
+            .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
+            ForEach(righe) { r in
+                HStack(spacing: 10) {
+                    Text(r.periodo).font(.system(size: 11)).foregroundStyle(PSE.dim)
+                        .frame(width: 96, alignment: .leading).monospacedDigit().lineLimit(1)
+                    Text(r.ospite).font(.system(size: 12)).foregroundStyle(PSE.ink)
+                        .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
+                    Text(eurc(r.lordo)).font(.system(size: 11.5)).foregroundStyle(PSE.text)
+                        .frame(width: 88, alignment: .trailing).monospacedDigit()
+                    Text(r.commissione > 0 ? "−" + eurc(r.commissione) : "—")
+                        .font(.system(size: 11.5)).foregroundStyle(r.commissione > 0 ? PSE.warn : PSE.faint)
+                        .frame(width: 96, alignment: .trailing).monospacedDigit()
+                    Text(eurc(r.netto)).font(.system(size: 12.5, weight: .bold)).foregroundStyle(PSE.ink)
+                        .frame(width: 96, alignment: .trailing).monospacedDigit()
+                    canalePill(r.canale).frame(width: 72, alignment: .leading)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 7)
+                Divider().overlay(PSE.line).padding(.leading, 16)
+            }
+            HStack(spacing: 10) {
+                Text(titoloTot).font(.system(size: 9.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.ink)
+                Spacer()
+                Text(eurc(lordo)).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim)
+                    .frame(width: 88, alignment: .trailing).monospacedDigit()
+                Text(comm > 0 ? "−" + eurc(comm) : "—").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.warn)
+                    .frame(width: 96, alignment: .trailing).monospacedDigit()
+                Text(eurc(lordo - comm)).font(.system(size: 13, weight: .bold)).foregroundStyle(PSE.pos)
+                    .frame(width: 96, alignment: .trailing).monospacedDigit()
+                Color.clear.frame(width: 72)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 9)
+            .background(Color.white.opacity(0.04))
+        }
+    }
+    private func canalePill(_ c: String) -> some View {
+        let tint: Color = c.lowercased().contains("airbnb") ? PSE.warn
+            : c.lowercased().contains("booking") ? Color(hue: 45/360, saturation: 0.44, brightness: 0.62) : PSE.accent
+        return Text(c).font(.system(size: 9, weight: .heavy)).tracking(0.4).foregroundStyle(tint)
+            .padding(.horizontal, 7).padding(.vertical, 2)
+            .background(Capsule().fill(tint.opacity(0.14)))
+            .lineLimit(1)
+    }
+
+    private func uscitaTable(_ righe: [TesMovimento], totale: Int) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                thc("DATA").frame(width: 62, alignment: .leading)
+                thc("CONCETTO").frame(maxWidth: .infinity, alignment: .leading)
+                thc("CATEGORIA").frame(width: 110, alignment: .leading)
+                thc("IMPORTO").frame(width: 96, alignment: .trailing)
+            }
+            .padding(.horizontal, 16).padding(.bottom, 8)
+            .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
+            ForEach(righe) { m in
+                HStack(spacing: 10) {
+                    Text(tesPrettyStr(m.data)).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim)
+                        .frame(width: 62, alignment: .leading).monospacedDigit()
+                    Text(m.descrizione ?? (m.categoria ?? "—")).font(.system(size: 12)).foregroundStyle(PSE.ink)
+                        .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
+                    Text((m.categoria ?? "—").capitalized).font(.system(size: 11)).foregroundStyle(PSE.faint)
+                        .frame(width: 110, alignment: .leading).lineLimit(1)
+                    Text(eurc(m.importo_cents)).font(.system(size: 12.5, weight: .bold)).foregroundStyle(PSE.neg)
+                        .frame(width: 96, alignment: .trailing).monospacedDigit()
+                }
+                .padding(.horizontal, 16).padding(.vertical, 7)
+                Divider().overlay(PSE.line).padding(.leading, 16)
+            }
+            subtotaleBar("TOTALE USCITE", totale, PSE.neg)
+        }
     }
 
     // ══ CONTI — estratto conto per conto (Cassa · Massimo · Beeper) ═══════════
