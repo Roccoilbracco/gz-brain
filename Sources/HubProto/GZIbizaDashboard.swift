@@ -65,7 +65,7 @@ final class GZIbizaModel: ObservableObject {
 // calendario: sono il lavoro quotidiano dell'agenzia e stavano sparsi nella
 // sidebar, lontani dal progetto a cui appartengono.
 enum GZTab: String, CaseIterable, Identifiable {
-    case leads, owners, contatti, proprieta, calendario
+    case leads, owners, contatti, proprieta, documenti, calendario
     var id: String { rawValue }
     var label: String {
         switch self {
@@ -73,6 +73,7 @@ enum GZTab: String, CaseIterable, Identifiable {
         case .owners: return "Propietari / Inquilini"
         case .contatti: return "Contatti"
         case .proprieta: return "Proprietà"
+        case .documenti: return "Documenti"
         case .calendario: return "Calendario"
         }
     }
@@ -82,6 +83,7 @@ enum GZTab: String, CaseIterable, Identifiable {
         case .owners: return "house.and.flag"
         case .contatti: return "person.crop.circle"
         case .proprieta: return "house"
+        case .documenti: return "folder"
         case .calendario: return "calendar"
         }
     }
@@ -96,6 +98,7 @@ enum GZTab: String, CaseIterable, Identifiable {
         case .owners: return "Proprietari e inquilini che affidano immobili in gestione"
         case .contatti: return "Anagrafica di clienti e potenziali clienti, con le ricorrenze"
         case .proprieta: return "Registro immobili e visibilità sui siti"
+        case .documenti: return "Modelli di contratto ed encargo, e le copie firmate"
         case .calendario: return "Disponibilità per le visite e appuntamenti fissati"
         }
     }
@@ -183,6 +186,7 @@ struct GZIbizaDashboard: View {
                     switch tab {
                     case .contatti:   ContattiView()
                     case .proprieta:  ProprietaView(embedded: true)
+                    case .documenti:  DocumentiView()
                     case .calendario: CalendarioVisiteView(embedded: true)
                     default:          EmptyView()
                     }
@@ -197,6 +201,7 @@ struct GZIbizaDashboard: View {
                 GZLeadDrawerView(
                     lead: sel,
                     stages: active.kind.stages,
+                    isOwner: tab == .owners,
                     onStage: { sid in
                         Task { await active.setStage(sel.id, sid) }
                         if var l = selected { l.stage = sid; selected = l }
@@ -479,6 +484,8 @@ private struct GZLeadCard: View {
 private struct GZLeadDrawerView: View {
     let lead: RELead
     let stages: [PipelineStage]
+    /// I proprietari hanno i documenti dell'incarico, i lead no.
+    var isOwner: Bool = false
     let onStage: (String) -> Void
     let onNotes: (String) async -> Bool
     let onDelete: () -> Void
@@ -557,6 +564,12 @@ private struct GZLeadDrawerView: View {
                         section(lead.property_offered != nil || lead.size_sqm != nil ? "DETTAGLI IMMOBILE" : "RICERCA") {
                             VStack(alignment: .leading, spacing: 8) { ForEach(d, id: \.1) { infoRow($0.0, $0.1) } }
                         }
+                    }
+                    // L'encargo firmato del proprietario sta qui, sulla sua scheda:
+                    // è lì che uno lo va a cercare, non in un archivio generale.
+                    if isOwner {
+                        DocumentiAllegati(ownerId: lead.id, proprietaId: nil,
+                                          titolo: "DOCUMENTI DEL PROPRIETARIO")
                     }
                     if let msg = clean(lead.request_message) {
                         section("RICHIESTA") {
