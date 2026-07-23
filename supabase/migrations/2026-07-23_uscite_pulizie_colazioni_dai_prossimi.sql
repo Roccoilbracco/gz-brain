@@ -1,18 +1,19 @@
--- Camere PSE — pulizie e colazioni diventano uscite reali in Cassa, ma solo
--- dai prossimi soggiorni (agosto in poi). Luglio è già registrato a mano
--- nell'Excel e va lasciato com'è per non contarlo due volte.
+-- Camere PSE — pulizie e colazioni diventano uscite reali in Cassa, dai
+-- soggiorni che partono dal 23/07/2026 in poi (inizio automazione). Prima di
+-- quella data è già registrato a mano nell'Excel e va lasciato com'è.
 --
--- Aggiunge `contabilizzata` alle due tabelle (true = già nei conti / storico,
--- non genera uscita). Tutto ciò che parte prima di agosto = true; da agosto in
--- poi = false, e sync_camere_pse() crea l'uscita quando la pulizia è «fatta» e
--- la colazione «servita». Vedi la funzione aggiornata nello stesso deploy.
+-- `contabilizzata` = true → già nei conti / storico, non genera uscita.
+-- Il cutoff (inizio automazione) è il 23/07/2026, sia per l'update una-tantum
+-- sia dentro sync_camere_pse() per le righe che crea d'ora in poi.
 alter table public.pulizie   add column if not exists contabilizzata boolean not null default false;
 alter table public.colazioni add column if not exists contabilizzata boolean not null default false;
 
-update public.pulizie   set contabilizzata = (data < '2026-08-01');
-update public.colazioni set contabilizzata = (coalesce(partenza, arrivo) < '2026-08-01');
+update public.pulizie   set contabilizzata = (data < '2026-07-23');
+update public.colazioni set contabilizzata = (coalesce(partenza, arrivo) < '2026-07-23');
 
--- sync_camere_pse() ridefinita: instrada l'incasso diretto al conto scelto
--- (Cassa di default, Beeper se bonifico, Massimo se OTA) e genera le uscite
--- pulizia/colazioni per le righe contabilizzata=false quando sono fatte/servite.
--- Corpo completo applicato via migration pulizie_colazioni_contabilizzazione.
+-- sync_camere_pse() aggiornata nello stesso deploy:
+--  • incasso diretto instradato al conto scelto (Cassa default, Beeper bonifico,
+--    Massimo OTA), appena la prenotazione è pagata;
+--  • uscita pulizia (20 €) quando la pulizia è «fatta» e contabilizzata=false;
+--  • uscita colazioni (costo pieno) quando la colazione è «servita»;
+--  • le righe nuove nascono contabilizzata = (checkout < '2026-07-23').
