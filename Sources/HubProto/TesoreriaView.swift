@@ -615,9 +615,17 @@ struct TesoreriaView: View {
         }
         return map.keys.sorted(by: >).map { (key: $0, entrate: map[$0]!.e, uscite: map[$0]!.u) }
     }
+    // Entrate che NON sono ricavi da attività: cauzioni (da restituire) e apporti
+    // dei soci (capitale). Entrano in cassa ma non fanno margine, come i debiti
+    // sul lato uscite.
+    private func isEntrataNonRicavo(_ cat: String?) -> Bool {
+        let c = (cat ?? "").lowercased()
+        return c.contains("deposito") || c.contains("apporto")
+    }
     private func perCategoria(_ tipo: String) -> [(cat: String, tot: Int)] {
         var map: [String: Int] = [:]
         for m in movStrutFiltrati where m.tipo == tipo {
+            if tipo == "entrata" && isEntrataNonRicavo(m.categoria) { continue }   // fuori dai ricavi
             let c = (m.categoria?.isEmpty == false) ? m.categoria! : "altro"
             map[c, default: 0] += m.importo_cents
         }
@@ -637,7 +645,10 @@ struct TesoreriaView: View {
         }
         return map.map { (cat: $0.key, tot: $0.value) }.sorted { $0.tot > $1.tot }
     }
-    private var totEntrate: Int { movStrutFiltrati.filter { $0.tipo == "entrata" }.reduce(0) { $0 + $1.importo_cents } }
+    // Ricavi veri: entrate meno cauzioni e apporti soci.
+    private var totEntrate: Int { movStrutFiltrati.filter { $0.tipo == "entrata" && !isEntrataNonRicavo($0.categoria) }.reduce(0) { $0 + $1.importo_cents } }
+    // Cauzioni + apporti soci: entrate non da attività, tenute fuori dal margine.
+    private var totEntrateFinanziarie: Int { movStrutFiltrati.filter { $0.tipo == "entrata" && isEntrataNonRicavo($0.categoria) }.reduce(0) { $0 + $1.importo_cents } }
     private var totUscite: Int { movStrutFiltrati.filter { $0.tipo == "uscita" }.reduce(0) { $0 + $1.importo_cents } }
     private var totCostiOperativi: Int { movStrutFiltrati.filter { $0.tipo == "uscita" && !isDebito($0.categoria) }.reduce(0) { $0 + $1.importo_cents } }
     private var totDebiti: Int { movStrutFiltrati.filter { $0.tipo == "uscita" && isDebito($0.categoria) }.reduce(0) { $0 + $1.importo_cents } }
@@ -655,11 +666,11 @@ struct TesoreriaView: View {
                 testoCard("MARGINE OP.", totEntrate > 0 ? "\(margineOp)%" : "—", PSE.accent)
             }
             // Sotto la gestione: debiti/finanziamenti e utile netto reale
-            if totDebiti > 0 {
+            if totDebiti > 0 || totEntrateFinanziarie > 0 {
                 HStack(spacing: 12) {
                     totCard("DEBITI / FINANZIAMENTI", totDebiti, PSE.warn)
+                    totCard("CAUZIONI + APPORTI (fuori ricavi)", totEntrateFinanziarie, PSE.dim)
                     totCard("UTILE NETTO (dopo debiti)", utileNetto, utileNetto >= 0 ? PSE.pos : PSE.neg)
-                    Color.clear.frame(maxWidth: .infinity)
                 }
             }
 
@@ -690,7 +701,7 @@ struct TesoreriaView: View {
                     .padding(.top, 2)
             }
 
-            Text("Conto economico su base cassa. «Utile operativo» = entrate − costi di gestione; i debiti (Marroni, Muratore, mutuo, rata) sono rimborsi e restano fuori dal margine. Periodo: \(periodoLabel.lowercased()), filtro casa applicato. «Esporta CSV» per il commercialista.")
+            Text("Conto economico su base cassa. «Utile operativo» = ricavi − costi di gestione. Restano fuori dal margine: i debiti (Marroni, Muratore, mutuo, rata) sul lato uscite, e cauzioni + apporti soci sul lato entrate (soldi che entrano ma non sono ricavi). Periodo: \(periodoLabel.lowercased()), filtro casa applicato. «Esporta CSV» per il commercialista.")
                 .font(.system(size: 10.5)).foregroundStyle(PSE.faint).padding(.top, 2)
 
             // Sotto la sintesi, il dettaglio riga per riga come nel foglio Excel.
