@@ -33,14 +33,25 @@ const clean = (v: unknown): string | null => {
 function strutturaFor(propName: string): string {
   return /romagna/i.test(propName) ? "via-romagna" : "via-po";
 }
-// nomi camera OTA (Booking) → nomi reali del reticolo gestionale (Via Po)
+// nomi camera OTA → nomi reali del reticolo gestionale (Via Po)
+// Booking usa i nomi commerciali (Queen/Standard/King/Large), Airbnb pubblica
+// una property per stanza ("Affittacamere Es Vedrà , Stanza N ..."): stesso letto,
+// due nomi diversi, entrambi devono cadere sulla stessa casella del planning.
+const RETICOLO_VIA_PO = [
+  "Stanza 1 · Camera Queen",
+  "Stanza 2 · Standard",
+  "Stanza 3 · Camera King",
+  "Stanza 4 · Ampia Matrimoniale",
+];
 function normalizeRoom(name: string | null): string | null {
   if (!name) return name;
   const n = name.toLowerCase();
-  if (n.includes("queen")) return "Stanza 1 · Camera Queen";
-  if (n.includes("standard")) return "Stanza 2 · Standard";
-  if (n.includes("king")) return "Stanza 3 · Camera King";
-  if (n.includes("large")) return "Stanza 4 · Ampia Matrimoniale";
+  if (n.includes("queen")) return RETICOLO_VIA_PO[0];
+  if (n.includes("standard")) return RETICOLO_VIA_PO[1];
+  if (n.includes("king")) return RETICOLO_VIA_PO[2];
+  if (n.includes("large")) return RETICOLO_VIA_PO[3];
+  const m = n.match(/stanza\s*([1-4])/); // Airbnb: "... , Stanza 3"
+  if (m) return RETICOLO_VIA_PO[Number(m[1]) - 1];
   return name;
 }
 function sourceFor(channel: string, referer: string): string {
@@ -93,11 +104,15 @@ Deno.serve(async () => {
       for (const rt of p.roomTypes ?? p.rooms ?? []) roomName[rt.id] = rt.name ?? "";
     }
 
-    // tutte le prenotazioni (paginazione)
+    // tutte le prenotazioni (paginazione).
+    // NB: /bookings senza filtri restituisce solo i soggiorni non ancora conclusi
+    // (Beds24 taglia i partiti), quindi modifiche e cancellazioni tardive su una
+    // prenotazione già passata non arriverebbero mai. arrivalFrom tiene lo storico.
+    const arrivalFrom = "2025-01-01";
     const bookings: any[] = [];
     let page = 1;
     while (true) {
-      const res = await beds24Get(`/bookings?page=${page}`, token);
+      const res = await beds24Get(`/bookings?arrivalFrom=${arrivalFrom}&page=${page}`, token);
       bookings.push(...(res.data ?? []));
       if (!res.pages?.nextPageExists) break;
       page++;
