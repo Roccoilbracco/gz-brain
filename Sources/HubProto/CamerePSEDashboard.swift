@@ -909,6 +909,7 @@ private struct BookingDrawer: View {
     let onEdit: () -> Void
     let onDelete: () -> Void
     let onClose: () -> Void
+    @State private var confermaElimina = false
 
     private var st: BookingStatus { .from(booking.status) }
     private var str: Struttura { .from(booking.struttura) }
@@ -994,25 +995,31 @@ private struct BookingDrawer: View {
                     if let n = booking.notes, !n.isEmpty {
                         section("NOTE") { Text(n).font(.system(size: 12)).foregroundStyle(Holo.text).frame(maxWidth: .infinity, alignment: .leading) }
                     }
+                    // Azioni dentro il contenuto scorrevole: così Modifica ed
+                    // elimina restano raggiungibili anche quando il drawer è più
+                    // alto della finestra (prima erano in un footer fuori schermo).
+                    HStack(spacing: 10) {
+                        Button(action: onEdit) {
+                            Label("Modifica", systemImage: "pencil").font(.system(size: 12.5, weight: .semibold))
+                                .foregroundStyle(PSE.ink).frame(maxWidth: .infinity).padding(.vertical, 9)
+                                .background(RoundedRectangle(cornerRadius: 9).fill(PSE.accent.opacity(0.85)))
+                        }.buttonStyle(.plain)
+                        Button { confermaElimina = true } label: {
+                            Image(systemName: "trash").font(.system(size: 13)).foregroundStyle(PSE.status(.cancellata))
+                                .frame(width: 42, height: 36)
+                                .background(RoundedRectangle(cornerRadius: 9).fill(PSE.surface))
+                                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(PSE.line, lineWidth: 1))
+                        }.buttonStyle(.plain)
+                        .confirmationDialog("Eliminare la prenotazione?", isPresented: $confermaElimina) {
+                            Button("Elimina", role: .destructive, action: onDelete)
+                            Button("Annulla", role: .cancel) {}
+                        } message: {
+                            Text("\(booking.guest_name) · \(eur(booking.amount_cents)). L'operazione non si può annullare.")
+                        }
+                    }.padding(.top, 8)
                 }
                 .padding(.horizontal, 22).padding(.bottom, 20)
             }
-
-            HStack(spacing: 10) {
-                Button(action: onEdit) {
-                    Label("Modifica", systemImage: "pencil").font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(PSE.ink).frame(maxWidth: .infinity).padding(.vertical, 9)
-                        .background(RoundedRectangle(cornerRadius: 9).fill(PSE.surface))
-                        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(PSE.line, lineWidth: 1))
-                }.buttonStyle(.plain)
-                Button(action: onDelete) {
-                    Image(systemName: "trash").font(.system(size: 13)).foregroundStyle(PSE.status(.cancellata))
-                        .frame(width: 42, height: 36)
-                        .background(RoundedRectangle(cornerRadius: 9).fill(PSE.surface))
-                        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(PSE.line, lineWidth: 1))
-                }.buttonStyle(.plain)
-            }
-            .padding(EdgeInsets(top: 12, leading: 22, bottom: 18, trailing: 22))
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .background(Color(hex: 0x0c1120))
