@@ -1671,10 +1671,17 @@ private struct TesMovimentoForm: View {
     @State private var importo = ""
     @State private var modalita = "contante"
     @State private var struttura = "—"
+    @State private var camera = "—"
     @State private var saving = false
     @State private var confermaElimina = false
 
     private let modalitaOpts = ["contante", "booking", "airbnb", "bonifico"]
+    // Le camere della struttura scelta, per il selettore (niente se «Entrambe»).
+    private var camereOpts: [(String, String)] {
+        guard struttura == "via-po" || struttura == "via-romagna" else { return [("—", "—")] }
+        let rooms = Struttura.from(struttura).rooms.filter { !$0.lowercased().contains("inter") }
+        return [("—", "Nessuna camera")] + rooms.map { ($0, $0) }
+    }
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -1691,10 +1698,15 @@ private struct TesMovimentoForm: View {
                 }
                 HStack(spacing: 12) {
                     pick("Modalità", modalitaOpts.map { ($0, $0.capitalized) }, modalita) { modalita = $0 }
-                    pick("Struttura", [("—", "Entrambe"), ("via-po", "Via Po"), ("via-romagna", "Via Romagna")], struttura) { struttura = $0 }
+                    // cambiando struttura la camera scelta non vale più
+                    pick("Struttura", [("—", "Entrambe"), ("via-po", "Via Po"), ("via-romagna", "Via Romagna")], struttura) { struttura = $0; camera = "—" }
+                }
+                // Selettore camera: compare quando è scelta una struttura
+                if struttura == "via-po" || struttura == "via-romagna" {
+                    pick("Camera", camereOpts, camera) { camera = $0 }
                 }
                 HoloField(label: "Categoria", text: $categoria, placeholder: "affitto, spesa, pulizia…")
-                HoloField(label: "Descrizione", text: $descrizione, placeholder: "Es. Stanza Camino — Federica")
+                HoloField(label: "Nome e cognome", text: $descrizione, placeholder: "Es. Mario Rossi")
 
                 HStack(spacing: 10) {
                     if existing != nil {
@@ -1724,7 +1736,7 @@ private struct TesMovimentoForm: View {
             }
             .padding(24)
         }
-        .frame(width: 520, height: 470)
+        .frame(width: 520, height: 540)
         .background(LinearGradient(colors: [Color(red: 16/255, green: 24/255, blue: 48/255), Color(red: 8/255, green: 12/255, blue: 26/255)],
                                    startPoint: .top, endPoint: .bottom))
         .preferredColorScheme(.dark)
@@ -1769,13 +1781,31 @@ private struct TesMovimentoForm: View {
         guard let m = existing else { return }
         data = tesDate(m.data) ?? Date()
         contoId = m.conto_id ?? "cassa"; tipo = m.tipo
-        categoria = m.categoria ?? ""; descrizione = m.descrizione ?? ""
+        categoria = m.categoria ?? ""
         importo = String(format: "%.2f", Double(m.importo_cents) / 100)
         modalita = m.modalita ?? "contante"; struttura = m.struttura ?? "—"
+        // Se la descrizione è «camera — nome» e la camera è reale, riempi i due
+        // campi separati; altrimenti tutta la descrizione va in «nome e cognome».
+        let desc = m.descrizione ?? ""
+        let rooms = (struttura == "via-po" || struttura == "via-romagna")
+            ? Struttura.from(struttura).rooms.filter { !$0.lowercased().contains("inter") } : []
+        if let sep = desc.range(of: " — "), rooms.contains(String(desc[..<sep.lowerBound])) {
+            camera = String(desc[..<sep.lowerBound]); descrizione = String(desc[sep.upperBound...])
+        } else {
+            camera = "—"; descrizione = desc
+        }
+    }
+    // La descrizione salvata unisce camera e nome: «Stanza 1 · Queen — Mario Rossi».
+    private func descrizioneFinale() -> String? {
+        let nome = descrizione.trimmingCharacters(in: .whitespaces)
+        let cam = camera == "—" ? "" : camera
+        if !cam.isEmpty && !nome.isEmpty { return "\(cam) — \(nome)" }
+        if !cam.isEmpty { return cam }
+        return nome.isEmpty ? nil : nome
     }
     private func fields() -> [String: Any?] {
         [ "data": tesYmd.string(from: data), "conto_id": contoId, "tipo": tipo,
-          "categoria": categoria.isEmpty ? nil : categoria, "descrizione": descrizione.isEmpty ? nil : descrizione,
+          "categoria": categoria.isEmpty ? nil : categoria, "descrizione": descrizioneFinale(),
           "importo_cents": cents ?? 0, "modalita": modalita, "struttura": struttura == "—" ? nil : struttura ]
     }
     private func save() async {
