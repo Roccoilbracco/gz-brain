@@ -67,6 +67,9 @@ let BREAKFAST_COST = 350   // 3,50 € per persona/notte (solo Booking)
     // due schermate mostrerebbero due numeri diversi per la stessa voce.
     @Published var pulizie: [Pulizia] = []
     @Published var colazioni: [Colazione] = []
+    // Righe Educamp: servono per il «da incassare» netto degli ospiti di Via
+    // Romagna, che sono la fonte OTA-equivalente di quella struttura.
+    @Published var educampRighe: [EducampRiga] = []
     @Published var loading = true
     func load() async {
         loading = true
@@ -74,8 +77,16 @@ let BREAKFAST_COST = 350   // 3,50 € per persona/notte (solo Booking)
         movimenti = (try? await HubAPI.listMovimenti()) ?? []
         pulizie = (try? await HubAPI.listPulizie()) ?? []
         colazioni = (try? await HubAPI.listColazioni()) ?? []
+        educampRighe = (try? await HubAPI.listEducampRighe()) ?? []
         loading = false
     }
+    /// Netto Educamp che ci spetta in tutto (competenza, tutti i mesi).
+    var educampNettoTotale: Int { educampRighe.reduce(0) { $0 + $1.netto_noi_cents } }
+    /// Quanto degli Educamp è già entrato sui conti (movimenti categoria «educamp»).
+    var educampIncassato: Int {
+        movimenti.filter { $0.tipo == "entrata" && $0.categoria == "educamp" }.reduce(0) { $0 + $1.importo_cents }
+    }
+    var educampDaIncassare: Int { max(0, educampNettoTotale - educampIncassato) }
     func saldo(_ contoId: String) -> Int {
         var t = 0
         for m in movimenti where m.conto_id == contoId {
@@ -263,15 +274,23 @@ struct TesoreriaView: View {
             }
             HStack(spacing: 12) {
                 totCard("TOTALE CONTI (incassato, netto)", model.totaleConti, PSE.accent)
-                totCard("POTENZIALE (+ da incassare lordo)", model.totaleConti + daIncassareTot, PSE.pos)
+                totCard("POTENZIALE (+ da incassare)", model.totaleConti + daIncassareTot + model.educampDaIncassare, PSE.pos)
             }
-            Text("DA INCASSARE — prenotazioni confermate, soldi non ancora incassati · IMPORTI LORDI OTA").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.warn).padding(.top, 6)
+            Text("DA INCASSARE — prenotazioni confermate, soldi non ancora incassati · OTA LORDE · EDUCAMP NETTO").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.warn).padding(.top, 6)
             HStack(spacing: 12) {
                 totCard("BOOKING (lordo)", daIncassareSource(["booking"]), PSE.warn)
                 totCard("AIRBNB", daIncassareSource(["airbnb"]), PSE.warn)
                 totCard("DIRETTE", daIncassareDirette, PSE.warn)
-                totCard("TOTALE (lordo)", daIncassareTot, PSE.pos)
+                totCard("EDUCAMP (netto)", model.educampDaIncassare, PSE.warn)
             }
+            HStack(spacing: 12) {
+                totCard("TOTALE DA INCASSARE", daIncassareTot + model.educampDaIncassare, PSE.pos)
+                Color.clear.frame(maxWidth: .infinity)
+                Color.clear.frame(maxWidth: .infinity)
+                Color.clear.frame(maxWidth: .infinity)
+            }
+            Text("Educamp (Via Romagna): netto per noi \(eurc(model.educampNettoTotale)) in tutto, di cui \(eurc(model.educampIncassato)) già in cassa/beeper → \(eurc(model.educampDaIncassare)) ancora da incassare. Il dettaglio mese per mese è nella scheda Educamp.")
+                .font(.system(size: 10.5)).foregroundStyle(PSE.faint).padding(.top, 2)
             Text("PER CASA — entrate, spese e utile registrati").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint).padding(.top, 6)
             HStack(spacing: 12) {
                 casaCard(.viaPo)
