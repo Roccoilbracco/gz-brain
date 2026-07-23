@@ -223,22 +223,28 @@ struct CamerePSEDashboard: View {
     private func matchesStruttura(_ b: Prenotazione) -> Bool {
         strutturaFilter == nil || b.struttura == strutturaFilter!.rawValue
     }
+    // Prenotazioni attive con le date già convertite: costruita una volta in
+    // load(), evita di riparsare le stringhe per ogni card della striscia
+    // calendario (52 card × tutte le prenotazioni a ogni render).
+    @State private var dayCache: [Assegnata] = []
+    private func rebuildDayCache() {
+        dayCache = items.compactMap { b in
+            guard b.status != "cancellata", let ci = day(b.checkin), let co = day(b.checkout) else { return nil }
+            return Assegnata(b: b, ci: ci, co: co)
+        }
+    }
     // camere occupate quella notte (checkin <= d < checkout)
     private func occupancy(_ d: Date) -> Int {
-        items.filter { b in
-            guard b.status != "cancellata", matchesStruttura(b), let ci = day(b.checkin), let co = day(b.checkout) else { return false }
-            return ci <= d && d < co
-        }.count
+        dayCache.filter { matchesStruttura($0.b) && $0.ci <= d && d < $0.co }.count
     }
     private var capacity: Int {
         switch strutturaFilter { case .viaPo: return 4; case .viaRomagna: return 5; case nil: return 9 }
     }
     // prenotazioni rilevanti per il giorno (arrivo, in casa, partenza)
     private func bookingsOn(_ d: Date) -> [Prenotazione] {
-        items.filter { b in
-            guard b.status != "cancellata", matchesStruttura(b), let ci = day(b.checkin), let co = day(b.checkout) else { return false }
-            return ci <= d && d <= co
-        }.sorted { ($0.checkin ?? "") < ($1.checkin ?? "") }
+        dayCache.filter { matchesStruttura($0.b) && $0.ci <= d && d <= $0.co }
+            .sorted { ($0.b.checkin ?? "") < ($1.b.checkin ?? "") }
+            .map { $0.b }
     }
     private func role(_ b: Prenotazione, _ d: Date) -> (String, Double) {
         if day(b.checkin) == d { return ("Arrivo", 150) }
@@ -255,45 +261,56 @@ struct CamerePSEDashboard: View {
     }
     private func roomsFor(_ s: Struttura) -> [String] { s.rooms.filter { !$0.lowercased().contains("inter") } }
     private func firstName(_ n: String) -> String { n.split(separator: " ").first.map(String.init) ?? n }
+    // Prenotazione assegnata a una camera, con le date già convertite una volta
+    // sola: così le celle non riparsano le stringhe a ogni confronto.
+    private struct Assegnata { let b: Prenotazione; let ci: Date; let co: Date }
+    // Cache dell'assegnazione camere: struttura → indice camera → prenotazioni.
+    // Ricalcolata solo quando cambiano i dati (in load), NON a ogni cella: prima
+    // era un computed var richiamato ~1000 volte per render, con parsing di date
+    // ogni volta — la causa principale della lentezza del planning.
+    @State private var assignCache: [String: [Int: [Assegnata]]] = [:]
+
     // Assegna ogni prenotazione attiva a una camera del reticolo, per struttura:
     //  • camera che coincide con una camera specifica → quella camera
     //  • camera "intera/intero" → tutte le camere
     //  • camera generica o mancante (es. richiesta dal sito) → prima camera libera per quelle date (greedy)
-    // Ritorna, per struttura, la lista di prenotazioni assegnate a ciascun indice camera.
-    private var gridAssignment: [String: [Int: [Prenotazione]]] {
-        var result: [String: [Int: [Prenotazione]]] = [:]
+    private func rebuildAssignment() {
+        var result: [String: [Int: [Assegnata]]] = [:]
         for s in Struttura.allCases {
             let rooms = roomsFor(s)
             var occupied: [[(Date, Date)]] = Array(repeating: [], count: rooms.count)
-            var byRoom: [Int: [Prenotazione]] = [:]
+            var byRoom: [Int: [Assegnata]] = [:]
             func overlaps(_ a: (Date, Date), _ ci: Date, _ co: Date) -> Bool { ci < a.1 && a.0 < co }
+            // date convertite una volta qui, poi mai più
             let bs = items
-                .filter { $0.status != "cancellata" && $0.struttura == s.rawValue && day($0.checkin) != nil && day($0.checkout) != nil }
-                .sorted { (day($0.checkin) ?? .distantPast) < (day($1.checkin) ?? .distantPast) }
-            for b in bs {
-                guard let ci = day(b.checkin), let co = day(b.checkout), ci < co else { continue }
-                let cam = (b.camera ?? "")
+                .filter { $0.status != "cancellata" && $0.struttura == s.rawValue }
+                .compactMap { b -> Assegnata? in
+                    guard let ci = day(b.checkin), let co = day(b.checkout), ci < co else { return nil }
+                    return Assegnata(b: b, ci: ci, co: co)
+                }
+                .sorted { $0.ci < $1.ci }
+            for a in bs {
+                let cam = (a.b.camera ?? "")
                 let exact = rooms.firstIndex(of: cam)
                 if cam.lowercased().contains("inter") {                       // intera struttura
-                    for i in rooms.indices { occupied[i].append((ci, co)); byRoom[i, default: []].append(b) }
-                } else if let e = exact, !occupied[e].contains(where: { overlaps($0, ci, co) }) {
-                    occupied[e].append((ci, co)); byRoom[e, default: []].append(b)          // camera esatta se libera
-                } else if let free = rooms.indices.first(where: { i in !occupied[i].contains { overlaps($0, ci, co) } }) {
-                    occupied[free].append((ci, co)); byRoom[free, default: []].append(b)     // altrimenti prima libera
+                    for i in rooms.indices { occupied[i].append((a.ci, a.co)); byRoom[i, default: []].append(a) }
+                } else if let e = exact, !occupied[e].contains(where: { overlaps($0, a.ci, a.co) }) {
+                    occupied[e].append((a.ci, a.co)); byRoom[e, default: []].append(a)          // camera esatta se libera
+                } else if let free = rooms.indices.first(where: { i in !occupied[i].contains { overlaps($0, a.ci, a.co) } }) {
+                    occupied[free].append((a.ci, a.co)); byRoom[free, default: []].append(a)     // altrimenti prima libera
                 } else {
-                    byRoom[0, default: []].append(b)                          // tutte occupate: overbooking
+                    byRoom[0, default: []].append(a)                          // tutte occupate: overbooking
                 }
             }
             result[s.rawValue] = byRoom
         }
-        return result
+        assignCache = result
     }
+    // Indice camera nel reticolo, precalcolato per non rifare firstIndex a ogni cella.
+    private func roomIndex(_ s: Struttura, _ room: String) -> Int? { roomsFor(s).firstIndex(of: room) }
     private func bookingFor(_ s: Struttura, _ room: String, _ d: Date) -> Prenotazione? {
-        guard let idx = roomsFor(s).firstIndex(of: room) else { return nil }
-        return (gridAssignment[s.rawValue]?[idx] ?? []).first { b in
-            guard let ci = day(b.checkin), let co = day(b.checkout) else { return false }
-            return ci <= d && d < co
-        }
+        guard let idx = roomIndex(s, room) else { return nil }
+        return (assignCache[s.rawValue]?[idx] ?? []).first { $0.ci <= d && d < $0.co }?.b
     }
     private func freeInGrid(_ s: Struttura, _ d: Date) -> Int { roomsFor(s).filter { bookingFor(s, $0, d) == nil }.count }
     private func isToday(_ s: String?) -> Bool { s.map { String($0.prefix(10)) } == ymdBk.string(from: Date()) }
@@ -808,6 +825,10 @@ struct CamerePSEDashboard: View {
         loading = true; defer { loading = false }
         do { items = try await HubAPI.listPrenotazioni() } catch { items = [] }
         educampOspiti = (try? await HubAPI.listEducampOspiti()) ?? []
+        // Date convertite e assegnazione camere: calcolate una volta qui, non a
+        // ogni cella. Idem la mappa di occupazione per la striscia calendario.
+        rebuildAssignment()
+        rebuildDayCache()
     }
     /// Dopo ogni modifica a una prenotazione: allinea pulizie, colazioni e
     /// incassi (sync lato DB), poi ricarica. Così conti, servizi e planning
