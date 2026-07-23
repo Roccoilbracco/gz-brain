@@ -198,6 +198,7 @@ enum RiepVoce: Identifiable {
     case nostroReale
     case potenziale
     case daIncassareSrc(String, [String])    // titolo, fonti
+    case daIncassareConto(String)            // id conto → residuo di quel conto
     case daIncassareEducamp
     case daIncassareTotale
     case casa(Struttura)
@@ -215,6 +216,7 @@ enum RiepVoce: Identifiable {
         case .nostroReale: return "nostro"
         case .potenziale: return "pot"
         case .daIncassareSrc(let t, _): return "inc-\(t)"
+        case .daIncassareConto(let c): return "inc-conto-\(c)"
         case .daIncassareEducamp: return "inc-edu"
         case .daIncassareTotale: return "inc-tot"
         case .casa(let s): return "casa-\(s.rawValue)"
@@ -311,10 +313,20 @@ struct TesoreriaView: View {
         let s = b.source ?? ""
         return (s == "booking" || s == "airbnb") ? "massimo" : "cassa"
     }
+    /// Residuo ancora da incassare di una prenotazione. Le OTA (Booking/Airbnb)
+    /// si considerano incassate una volta passato il checkout — Booking paga a
+    /// soggiorno concluso — quindi escono da sole dal «da incassare» quando la
+    /// data passa, senza dover aggiornare paid_cents a mano. Dirette ed Educamp
+    /// seguono invece il pagato reale: il contante non arriva col checkout.
+    private func residuoIncassare(_ b: Prenotazione) -> Int {
+        let src = b.source ?? ""
+        if (src == "booking" || src == "airbnb"), let co = b.checkout, co <= oggiStr { return 0 }
+        return max(0, b.amount_cents - b.paid_cents)
+    }
     private func daIncassare(_ contoId: String) -> Int {
         var t = 0
         for b in prenFiltrate where contoDest(b) == contoId {
-            t += max(0, b.amount_cents - b.paid_cents)
+            t += residuoIncassare(b)
         }
         return t
     }
@@ -324,20 +336,27 @@ struct TesoreriaView: View {
         for b in prenFiltrate {
             if let s = movStrut, b.struttura != s.rawValue { continue }
             if periodo != "tutto" && !(b.checkin ?? "").hasPrefix(periodo) { continue }
-            t += max(0, b.amount_cents - b.paid_cents)
+            t += residuoIncassare(b)
         }
         return t
     }
+    // Somma da-incassare di OTA + dirette, MA senza l'Educamp: nel «potenziale»
+    // e nel «totale da incassare» l'Educamp è aggiunto a parte come netto
+    // (educampDaIncassare, dal foglio). Le prenotazioni source "educamp" stanno
+    // sui conti cassa/beeper, quindi sommarle qui le conterebbe due volte.
+    // (Le card per-conto invece le includono: quei soldi arrivano davvero lì.)
     private var daIncassareTot: Int {
         var t = 0
-        for c in model.conti { t += daIncassare(c.id) }
+        for b in prenFiltrate where (b.source ?? "") != "educamp" {
+            t += residuoIncassare(b)
+        }
         return t
     }
     // da incassare per canale/fonte
     private func daIncassareSource(_ srcs: [String]) -> Int {
         var t = 0
         for b in prenFiltrate where srcs.contains(b.source ?? "") {
-            t += max(0, b.amount_cents - b.paid_cents)
+            t += residuoIncassare(b)
         }
         return t
     }
@@ -418,7 +437,7 @@ struct TesoreriaView: View {
                       importo: m.importo_cents, positivo: m.tipo == "entrata")
     }
     private func rigaDaPren(_ b: Prenotazione) -> DettaglioRiga {
-        let res = max(0, b.amount_cents - b.paid_cents)
+        let res = residuoIncassare(b)
         return DettaglioRiga(id: b.id, data: "\(tesPrettyStr(b.checkin))",
                              descrizione: b.guest_name + (b.camera.map { " · \($0)" } ?? ""),
                              extra: (b.source ?? "—").capitalized + " · " + casaLabel(b.struttura),
@@ -452,11 +471,20 @@ struct TesoreriaView: View {
                     "Quanto ci sarebbe sui conti incassando tutte le prenotazioni confermate. È un tetto: le commissioni OTA non sono ancora tolte.",
                     righe, "POTENZIALE", model.totaleConti + daIncassareTot + model.educampDaIncassare)
         case .daIncassareSrc(let titolo, let fonti):
-            let pren = prenFiltrate.filter { fonti.contains($0.source ?? "") && max(0, $0.amount_cents - $0.paid_cents) > 0 }
+            let pren = prenFiltrate.filter { fonti.contains($0.source ?? "") && residuoIncassare($0) > 0 }
                 .sorted { ($0.checkin ?? "") < ($1.checkin ?? "") }
             return ("\(titolo.uppercased()) — DA INCASSARE",
                     "Prenotazioni confermate con soldi non ancora incassati. Importi lordi (quello che il cliente paga all'OTA).",
-                    pren.map { rigaDaPren($0) }, "TOTALE", pren.reduce(0) { $0 + max(0, $1.amount_cents - $1.paid_cents) })
+                    pren.map { rigaDaPren($0) }, "TOTALE", pren.reduce(0) { $0 + residuoIncassare($1) })
+        case .daIncassareConto(let id):
+            // prenotazioni confermate i cui soldi entreranno su QUESTO conto ma non
+            // ancora incassate: è la parte «che deve arrivare» del conto.
+            let pren = prenFiltrate.filter { contoDest($0) == id && residuoIncassare($0) > 0 }
+                .sorted { ($0.checkin ?? "") < ($1.checkin ?? "") }
+            let nome = model.conti.first { $0.id == id }?.nome.uppercased() ?? contoNomeBreve(id).uppercased()
+            return ("\(nome) — DA INCASSARE",
+                    "Prenotazioni confermate i cui incassi finiranno su questo conto ma non sono ancora entrati. Il saldo mostra i soldi già in cassa; questo è quanto deve ancora arrivare.",
+                    pren.map { rigaDaPren($0) }, "TOTALE DA INCASSARE", pren.reduce(0) { $0 + residuoIncassare($1) })
         case .daIncassareEducamp:
             // ospiti Educamp con residuo da versare (per mese, dal foglio)
             let righe = model.educampRighe.filter { $0.totale_ospite_cents > 0 }
@@ -1004,10 +1032,10 @@ struct TesoreriaView: View {
     /// il cliente, il netto quello che arriva dopo la commissione Booking.
     private func daIncassareRighe(_ s: Struttura) -> [RigaOTA] {
         prenFiltrate
-            .filter { $0.struttura == s.rawValue && max(0, $0.amount_cents - $0.paid_cents) > 0 }
+            .filter { $0.struttura == s.rawValue && residuoIncassare($0) > 0 }
             .sorted { ($0.checkin ?? "") < ($1.checkin ?? "") }
             .map { b in
-                let lordo = max(0, b.amount_cents - b.paid_cents)
+                let lordo = residuoIncassare(b)
                 let src = b.source ?? "diretto"
                 let comm = src == "booking" ? Int((Double(lordo) * 0.165).rounded()) : 0
                 return RigaOTA(id: b.id,
@@ -1248,11 +1276,19 @@ struct TesoreriaView: View {
             // iniziale e chiude sul finale, come un vero estratto conto.
             HStack(spacing: 12) {
                 if periodo == "tutto" {
-                    testoCard(perCasa ? "GENERATO DA \(movStrut!.label.uppercased())" : "SALDO \(nome)",
+                    testoCard(perCasa ? "GENERATO DA \(movStrut!.label.uppercased())" : "SALDO \(nome)\(perCasa ? "" : " (già entrato)")",
                               eurc(totE - totU), (totE - totU) < 0 ? PSE.neg : PSE.ink)
                     clic(.movimenti("Entrate", entrate, totE)) { totCard("ENTRATE", totE, PSE.pos) }
                     clic(.movimenti("Uscite", uscite, totU)) { totCard("USCITE", totU, PSE.neg) }
-                    testoCard("N. MOVIMENTI", "\(mov.count)", PSE.accent)
+                    // Per un singolo conto: quarta card = soldi che devono ancora
+                    // arrivare (prenotazioni confermate non incassate su quel conto).
+                    // Su «Tutti i conti» o col filtro casa resta il conteggio movimenti.
+                    let incConto = (!tuttiIConti && !perCasa) ? daIncassare(contoSel) : 0
+                    if incConto > 0 {
+                        clic(.daIncassareConto(contoSel)) { totCard("DA INCASSARE (in arrivo)", incConto, PSE.warn) }
+                    } else {
+                        testoCard("N. MOVIMENTI", "\(mov.count)", PSE.accent)
+                    }
                 } else {
                     totCard(perCasa ? "GENERATO PRIMA DEL PERIODO" : "SALDO INIZIALE", iniz, iniz < 0 ? PSE.neg : PSE.dim)
                     clic(.movimenti("Entrate", entrate, totE)) { totCard("ENTRATE", totE, PSE.pos) }
@@ -1318,10 +1354,10 @@ struct TesoreriaView: View {
         prenFiltrate
             .filter { contoDest($0) == contoId && fonti.contains($0.source ?? "")
                       && (movStrut == nil || $0.struttura == movStrut!.rawValue)
-                      && max(0, $0.amount_cents - $0.paid_cents) > 0 }
+                      && residuoIncassare($0) > 0 }
             .sorted { ($0.checkin ?? "") < ($1.checkin ?? "") }
             .map { b in
-                let lordo = max(0, b.amount_cents - b.paid_cents)
+                let lordo = residuoIncassare(b)
                 let comm = (b.source ?? "") == "booking" ? Int((Double(lordo) * 0.165).rounded()) : 0
                 return RigaOTA(id: b.id,
                                periodo: "\(tesPrettyStr(b.checkin))–\(tesPrettyStr(b.checkout))",
@@ -1334,9 +1370,9 @@ struct TesoreriaView: View {
         var map: [String: [RigaOTA]] = [:]
         for b in prenFiltrate where contoDest(b) == contoId && (b.source ?? "") == "booking"
                                     && (movStrut == nil || b.struttura == movStrut!.rawValue)
-                                    && max(0, b.amount_cents - b.paid_cents) > 0 {
+                                    && residuoIncassare(b) > 0 {
             let k = String((b.checkin ?? "").prefix(7))
-            let lordo = max(0, b.amount_cents - b.paid_cents)
+            let lordo = residuoIncassare(b)
             map[k, default: []].append(RigaOTA(
                 id: b.id, periodo: "\(tesPrettyStr(b.checkin))–\(tesPrettyStr(b.checkout))",
                 ospite: b.guest_name + (b.camera.map { " (\($0))" } ?? ""),
