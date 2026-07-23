@@ -80,13 +80,19 @@ let BREAKFAST_COST = 350   // 3,50 € per persona/notte (solo Booking)
         educampRighe = (try? await HubAPI.listEducampRighe()) ?? []
         loading = false
     }
-    /// Netto Educamp che ci spetta in tutto (competenza, tutti i mesi).
+    /// Quello che gli ospiti Educamp pagano in tutto (affitto + utenze): è la
+    /// base giusta per il «da incassare», perché è ciò che entra davvero in cassa.
+    var educampTotaleOspite: Int { educampRighe.reduce(0) { $0 + $1.totale_ospite_cents } }
+    /// Netto che resta a noi dopo la commissione dell'intermediario (il nostro
+    /// utile Educamp), non ciò che si incassa.
     var educampNettoTotale: Int { educampRighe.reduce(0) { $0 + $1.netto_noi_cents } }
     /// Quanto degli Educamp è già entrato sui conti (movimenti categoria «educamp»).
     var educampIncassato: Int {
         movimenti.filter { $0.tipo == "entrata" && $0.categoria == "educamp" }.reduce(0) { $0 + $1.importo_cents }
     }
-    var educampDaIncassare: Int { max(0, educampNettoTotale - educampIncassato) }
+    /// Da incassare = quello che gli ospiti devono ancora versare (stessa base
+    /// dell'incassato), non netto − lordo come prima.
+    var educampDaIncassare: Int { max(0, educampTotaleOspite - educampIncassato) }
     func saldo(_ contoId: String) -> Int {
         var t = 0
         for m in movimenti where m.conto_id == contoId {
@@ -307,7 +313,7 @@ struct TesoreriaView: View {
                 Color.clear.frame(maxWidth: .infinity)
                 Color.clear.frame(maxWidth: .infinity)
             }
-            Text("Educamp (Via Romagna): netto per noi \(eurc(model.educampNettoTotale)) in tutto, di cui \(eurc(model.educampIncassato)) già in cassa/beeper → \(eurc(model.educampDaIncassare)) ancora da incassare. Il dettaglio mese per mese è nella scheda Educamp.")
+            Text("Educamp (Via Romagna): gli ospiti pagano \(eurc(model.educampTotaleOspite)) in tutto, di cui \(eurc(model.educampIncassato)) già in cassa/beeper → \(eurc(model.educampDaIncassare)) ancora da incassare. Di quel totale, il netto che resta a noi (dopo la commissione) è \(eurc(model.educampNettoTotale)). Dettaglio mese per mese nella scheda Educamp.")
                 .font(.system(size: 10.5)).foregroundStyle(PSE.faint).padding(.top, 2)
             Text("PER CASA — entrate, spese e utile registrati").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint).padding(.top, 6)
             HStack(spacing: 12) {
