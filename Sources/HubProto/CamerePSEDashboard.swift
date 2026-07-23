@@ -820,31 +820,15 @@ struct CamerePSEDashboard: View {
         if let i = items.firstIndex(where: { $0.id == b.id }) { items[i].status = s.rawValue }
         if var sel = selected, sel.id == b.id { sel.status = s.rawValue; selected = sel }
         try? await HubAPI.updatePrenotazione(id: b.id, fields: ["status": s.rawValue])
-        if s == .cancellata { try? await HubAPI.deleteMovimentoByExtKey("colazione:pren:\(b.id)") }
         await syncAndReload()
     }
     private func setPaid(_ b: Prenotazione, _ cents: Int) async {
         if let i = items.firstIndex(where: { $0.id == b.id }) { items[i].paid_cents = cents }
         if var sel = selected, sel.id == b.id { sel.paid_cents = cents; selected = sel }
         try? await HubAPI.updatePrenotazione(id: b.id, fields: ["paid_cents": cents])
-        await syncColazione(b, paidNow: cents)
+        // Colazioni e pulizie ora le gestisce sync_camere_pse() (tabelle + uscite
+        // a partire da agosto); il vecchio syncColazione qui creava un doppione.
         await syncAndReload()
-    }
-    // la colazione al bar (solo Booking) diventa un costo quando la prenotazione è incassata
-    private func syncColazione(_ b: Prenotazione, paidNow: Int) async {
-        let key = "colazione:pren:\(b.id)"
-        try? await HubAPI.deleteMovimentoByExtKey(key)
-        guard (b.source ?? "") == "booking" else { return }
-        let g = max(1, b.guests ?? 1)
-        let n = nights(b.checkin, b.checkout) ?? 0
-        guard paidNow >= b.amount_cents, b.amount_cents > 0, n > 0 else { return }
-        let fields: [String: Any?] = [
-            "ext_key": key, "conto_id": "cassa", "data": String((b.checkin ?? "").prefix(10)),
-            "tipo": "uscita", "categoria": "colazioni", "modalita": "contante", "struttura": "via-po",
-            "descrizione": "Colazione bar — \(b.guest_name) (\(n)n × \(g)p)",
-            "importo_cents": 350 * g * n,
-        ]
-        try? await HubAPI.createTesMovimento(fields)
     }
     private func remove(_ b: Prenotazione) async {
         try? await HubAPI.deletePrenotazione(id: b.id)
@@ -1004,7 +988,9 @@ private struct BookingForm: View {
     @State private var amount = ""; @State private var paid = ""
     @State private var status = BookingStatus.in_attesa
     @State private var source = "sito"
-    @State private var contoId = "beeper"
+    // Default: diretta in contante → Cassa. Bonifico → Beeper (lo scegli).
+    // OTA (Booking/Airbnb) → Massimo, impostato in automatico dalla fonte.
+    @State private var contoId = "cassa"
     @State private var notes = ""
     @State private var saving = false
 
@@ -1030,8 +1016,8 @@ private struct BookingForm: View {
                 }
                 HStack(spacing: 12) {
                     pick("Stato", BookingStatus.allCases.map { ($0.rawValue, $0.label) }, status.rawValue) { status = .from($0) }
-                    pick("Fonte", bookingSources.map { ($0, $0.capitalized) }, source) { source = $0; contoId = ($0 == "booking" || $0 == "airbnb") ? "massimo" : contoId }
-                    pick("Conto (soldi)", [("cassa", "Cassa contante"), ("beeper", "Beeper"), ("massimo", "Massimo")], contoId) { contoId = $0 }
+                    pick("Fonte", bookingSources.map { ($0, $0.capitalized) }, source) { source = $0; contoId = ($0 == "booking" || $0 == "airbnb") ? "massimo" : (contoId == "massimo" ? "cassa" : contoId) }
+                    pick("Conto (soldi)", [("cassa", "Cassa (contante)"), ("beeper", "Beeper (bonifico)"), ("massimo", "Massimo (OTA)")], contoId) { contoId = $0 }
                 }
                 HoloField(label: "Note", text: $notes)
 
@@ -1066,7 +1052,7 @@ private struct BookingForm: View {
         if let c = e.checkout.flatMap({ ymdBk.date(from: String($0.prefix(10))) }) { checkout = c }
         guests = e.guests.map(String.init) ?? ""
         amount = String(e.amount_cents / 100); paid = String(e.paid_cents / 100)
-        status = .from(e.status); source = e.source ?? "sito"; contoId = e.conto_id ?? "beeper"; notes = e.notes ?? ""
+        status = .from(e.status); source = e.source ?? "sito"; contoId = e.conto_id ?? "cassa"; notes = e.notes ?? ""
     }
     private func save() async {
         saving = true

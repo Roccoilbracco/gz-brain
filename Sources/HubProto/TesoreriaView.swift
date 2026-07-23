@@ -172,11 +172,12 @@ struct TesoreriaView: View {
         (model.colazioni.reduce(0) { $0 + $1.costo_servito_cents },
          model.colazioni.reduce(0) { $0 + $1.costo_totale_cents })
     }
-    // conto di destinazione dei soldi di una prenotazione (OTA→Massimo, dirette→scelto/Beeper)
+    // Conto di destinazione dei soldi: OTA → Massimo, dirette → il conto scelto,
+    // e se non è stato scelto, Cassa (le dirette sono in contante salvo bonifico).
     private func contoDest(_ b: Prenotazione) -> String {
         if let c = b.conto_id, !c.isEmpty { return c }
         let s = b.source ?? ""
-        return (s == "booking" || s == "airbnb") ? "massimo" : "beeper"
+        return (s == "booking" || s == "airbnb") ? "massimo" : "cassa"
     }
     private func daIncassare(_ contoId: String) -> Int {
         var t = 0
