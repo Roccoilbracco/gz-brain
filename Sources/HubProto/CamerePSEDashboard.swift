@@ -808,13 +808,17 @@ struct CamerePSEDashboard: View {
             Rectangle().fill(educampFill.opacity(0.4)).frame(width: dayW, height: rowH)
                 .overlay(Rectangle().fill(gLine).frame(width: 1), alignment: .trailing)
         case .educampGuest(let id):
-            // barra piena nei giorni del soggiorno; niente nome (è già a sinistra)
+            // barra piena nei giorni del soggiorno, col nome in ogni cella come
+            // le camere di Via Po: così si legge chi c'è anche scorrendo.
+            let o = educampBy(id)
             let dentro: Bool = {
-                guard let o = educampBy(id), let ci = day(o.checkin), let co = day(o.checkout) else { return false }
+                guard let o, let ci = day(o.checkin), let co = day(o.checkout) else { return false }
                 return ci <= d && d < co
             }()
-            Rectangle().fill(dentro ? educampFill : Color.clear)
+            Text(dentro ? (o.map { firstName($0.ospite) } ?? "") : "")
+                .font(.system(size: 8.5, weight: .medium)).foregroundStyle(PSE.text).lineLimit(1).minimumScaleFactor(0.7)
                 .frame(width: dayW, height: rowH)
+                .background(dentro ? educampFill : Color.clear)
                 .overlay(Rectangle().fill(gLine).frame(width: 1), alignment: .trailing)
                 .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
         }
