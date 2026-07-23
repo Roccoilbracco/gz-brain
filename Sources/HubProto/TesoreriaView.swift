@@ -201,6 +201,13 @@ enum RiepVoce: Identifiable {
     case daIncassareEducamp
     case daIncassareTotale
     case casa(Struttura)
+    // Conto economico
+    case ricavi
+    case costiOperativi
+    case debiti
+    case cauzioniApporti
+    // Movimenti / Conti: un elenco di movimenti già filtrato, con titolo
+    case movimenti(String, [TesMovimento], Int)
     var id: String {
         switch self {
         case .conto(let c): return "conto-\(c)"
@@ -211,6 +218,11 @@ enum RiepVoce: Identifiable {
         case .daIncassareEducamp: return "inc-edu"
         case .daIncassareTotale: return "inc-tot"
         case .casa(let s): return "casa-\(s.rawValue)"
+        case .ricavi: return "ricavi"
+        case .costiOperativi: return "costiop"
+        case .debiti: return "debiti"
+        case .cauzioniApporti: return "cauzapp"
+        case .movimenti(let t, _, _): return "mov-\(t)"
         }
     }
 }
@@ -469,6 +481,24 @@ struct TesoreriaView: View {
             return ("\(s.label.uppercased()) — MOVIMENTI",
                     "Entrate \(eurc(st.inc)) · spese \(eurc(st.spese)) · utile \(eurc(st.inc - st.spese)).",
                     mov.map { rigaDaMov($0) }, "UTILE", st.inc - st.spese)
+        case .ricavi:
+            let mov = movStrutFiltrati.filter { $0.tipo == "entrata" && !isEntrataNonRicavo($0.categoria) }.sorted { $0.data > $1.data }
+            return ("RICAVI — \(periodoLabel.uppercased())", "Entrate da attività (esclusi cauzioni e apporti soci).",
+                    mov.map { rigaDaMov($0) }, "TOTALE RICAVI", totEntrate)
+        case .costiOperativi:
+            let mov = movStrutFiltrati.filter { $0.tipo == "uscita" && !isDebito($0.categoria) }.sorted { $0.data > $1.data }
+            return ("COSTI OPERATIVI — \(periodoLabel.uppercased())", "Costi di gestione (senza debiti/finanziamenti).",
+                    mov.map { rigaDaMov($0) }, "TOTALE COSTI", totCostiOperativi)
+        case .debiti:
+            let mov = movStrutFiltrati.filter { $0.tipo == "uscita" && isDebito($0.categoria) }.sorted { $0.data > $1.data }
+            return ("DEBITI / FINANZIAMENTI", "Rimborsi (debito vecchio, mutuo, rata): fuori dal margine operativo.",
+                    mov.map { rigaDaMov($0) }, "TOTALE DEBITI", totDebiti)
+        case .cauzioniApporti:
+            let mov = movStrutFiltrati.filter { $0.tipo == "entrata" && isEntrataNonRicavo($0.categoria) }.sorted { $0.data > $1.data }
+            return ("CAUZIONI + APPORTI SOCI", "Entrate che non sono ricavi: depositi da restituire e capitale dei soci.",
+                    mov.map { rigaDaMov($0) }, "TOTALE", totEntrateFinanziarie)
+        case .movimenti(let titolo, let mov, let tot):
+            return (titolo.uppercased(), "", mov.sorted { $0.data > $1.data }.map { rigaDaMov($0) }, "TOTALE", tot)
         }
     }
     private func contoNotaFor(_ id: String) -> String {
@@ -526,9 +556,10 @@ struct TesoreriaView: View {
             }
             Text("SERVIZI — clicca per il dettaglio").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint).padding(.top, 6)
             HStack(spacing: 12) {
-                servCard("PULIZIA — FATTE", puliziaFatte, "sparkles", PSE.dim) { servizioSheet = .pulizie }
+                servCard("PULIZIA — FATTE", puliziaFatte, "sparkles", PSE.pos) { servizioSheet = .pulizie }
                 servCard("PULIZIA — PREVISTE", puliziePreviste, "sparkles", PSE.warn) { servizioSheet = .pulizie }
-                servCard("COLAZIONI BOOKING", colazioni.totale, "cup.and.saucer.fill", PSE.accent) { servizioSheet = .colazioni }
+                servCard("COLAZIONI — SERVITE", colazioni.servite, "cup.and.saucer.fill", PSE.pos) { servizioSheet = .colazioni }
+                servCard("COLAZIONI — PREVISTE", colazioni.totale - colazioni.servite, "cup.and.saucer.fill", PSE.warn) { servizioSheet = .colazioni }
             }
             Text("I saldi dei conti sono NETTI (su Massimo la commissione Booking è già registrata come uscita); il «da incassare» invece è LORDO, quello che il cliente paga all'OTA. Su Booking arriverà circa il 16,5% in meno — oggi ≈ \(eurc(commissioneAttesa)) — mentre Airbnb e le dirette non hanno commissione. Perciò il «potenziale» è un tetto, non l'incasso atteso.")
                 .font(.system(size: 10.5)).foregroundStyle(PSE.faint).padding(.top, 2)
@@ -584,9 +615,9 @@ struct TesoreriaView: View {
     private var depositiView: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
-                totCard("TOTALE SUI CONTI", model.totaleConti, PSE.accent)
-                totCard("DEPOSITI CAUZIONALI (da restituire)", depositiDaRestituire, PSE.warn)
-                totCard("NOSTRO REALE (netto depositi)", nostroReale, nostroReale < 0 ? PSE.neg : PSE.pos)
+                clic(.totaleConti) { totCard("TOTALE SUI CONTI", model.totaleConti, PSE.accent) }
+                clic(.movimenti("Depositi cauzionali", depositiMov, depositiDaRestituire)) { totCard("DEPOSITI CAUZIONALI (da restituire)", depositiDaRestituire, PSE.warn) }
+                clic(.nostroReale) { totCard("NOSTRO REALE (netto depositi)", nostroReale, nostroReale < 0 ? PSE.neg : PSE.pos) }
             }
             Text("I depositi cauzionali sono soldi degli inquilini che dovremo restituire: stanno sui conti (per lo più Beeper) ma non sono nostri. «Nostro reale» = totale conti − depositi. Quando restituisci una cauzione, registra un'uscita categoria «deposito»: scende da sola.")
                 .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
@@ -686,10 +717,10 @@ struct TesoreriaView: View {
     private var movimentiList: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
-                totCard("ENTRATE", movEntrate, PSE.pos)
-                totCard("USCITE", movUscite, PSE.neg)
-                totCard("SALDO PERIODO", movEntrate - movUscite, PSE.accent)
-                totCard("DA INCASSARE (lordo)", daIncassarePeriodo, PSE.warn)
+                clic(.movimenti("Entrate del periodo", visibiliMov.filter { $0.tipo == "entrata" }, movEntrate)) { totCard("ENTRATE", movEntrate, PSE.pos) }
+                clic(.movimenti("Uscite del periodo", visibiliMov.filter { $0.tipo == "uscita" }, movUscite)) { totCard("USCITE", movUscite, PSE.neg) }
+                clic(.movimenti("Movimenti del periodo", visibiliMov, movEntrate - movUscite)) { totCard("SALDO PERIODO", movEntrate - movUscite, PSE.accent) }
+                clic(.daIncassareTotale) { totCard("DA INCASSARE (lordo)", daIncassarePeriodo, PSE.warn) }
             }
             VStack(spacing: 0) {
                 if visibiliMov.isEmpty {
@@ -864,16 +895,16 @@ struct TesoreriaView: View {
             let margineOp = totEntrate > 0 ? Int((Double(utileOp) / Double(totEntrate) * 100).rounded()) : 0
             // Gestione: entrate vs costi operativi (senza debiti)
             HStack(spacing: 12) {
-                totCard("ENTRATE", totEntrate, PSE.pos)
-                totCard("COSTI OPERATIVI", totCostiOperativi, PSE.neg)
+                clic(.ricavi) { totCard("ENTRATE", totEntrate, PSE.pos) }
+                clic(.costiOperativi) { totCard("COSTI OPERATIVI", totCostiOperativi, PSE.neg) }
                 totCard("UTILE OPERATIVO", utileOp, utileOp >= 0 ? PSE.pos : PSE.neg)
                 testoCard("MARGINE OP.", totEntrate > 0 ? "\(margineOp)%" : "—", PSE.accent)
             }
             // Sotto la gestione: debiti/finanziamenti e utile netto reale
             if totDebiti > 0 || totEntrateFinanziarie > 0 {
                 HStack(spacing: 12) {
-                    totCard("DEBITI / FINANZIAMENTI", totDebiti, PSE.warn)
-                    totCard("CAUZIONI + APPORTI (fuori ricavi)", totEntrateFinanziarie, PSE.dim)
+                    clic(.debiti) { totCard("DEBITI / FINANZIAMENTI", totDebiti, PSE.warn) }
+                    clic(.cauzioniApporti) { totCard("CAUZIONI + APPORTI (fuori ricavi)", totEntrateFinanziarie, PSE.dim) }
                     totCard("UTILE NETTO (dopo debiti)", utileNetto, utileNetto >= 0 ? PSE.pos : PSE.neg)
                 }
             }
@@ -1219,13 +1250,13 @@ struct TesoreriaView: View {
                 if periodo == "tutto" {
                     testoCard(perCasa ? "GENERATO DA \(movStrut!.label.uppercased())" : "SALDO \(nome)",
                               eurc(totE - totU), (totE - totU) < 0 ? PSE.neg : PSE.ink)
-                    totCard("ENTRATE", totE, PSE.pos)
-                    totCard("USCITE", totU, PSE.neg)
+                    clic(.movimenti("Entrate", entrate, totE)) { totCard("ENTRATE", totE, PSE.pos) }
+                    clic(.movimenti("Uscite", uscite, totU)) { totCard("USCITE", totU, PSE.neg) }
                     testoCard("N. MOVIMENTI", "\(mov.count)", PSE.accent)
                 } else {
                     totCard(perCasa ? "GENERATO PRIMA DEL PERIODO" : "SALDO INIZIALE", iniz, iniz < 0 ? PSE.neg : PSE.dim)
-                    totCard("ENTRATE", totE, PSE.pos)
-                    totCard("USCITE", totU, PSE.neg)
+                    clic(.movimenti("Entrate", entrate, totE)) { totCard("ENTRATE", totE, PSE.pos) }
+                    clic(.movimenti("Uscite", uscite, totU)) { totCard("USCITE", totU, PSE.neg) }
                     testoCard(perCasa ? "GENERATO DA \(movStrut!.label.uppercased())" : "SALDO FINALE \(nome)",
                               eurc(iniz + totE - totU), (iniz + totE - totU) < 0 ? PSE.neg : PSE.ink)
                 }
@@ -1240,7 +1271,7 @@ struct TesoreriaView: View {
                 HStack(spacing: 12) {
                     ForEach(model.conti) { c in
                         let s = model.saldo(c.id)
-                        totCard("\(c.nome.uppercased()) — SALDO OGGI", s, s < 0 ? PSE.neg : PSE.accent)
+                        clic(.conto(c.id)) { totCard("\(c.nome.uppercased()) — SALDO OGGI", s, s < 0 ? PSE.neg : PSE.accent) }
                     }
                 }
             }
