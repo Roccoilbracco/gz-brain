@@ -281,9 +281,13 @@ struct CamerePSEDashboard: View {
             var occupied: [[(Date, Date)]] = Array(repeating: [], count: rooms.count)
             var byRoom: [Int: [Assegnata]] = [:]
             func overlaps(_ a: (Date, Date), _ ci: Date, _ co: Date) -> Bool { ci < a.1 && a.0 < co }
-            // date convertite una volta qui, poi mai più
+            // date convertite una volta qui, poi mai più. Le prenotazioni
+            // Educamp (source "educamp") NON entrano nel reticolo per-camera:
+            // le camere condivise di Via Romagna si segnano occupate dal foglio
+            // Educamp (educampOccupies), e i singoli ospiti stanno nelle righe
+            // Educamp del planning.
             let bs = items
-                .filter { $0.status != "cancellata" && $0.struttura == s.rawValue }
+                .filter { $0.status != "cancellata" && $0.struttura == s.rawValue && $0.source != "educamp" }
                 .compactMap { b -> Assegnata? in
                     guard let ci = day(b.checkin), let co = day(b.checkout), ci < co else { return nil }
                     return Assegnata(b: b, ci: ci, co: co)
@@ -308,11 +312,38 @@ struct CamerePSEDashboard: View {
     }
     // Indice camera nel reticolo, precalcolato per non rifare firstIndex a ogni cella.
     private func roomIndex(_ s: Struttura, _ room: String) -> Int? { roomsFor(s).firstIndex(of: room) }
+    // ── Occupazione Educamp delle camere di Via Romagna (dal foglio) ──────────
+    // Le camere sono condivise: una stanza è occupata se un ospite Educamp
+    // assegnato a quella camera è presente quel giorno. Serve a segnare
+    // occupate le stanze anche senza una prenotazione per-camera.
+    @State private var educampRoomCache: [String: [(ci: Date, co: Date)]] = [:]
+    private func educampGridRoom(_ cam: String?) -> String? {
+        let c = (cam ?? "").lowercased()
+        if c.contains("doppia") { return "Doppia senza bagno" }        // incl. "Camino → Doppia s.b."
+        if c.contains("balcone con") { return "Balcone con bagno (ragazzi)" }
+        if c.contains("balcone senza") { return "Balcone senza bagno" }
+        if c.contains("camino") { return "Stanza Camino" }
+        return nil
+    }
+    private func rebuildEducampRooms() {
+        var m: [String: [(Date, Date)]] = [:]
+        for o in educampOspiti {
+            guard let room = educampGridRoom(o.camera), let ci = day(o.checkin), let co = day(o.checkout) else { continue }
+            m[room, default: []].append((ci, co))
+        }
+        educampRoomCache = m
+    }
+    private func educampOccupies(_ s: Struttura, _ room: String, _ d: Date) -> Bool {
+        guard s == .viaRomagna else { return false }
+        return (educampRoomCache[room] ?? []).contains { $0.0 <= d && d < $0.1 }
+    }
     private func bookingFor(_ s: Struttura, _ room: String, _ d: Date) -> Prenotazione? {
         guard let idx = roomIndex(s, room) else { return nil }
         return (assignCache[s.rawValue]?[idx] ?? []).first { $0.ci <= d && d < $0.co }?.b
     }
-    private func freeInGrid(_ s: Struttura, _ d: Date) -> Int { roomsFor(s).filter { bookingFor(s, $0, d) == nil }.count }
+    private func freeInGrid(_ s: Struttura, _ d: Date) -> Int {
+        roomsFor(s).filter { bookingFor(s, $0, d) == nil && !educampOccupies(s, $0, d) }.count
+    }
     private func isToday(_ s: String?) -> Bool { s.map { String($0.prefix(10)) } == ymdBk.string(from: Date()) }
     private var incassato: Int { items.filter { $0.status != "cancellata" }.map { $0.paid_cents }.reduce(0, +) }
     private var daIncassare: Int { attive.map { max(0, $0.amount_cents - $0.paid_cents) }.reduce(0, +) }
@@ -626,7 +657,7 @@ struct CamerePSEDashboard: View {
         guard let r = c.range(of: .day, in: .month, for: mese) else { return [] }
         return r.compactMap { g in
             guard let d = c.date(byAdding: .day, value: g - 1, to: mese) else { return nil }
-            return bookingFor(s, room, d) == nil ? g : nil
+            return (bookingFor(s, room, d) == nil && !educampOccupies(s, room, d)) ? g : nil
         }
     }
     /// [3,4,5,6,7,27,28,29,30] → "3–7, 27–30"
@@ -784,6 +815,9 @@ struct CamerePSEDashboard: View {
                 .overlay(Rectangle().fill(gLine).frame(width: 1), alignment: .trailing)
         case .room(let s, let rm):
             let b = bookingFor(s, rm, d)
+            // Stanza condivisa Educamp occupata anche senza prenotazione: tinta
+            // Educamp, il dettaglio è nelle righe Educamp qui sotto.
+            let eduOcc = b == nil && educampOccupies(s, rm, d)
             Button {
                 if let b { withAnimation(.easeInOut(duration: 0.2)) { selected = b } }
                 else { withAnimation(.easeOut(duration: 0.15)) { selectedDay = d } }
@@ -791,7 +825,7 @@ struct CamerePSEDashboard: View {
                 Text(b.map { firstName($0.guest_name) } ?? "")
                     .font(.system(size: 8.5, weight: .medium)).foregroundStyle(PSE.text).lineLimit(1).minimumScaleFactor(0.7)
                     .frame(width: dayW, height: rowH)
-                    .background(b != nil ? sourceFill(b?.source) : freeFill)
+                    .background(b != nil ? sourceFill(b?.source) : (eduOcc ? educampFill : freeFill))
                     .overlay(Rectangle().fill(gLine).frame(width: 1), alignment: .trailing)
                     .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
                     .contentShape(Rectangle())
@@ -833,6 +867,7 @@ struct CamerePSEDashboard: View {
         // ogni cella. Idem la mappa di occupazione per la striscia calendario.
         rebuildAssignment()
         rebuildDayCache()
+        rebuildEducampRooms()
     }
     /// Dopo ogni modifica a una prenotazione: allinea pulizie, colazioni e
     /// incassi (sync lato DB), poi ricarica. Così conti, servizi e planning
