@@ -101,7 +101,7 @@ let BREAKFAST_COST = 350   // 3,50 € per persona/notte (solo Booking)
     }
 }
 
-enum TesSub: String, CaseIterable, Identifiable { case riepilogo = "Riepilogo", conti = "Conti", contoEconomico = "Conto economico", educamp = "Educamp", servizi = "Servizi", movimenti = "Movimenti"; var id: String { rawValue } }
+enum TesSub: String, CaseIterable, Identifiable { case riepilogo = "Riepilogo", conti = "Conti", depositi = "Depositi", contoEconomico = "Conto economico", educamp = "Educamp", servizi = "Servizi", movimenti = "Movimenti"; var id: String { rawValue } }
 
 // nome mese esteso "MMMM yyyy" da chiave "yyyy-MM"
 private let tesMese: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "it_IT"); f.dateFormat = "MMMM yyyy"; return f }()
@@ -126,6 +126,11 @@ struct TesoreriaView: View {
     @State private var servizioSel: ServizioTab = .pulizie
     // Quale scheda servizi aprire in dettaglio dal Riepilogo (nil = nessuna)
     @State private var servizioSheet: ServizioTab?
+    // Movimenti: di default nasconde le entrate datate in avanti (incassi di
+    // prenotazioni future non ancora avvenuti), così la lista è il denaro reale.
+    @State private var soloFinoAOggi = true
+
+    private var oggiStr: String { tesYmd.string(from: Date()) }
 
     /// Il Riepilogo e l'Educamp non hanno filtri: senza questo la seconda riga
     /// resterebbe vuota lasciando un buco sotto le sezioni.
@@ -139,6 +144,7 @@ struct TesoreriaView: View {
     private var visibiliMov: [TesMovimento] {
         model.movimenti.filter { m in
             (movStrut == nil || m.struttura == movStrut!.rawValue) && nelPeriodo(m) && matchCerca(m)
+            && (!soloFinoAOggi || m.data <= oggiStr)   // niente entrate future se il filtro è attivo
         }
     }
     private var movEntrate: Int { var t = 0; for m in visibiliMov where m.tipo == "entrata" { t += m.importo_cents }; return t }
@@ -240,7 +246,7 @@ struct TesoreriaView: View {
                             PSESegmented(items: [(nil, "Tutte"), (.viaPo, "Via Po"), (.viaRomagna, "Via Romagna")] as [(Struttura?, String)], selection: $movStrut)
                         }
                         if sub == .conti || sub == .contoEconomico || sub == .movimenti { periodoMenu }
-                        if sub == .movimenti { campoCerca }
+                        if sub == .movimenti { campoCerca; togglefuturi }
                         Spacer(minLength: 0)
                     }
                 }
@@ -252,6 +258,7 @@ struct TesoreriaView: View {
                     switch sub {
                     case .riepilogo: riepilogo
                     case .conti: contiView
+                    case .depositi: depositiView
                     case .contoEconomico: contoEconomico
                     case .educamp: EducampView()
                     case .servizi: ServiziView(tab: $servizioSel)
@@ -280,7 +287,12 @@ struct TesoreriaView: View {
             }
             HStack(spacing: 12) {
                 totCard("TOTALE CONTI (incassato, netto)", model.totaleConti, PSE.accent)
+                totCard("NOSTRO REALE (netto depositi)", nostroReale, nostroReale < 0 ? PSE.neg : PSE.pos)
                 totCard("POTENZIALE (+ da incassare)", model.totaleConti + daIncassareTot + model.educampDaIncassare, PSE.pos)
+            }
+            if depositiDaRestituire > 0 {
+                Text("Sui conti ci sono \(eurc(depositiDaRestituire)) di depositi cauzionali da restituire agli inquilini (dettaglio nella scheda «Depositi»): il «nostro reale» li toglie dal totale.")
+                    .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
             }
             Text("DA INCASSARE — prenotazioni confermate, soldi non ancora incassati · OTA LORDE · EDUCAMP NETTO").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.warn).padding(.top, 6)
             HStack(spacing: 12) {
@@ -330,6 +342,89 @@ struct TesoreriaView: View {
         .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
     }
+    // toggle «solo fino a oggi» per i movimenti
+    private var togglefuturi: some View {
+        Button { soloFinoAOggi.toggle() } label: {
+            HStack(spacing: 6) {
+                Image(systemName: soloFinoAOggi ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 11)).foregroundStyle(soloFinoAOggi ? PSE.accent : PSE.dim)
+                Text("Solo fino a oggi").font(.system(size: 12, weight: .semibold)).foregroundStyle(PSE.dim).lineLimit(1).fixedSize()
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 10).fill(PSE.surface))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(PSE.line, lineWidth: 1))
+        }.buttonStyle(.plain).help("Nasconde le entrate datate in avanti (incassi non ancora avvenuti)")
+    }
+
+    // ══ DEPOSITI — cauzioni da restituire, separate dal denaro nostro ═════════
+    // Un deposito cauzionale è denaro dell'inquilino che teniamo e dovremo
+    // rendere: non è utile nostro. Qui si separa il «nostro reale».
+    private func isDeposito(_ m: TesMovimento) -> Bool {
+        m.categoria == "deposito" && !(m.descrizione ?? "").lowercased().contains("trattenut")
+    }
+    private var depositiMov: [TesMovimento] {
+        model.movimenti.filter { isDeposito($0) }.sorted { $0.data > $1.data }
+    }
+    /// Cauzioni ancora in mano: incassate (entrate) meno quelle restituite (uscite).
+    private var depositiDaRestituire: Int {
+        depositiMov.reduce(0) { $0 + ($1.tipo == "entrata" ? $1.importo_cents : -$1.importo_cents) }
+    }
+    private var nostroReale: Int { model.totaleConti - depositiDaRestituire }
+
+    private var depositiView: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                totCard("TOTALE SUI CONTI", model.totaleConti, PSE.accent)
+                totCard("DEPOSITI CAUZIONALI (da restituire)", depositiDaRestituire, PSE.warn)
+                totCard("NOSTRO REALE (netto depositi)", nostroReale, nostroReale < 0 ? PSE.neg : PSE.pos)
+            }
+            Text("I depositi cauzionali sono soldi degli inquilini che dovremo restituire: stanno sui conti (per lo più Beeper) ma non sono nostri. «Nostro reale» = totale conti − depositi. Quando restituisci una cauzione, registra un'uscita categoria «deposito»: scende da sola.")
+                .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+
+            if depositiMov.isEmpty {
+                EmptyStateCard(icon: "lock.shield", text: "Nessun deposito cauzionale registrato.")
+            } else {
+                VStack(spacing: 0) {
+                    HStack(spacing: 12) {
+                        Text("DATA").frame(width: 62, alignment: .leading)
+                        Text("DESCRIZIONE").frame(maxWidth: .infinity, alignment: .leading)
+                        Text("CASA").frame(width: 96, alignment: .leading)
+                        Text("CONTO").frame(width: 120, alignment: .leading)
+                        Text("IMPORTO").frame(width: 92, alignment: .trailing)
+                    }
+                    .font(.system(size: 8.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
+                    .padding(.horizontal, 16).padding(.vertical, 9)
+                    .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
+                    ForEach(depositiMov) { m in
+                        let entrata = m.tipo == "entrata"
+                        Button { editing = m; showForm = true } label: {
+                            HStack(spacing: 12) {
+                                Text(tesPrettyStr(m.data)).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim).frame(width: 62, alignment: .leading).monospacedDigit()
+                                Text(m.descrizione ?? "Deposito").font(.system(size: 12.5, weight: .medium)).foregroundStyle(PSE.ink).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                                Text(casaLabel(m.struttura)).font(.system(size: 11)).foregroundStyle(PSE.dim).frame(width: 96, alignment: .leading).lineLimit(1)
+                                Text(contoNomeBreve(m.conto_id)).font(.system(size: 11)).foregroundStyle(PSE.dim).frame(width: 120, alignment: .leading).lineLimit(1)
+                                Text((entrata ? "+" : "−") + eurc(m.importo_cents))
+                                    .font(.system(size: 13, weight: .bold)).monospacedDigit()
+                                    .foregroundStyle(entrata ? PSE.warn : PSE.pos)
+                                    .frame(width: 92, alignment: .trailing)
+                            }
+                            .padding(.horizontal, 16).padding(.vertical, 9).contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                        Divider().overlay(PSE.line).padding(.leading, 16)
+                    }
+                    HStack(spacing: 12) {
+                        Text("TOTALE CAUZIONI IN MANO").font(.system(size: 10.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.ink)
+                        Spacer()
+                        Text(eurc(depositiDaRestituire)).font(.system(size: 15, weight: .bold)).foregroundStyle(PSE.warn).monospacedDigit()
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 12).background(Color.white.opacity(0.04))
+                }
+                .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
+                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
+            }
+        }.padding(.bottom, 20)
+    }
+
     private func totCard(_ t: String, _ v: Int, _ c: Color) -> some View { testoCard(t, eurc(v), c) }
     private func testoCard(_ t: String, _ v: String, _ c: Color) -> some View {
         VStack(alignment: .leading, spacing: 6) {
