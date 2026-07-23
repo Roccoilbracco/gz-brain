@@ -109,6 +109,112 @@ let BREAKFAST_COST = 350   // 3,50 € per persona/notte (solo Booking)
 
 enum TesSub: String, CaseIterable, Identifiable { case riepilogo = "Riepilogo", conti = "Conti", depositi = "Depositi", contoEconomico = "Conto economico", educamp = "Educamp", servizi = "Servizi", movimenti = "Movimenti"; var id: String { rawValue } }
 
+// ── Sotto-finestre di dettaglio del Riepilogo ────────────────────────────────
+// Riga generica: un movimento, una prenotazione o una voce di riepilogo.
+struct DettaglioRiga: Identifiable {
+    let id: String
+    var data: String = ""
+    let descrizione: String
+    var extra: String = ""      // casa · conto · canale
+    let importo: Int
+    var positivo: Bool = true
+    var mostraSegno: Bool = true
+}
+
+// Finestra che elenca le righe di una card, con nota e totale. Riusa lo stile
+// delle tabelle della Tesoreria così il dettaglio è coerente ovunque.
+struct DettaglioVoceSheet: View {
+    let titolo: String
+    var nota: String = ""
+    let righe: [DettaglioRiga]
+    var totaleLabel: String = "TOTALE"
+    var totale: Int? = nil
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text(titolo).font(.system(size: 14, weight: .heavy)).tracking(1).foregroundStyle(PSE.ink)
+                    .lineLimit(1).minimumScaleFactor(0.8)
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark").font(.system(size: 12, weight: .bold)).foregroundStyle(PSE.dim)
+                        .frame(width: 26, height: 26).background(Circle().fill(Color.white.opacity(0.05)))
+                }.buttonStyle(.plain)
+            }
+            .padding(EdgeInsets(top: 18, leading: 20, bottom: 10, trailing: 16))
+            if !nota.isEmpty {
+                Text(nota).font(.system(size: 11)).foregroundStyle(PSE.faint)
+                    .padding(.horizontal, 20).padding(.bottom, 10)
+            }
+            if righe.isEmpty {
+                Text("Nessuna voce.").font(.system(size: 12)).foregroundStyle(PSE.faint)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).padding(.vertical, 30)
+            } else {
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 0) {
+                        ForEach(righe) { r in
+                            HStack(spacing: 12) {
+                                if !r.data.isEmpty {
+                                    Text(r.data).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim)
+                                        .frame(width: 62, alignment: .leading).monospacedDigit()
+                                }
+                                Text(r.descrizione).font(.system(size: 12.5, weight: .medium)).foregroundStyle(PSE.ink)
+                                    .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
+                                if !r.extra.isEmpty {
+                                    Text(r.extra).font(.system(size: 11)).foregroundStyle(PSE.faint)
+                                        .frame(width: 150, alignment: .leading).lineLimit(1)
+                                }
+                                Text((r.mostraSegno ? (r.positivo ? "+" : "−") : "") + eurc(r.importo))
+                                    .font(.system(size: 13, weight: .bold)).monospacedDigit()
+                                    .foregroundStyle(r.mostraSegno ? (r.positivo ? PSE.pos : PSE.neg) : PSE.ink)
+                                    .frame(width: 100, alignment: .trailing)
+                            }
+                            .padding(.horizontal, 20).padding(.vertical, 9)
+                            Divider().overlay(PSE.line).padding(.leading, 20)
+                        }
+                    }
+                }
+                if let totale {
+                    HStack {
+                        Text(totaleLabel).font(.system(size: 11, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.ink)
+                        Spacer()
+                        Text(eurc(totale)).font(.system(size: 15, weight: .bold)).foregroundStyle(PSE.accent).monospacedDigit()
+                    }
+                    .padding(.horizontal, 20).padding(.vertical, 12).background(Color.white.opacity(0.04))
+                }
+            }
+        }
+        .frame(width: 760, height: 560)
+        .background(Color(hex: 0x0b0f18))
+        .preferredColorScheme(.dark)
+    }
+}
+
+// Le voci del Riepilogo che aprono una sotto-finestra al click.
+enum RiepVoce: Identifiable {
+    case conto(String)                       // id conto → estratto
+    case totaleConti
+    case nostroReale
+    case potenziale
+    case daIncassareSrc(String, [String])    // titolo, fonti
+    case daIncassareEducamp
+    case daIncassareTotale
+    case casa(Struttura)
+    var id: String {
+        switch self {
+        case .conto(let c): return "conto-\(c)"
+        case .totaleConti: return "tot"
+        case .nostroReale: return "nostro"
+        case .potenziale: return "pot"
+        case .daIncassareSrc(let t, _): return "inc-\(t)"
+        case .daIncassareEducamp: return "inc-edu"
+        case .daIncassareTotale: return "inc-tot"
+        case .casa(let s): return "casa-\(s.rawValue)"
+        }
+    }
+}
+
 // nome mese esteso "MMMM yyyy" da chiave "yyyy-MM"
 private let tesMese: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "it_IT"); f.dateFormat = "MMMM yyyy"; return f }()
 private func meseNome(_ key: String) -> String {
@@ -132,6 +238,8 @@ struct TesoreriaView: View {
     @State private var servizioSel: ServizioTab = .pulizie
     // Quale scheda servizi aprire in dettaglio dal Riepilogo (nil = nessuna)
     @State private var servizioSheet: ServizioTab?
+    // Quale card del Riepilogo aprire in dettaglio
+    @State private var voceSheet: RiepVoce?
     // Movimenti: di default nasconde le entrate datate in avanti (incassi di
     // prenotazioni future non ancora avvenuti), così la lista è il denaro reale.
     @State private var soloFinoAOggi = true
@@ -283,42 +391,132 @@ struct TesoreriaView: View {
         .sheet(item: $servizioSheet) { tab in
             ServizioDettaglioSheet(tab: tab) { servizioSheet = nil }
         }
+        .sheet(item: $voceSheet) { v in
+            let d = dettaglioVoce(v)
+            DettaglioVoceSheet(titolo: d.titolo, nota: d.nota, righe: d.righe,
+                               totaleLabel: d.totaleLabel, totale: d.totale) { voceSheet = nil }
+        }
+    }
+
+    // ── Contenuto delle sotto-finestre del Riepilogo ─────────────────────────
+    private func rigaDaMov(_ m: TesMovimento) -> DettaglioRiga {
+        DettaglioRiga(id: m.id, data: tesPrettyStr(m.data),
+                      descrizione: m.descrizione ?? (m.categoria ?? "—"),
+                      extra: contoNomeBreve(m.conto_id) + (m.struttura != nil ? " · \(casaLabel(m.struttura))" : ""),
+                      importo: m.importo_cents, positivo: m.tipo == "entrata")
+    }
+    private func rigaDaPren(_ b: Prenotazione) -> DettaglioRiga {
+        let res = max(0, b.amount_cents - b.paid_cents)
+        return DettaglioRiga(id: b.id, data: "\(tesPrettyStr(b.checkin))",
+                             descrizione: b.guest_name + (b.camera.map { " · \($0)" } ?? ""),
+                             extra: (b.source ?? "—").capitalized + " · " + casaLabel(b.struttura),
+                             importo: res, positivo: true, mostraSegno: false)
+    }
+    private func dettaglioVoce(_ v: RiepVoce) -> (titolo: String, nota: String, righe: [DettaglioRiga], totaleLabel: String, totale: Int?) {
+        switch v {
+        case .conto(let id):
+            let c = model.conti.first { $0.id == id }
+            let mov = model.movimenti.filter { $0.conto_id == id }.sorted { $0.data > $1.data }
+            return ("\(c?.nome.uppercased() ?? "CONTO") — ESTRATTO", contoNotaFor(id),
+                    mov.map { rigaDaMov($0) }, "SALDO", model.saldo(id))
+        case .totaleConti:
+            let mov = model.movimenti.sorted { $0.data > $1.data }
+            return ("TOTALE CONTI — TUTTI I MOVIMENTI",
+                    "Cassa + Massimo + Beeper insieme. La colonna indica dove è transitato il denaro.",
+                    mov.map { rigaDaMov($0) }, "SALDO TOTALE", model.totaleConti)
+        case .nostroReale:
+            return ("NOSTRO REALE — DEPOSITI DA TOGLIERE",
+                    "Il «nostro reale» è il totale conti (\(eurc(model.totaleConti))) meno i depositi cauzionali qui sotto, che sono degli inquilini e vanno restituiti.",
+                    depositiMov.map { rigaDaMov($0) }, "DEPOSITI DA RESTITUIRE", depositiDaRestituire)
+        case .potenziale:
+            let righe = [
+                DettaglioRiga(id: "conti", descrizione: "Già sui conti (incassato)", importo: model.totaleConti, mostraSegno: false),
+                DettaglioRiga(id: "booking", descrizione: "Booking da incassare (lordo)", importo: daIncassareSource(["booking"]), mostraSegno: false),
+                DettaglioRiga(id: "airbnb", descrizione: "Airbnb da incassare", importo: daIncassareSource(["airbnb"]), mostraSegno: false),
+                DettaglioRiga(id: "dirette", descrizione: "Dirette da incassare", importo: daIncassareDirette, mostraSegno: false),
+                DettaglioRiga(id: "educamp", descrizione: "Educamp da incassare (netto)", importo: model.educampDaIncassare, mostraSegno: false),
+            ]
+            return ("POTENZIALE — DA COSA È COMPOSTO",
+                    "Quanto ci sarebbe sui conti incassando tutte le prenotazioni confermate. È un tetto: le commissioni OTA non sono ancora tolte.",
+                    righe, "POTENZIALE", model.totaleConti + daIncassareTot + model.educampDaIncassare)
+        case .daIncassareSrc(let titolo, let fonti):
+            let pren = prenFiltrate.filter { fonti.contains($0.source ?? "") && max(0, $0.amount_cents - $0.paid_cents) > 0 }
+                .sorted { ($0.checkin ?? "") < ($1.checkin ?? "") }
+            return ("\(titolo.uppercased()) — DA INCASSARE",
+                    "Prenotazioni confermate con soldi non ancora incassati. Importi lordi (quello che il cliente paga all'OTA).",
+                    pren.map { rigaDaPren($0) }, "TOTALE", pren.reduce(0) { $0 + max(0, $1.amount_cents - $1.paid_cents) })
+        case .daIncassareEducamp:
+            // ospiti Educamp con residuo da versare (per mese, dal foglio)
+            let righe = model.educampRighe.filter { $0.totale_ospite_cents > 0 }
+                .sorted { ($0.ospite, $0.mese) < ($1.ospite, $1.mese) }
+                .map { r in DettaglioRiga(id: r.id, descrizione: r.ospite, extra: meseNome(r.mese),
+                                          importo: r.totale_ospite_cents, mostraSegno: false) }
+            return ("EDUCAMP — DA INCASSARE",
+                    "Totale che gli ospiti Educamp pagano (\(eurc(model.educampTotaleOspite))) meno il già incassato (\(eurc(model.educampIncassato))) = \(eurc(model.educampDaIncassare)). Sotto, il dovuto per ospite e mese.",
+                    righe, "TOTALE DOVUTO OSPITI", model.educampTotaleOspite)
+        case .daIncassareTotale:
+            let righe = [
+                DettaglioRiga(id: "b", descrizione: "Booking (lordo)", importo: daIncassareSource(["booking"]), mostraSegno: false),
+                DettaglioRiga(id: "a", descrizione: "Airbnb", importo: daIncassareSource(["airbnb"]), mostraSegno: false),
+                DettaglioRiga(id: "d", descrizione: "Dirette", importo: daIncassareDirette, mostraSegno: false),
+                DettaglioRiga(id: "e", descrizione: "Educamp (netto)", importo: model.educampDaIncassare, mostraSegno: false),
+            ]
+            return ("TOTALE DA INCASSARE", "Somma di tutto ciò che resta da incassare.",
+                    righe, "TOTALE", daIncassareTot + model.educampDaIncassare)
+        case .casa(let s):
+            let mov = model.movimenti.filter { $0.struttura == s.rawValue }.sorted { $0.data > $1.data }
+            let st = casaStats(s)
+            return ("\(s.label.uppercased()) — MOVIMENTI",
+                    "Entrate \(eurc(st.inc)) · spese \(eurc(st.spese)) · utile \(eurc(st.inc - st.spese)).",
+                    mov.map { rigaDaMov($0) }, "UTILE", st.inc - st.spese)
+        }
+    }
+    private func contoNotaFor(_ id: String) -> String {
+        switch id {
+        case "massimo": return "Conto delle OTA di Via Po: Booking (lordo entrata / commissione uscita) e Airbnb. Il saldo è il netto."
+        case "beeper": return "Bonifici (entrambe le case): affitti, depositi da restituire, apporti soci e uscite."
+        default: return "Contante Via Po + Via Romagna."
+        }
     }
 
     // ── Riepilogo (conti + servizi uniti) ──
+    // Ogni card del Riepilogo è un pulsante che apre la sua sotto-finestra.
+    private func clic<V: View>(_ v: RiepVoce, @ViewBuilder _ card: () -> V) -> some View {
+        Button { voceSheet = v } label: { card() }.buttonStyle(.plain)
+    }
     private var riepilogo: some View {
         VStack(alignment: .leading, spacing: 12) {
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                ForEach(model.conti) { c in contoCard(c) }
+                ForEach(model.conti) { c in clic(.conto(c.id)) { contoCard(c) } }
             }
             HStack(spacing: 12) {
-                totCard("TOTALE CONTI (incassato, netto)", model.totaleConti, PSE.accent)
-                totCard("NOSTRO REALE (netto depositi)", nostroReale, nostroReale < 0 ? PSE.neg : PSE.pos)
-                totCard("POTENZIALE (+ da incassare)", model.totaleConti + daIncassareTot + model.educampDaIncassare, PSE.pos)
+                clic(.totaleConti) { totCard("TOTALE CONTI (incassato, netto)", model.totaleConti, PSE.accent) }
+                clic(.nostroReale) { totCard("NOSTRO REALE (netto depositi)", nostroReale, nostroReale < 0 ? PSE.neg : PSE.pos) }
+                clic(.potenziale) { totCard("POTENZIALE (+ da incassare)", model.totaleConti + daIncassareTot + model.educampDaIncassare, PSE.pos) }
             }
             if depositiDaRestituire > 0 {
                 Text("Sui conti ci sono \(eurc(depositiDaRestituire)) di depositi cauzionali da restituire agli inquilini (dettaglio nella scheda «Depositi»): il «nostro reale» li toglie dal totale.")
                     .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
             }
-            Text("DA INCASSARE — prenotazioni confermate, soldi non ancora incassati · OTA LORDE · EDUCAMP NETTO").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.warn).padding(.top, 6)
+            Text("DA INCASSARE — prenotazioni confermate, soldi non ancora incassati · clicca per il dettaglio").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.warn).padding(.top, 6)
             HStack(spacing: 12) {
-                totCard("BOOKING (lordo)", daIncassareSource(["booking"]), PSE.warn)
-                totCard("AIRBNB", daIncassareSource(["airbnb"]), PSE.warn)
-                totCard("DIRETTE", daIncassareDirette, PSE.warn)
-                totCard("EDUCAMP (netto)", model.educampDaIncassare, PSE.warn)
+                clic(.daIncassareSrc("Booking", ["booking"])) { totCard("BOOKING (lordo)", daIncassareSource(["booking"]), PSE.warn) }
+                clic(.daIncassareSrc("Airbnb", ["airbnb"])) { totCard("AIRBNB", daIncassareSource(["airbnb"]), PSE.warn) }
+                clic(.daIncassareSrc("Dirette", ["diretto", "sito", "whatsapp", "telefono", "email"])) { totCard("DIRETTE", daIncassareDirette, PSE.warn) }
+                clic(.daIncassareEducamp) { totCard("EDUCAMP (netto)", model.educampDaIncassare, PSE.warn) }
             }
             HStack(spacing: 12) {
-                totCard("TOTALE DA INCASSARE", daIncassareTot + model.educampDaIncassare, PSE.pos)
+                clic(.daIncassareTotale) { totCard("TOTALE DA INCASSARE", daIncassareTot + model.educampDaIncassare, PSE.pos) }
                 Color.clear.frame(maxWidth: .infinity)
                 Color.clear.frame(maxWidth: .infinity)
                 Color.clear.frame(maxWidth: .infinity)
             }
             Text("Educamp (Via Romagna): gli ospiti pagano \(eurc(model.educampTotaleOspite)) in tutto, di cui \(eurc(model.educampIncassato)) già in cassa/beeper → \(eurc(model.educampDaIncassare)) ancora da incassare. Di quel totale, il netto che resta a noi (dopo la commissione) è \(eurc(model.educampNettoTotale)). Dettaglio mese per mese nella scheda Educamp.")
                 .font(.system(size: 10.5)).foregroundStyle(PSE.faint).padding(.top, 2)
-            Text("PER CASA — entrate, spese e utile registrati").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint).padding(.top, 6)
+            Text("PER CASA — entrate, spese e utile registrati · clicca per il dettaglio").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint).padding(.top, 6)
             HStack(spacing: 12) {
-                casaCard(.viaPo)
-                casaCard(.viaRomagna)
+                clic(.casa(.viaPo)) { casaCard(.viaPo) }
+                clic(.casa(.viaRomagna)) { casaCard(.viaRomagna) }
             }
             Text("SERVIZI — clicca per il dettaglio").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint).padding(.top, 6)
             HStack(spacing: 12) {
