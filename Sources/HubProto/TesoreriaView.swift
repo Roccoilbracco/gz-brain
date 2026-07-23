@@ -124,6 +124,8 @@ struct TesoreriaView: View {
     @State private var cerca: String = ""
     @State private var contoSel: String = "tutti"     // "tutti" = tutti i conti insieme; altrimenti id conto
     @State private var servizioSel: ServizioTab = .pulizie
+    // Quale scheda servizi aprire in dettaglio dal Riepilogo (nil = nessuna)
+    @State private var servizioSheet: ServizioTab?
 
     /// Il Riepilogo e l'Educamp non hanno filtri: senza questo la seconda riga
     /// resterebbe vuota lasciando un buco sotto le sezioni.
@@ -264,6 +266,9 @@ struct TesoreriaView: View {
         .sheet(isPresented: $showForm, onDismiss: { editing = nil }) {
             TesMovimentoForm(conti: model.conti, existing: editing) { await model.load() }
         }
+        .sheet(item: $servizioSheet) { tab in
+            ServizioDettaglioSheet(tab: tab) { servizioSheet = nil }
+        }
     }
 
     // ── Riepilogo (conti + servizi uniti) ──
@@ -296,11 +301,11 @@ struct TesoreriaView: View {
                 casaCard(.viaPo)
                 casaCard(.viaRomagna)
             }
-            Text("SERVIZI").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint).padding(.top, 6)
+            Text("SERVIZI — clicca per il dettaglio").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint).padding(.top, 6)
             HStack(spacing: 12) {
-                servCard("PULIZIA — FATTE", puliziaFatte, "sparkles", PSE.dim)
-                servCard("PULIZIA — PREVISTE", puliziePreviste, "sparkles", PSE.warn)
-                servCard("COLAZIONI BOOKING", colazioni.totale, "cup.and.saucer.fill", PSE.accent)
+                servCard("PULIZIA — FATTE", puliziaFatte, "sparkles", PSE.dim) { servizioSheet = .pulizie }
+                servCard("PULIZIA — PREVISTE", puliziePreviste, "sparkles", PSE.warn) { servizioSheet = .pulizie }
+                servCard("COLAZIONI BOOKING", colazioni.totale, "cup.and.saucer.fill", PSE.accent) { servizioSheet = .colazioni }
             }
             Text("I saldi dei conti sono NETTI (su Massimo la commissione Booking è già registrata come uscita); il «da incassare» invece è LORDO, quello che il cliente paga all'OTA. Su Booking arriverà circa il 16,5% in meno — oggi ≈ \(eurc(commissioneAttesa)) — mentre Airbnb e le dirette non hanno commissione. Perciò il «potenziale» è un tetto, non l'incasso atteso.")
                 .font(.system(size: 10.5)).foregroundStyle(PSE.faint).padding(.top, 2)
@@ -450,18 +455,22 @@ struct TesoreriaView: View {
         }.buttonStyle(.plain)
     }
 
-    private func servCard(_ t: String, _ v: Int, _ icon: String, _ c: Color) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon).font(.system(size: 16)).foregroundStyle(c)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(t).font(.system(size: 9.5, weight: .heavy)).tracking(0.6).foregroundStyle(PSE.faint)
-                Text(eurc(v)).font(.system(size: 18, weight: .bold)).foregroundStyle(PSE.ink).monospacedDigit()
+    private func servCard(_ t: String, _ v: Int, _ icon: String, _ c: Color, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon).font(.system(size: 16)).foregroundStyle(c)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(t).font(.system(size: 9.5, weight: .heavy)).tracking(0.6).foregroundStyle(PSE.faint)
+                    Text(eurc(v)).font(.system(size: 18, weight: .bold)).foregroundStyle(PSE.ink).monospacedDigit()
+                }
+                Spacer()
+                Image(systemName: "chevron.right").font(.system(size: 10, weight: .bold)).foregroundStyle(PSE.faint)
             }
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, alignment: .leading).padding(16)
-        .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
+            .frame(maxWidth: .infinity, alignment: .leading).padding(16)
+            .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: 14))
+        }.buttonStyle(.plain)
     }
 
     // card per casa: entrate, spese, utile

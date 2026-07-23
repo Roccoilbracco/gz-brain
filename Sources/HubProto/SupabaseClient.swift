@@ -60,6 +60,13 @@ struct SupabaseClient {
         _ = try await run(request(pathAndQuery, method: method, prefer: prefer, body: body))
     }
 
+    /// Chiama una funzione Postgres (RPC). Ritorna il JSON grezzo di risposta.
+    @discardableResult
+    func rpc(_ name: String, args: [String: Any?] = [:]) async throws -> Data {
+        let (data, _) = try await run(request("rpc/\(name)", method: "POST", prefer: "return=representation", body: args))
+        return data
+    }
+
     /// INSERT che restituisce la riga creata (Prefer: return=representation).
     func insertReturning<T: Decodable>(_ table: String, body: [String: Any?]) async throws -> T {
         let (data, _) = try await run(request(table, method: "POST", prefer: "return=representation", body: body))

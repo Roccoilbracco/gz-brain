@@ -151,6 +151,12 @@ extension HubAPI {
     static func deletePrenotazione(id: String) async throws {
         try await sb.mutate("prenotazioni?id=eq.\(id)", method: "DELETE")
     }
+    /// Riallinea pulizie, colazioni e incassi in cassa allo stato attuale delle
+    /// prenotazioni. Idempotente: la si può chiamare a ogni modifica senza
+    /// creare doppioni. Silenziosa: se fallisce non blocca il salvataggio.
+    static func syncCamerePSE() async {
+        _ = try? await sb.rpc("sync_camere_pse")
+    }
 }
 
 enum PSEViewMode { case prenotazioni, tesoreria }
@@ -332,7 +338,7 @@ struct CamerePSEDashboard: View {
         }
         .task { await load() }
         .sheet(isPresented: $showForm, onDismiss: { editing = nil }) {
-            BookingForm(existing: editing) { await load() }
+            BookingForm(existing: editing) { await syncAndReload() }
         }
     }
 
@@ -803,17 +809,26 @@ struct CamerePSEDashboard: View {
         do { items = try await HubAPI.listPrenotazioni() } catch { items = [] }
         educampOspiti = (try? await HubAPI.listEducampOspiti()) ?? []
     }
+    /// Dopo ogni modifica a una prenotazione: allinea pulizie, colazioni e
+    /// incassi (sync lato DB), poi ricarica. Così conti, servizi e planning
+    /// riflettono subito la modifica, senza aspettare il cron notturno.
+    private func syncAndReload() async {
+        await HubAPI.syncCamerePSE()
+        await load()
+    }
     private func setStatus(_ b: Prenotazione, _ s: BookingStatus) async {
         if let i = items.firstIndex(where: { $0.id == b.id }) { items[i].status = s.rawValue }
         if var sel = selected, sel.id == b.id { sel.status = s.rawValue; selected = sel }
         try? await HubAPI.updatePrenotazione(id: b.id, fields: ["status": s.rawValue])
         if s == .cancellata { try? await HubAPI.deleteMovimentoByExtKey("colazione:pren:\(b.id)") }
+        await syncAndReload()
     }
     private func setPaid(_ b: Prenotazione, _ cents: Int) async {
         if let i = items.firstIndex(where: { $0.id == b.id }) { items[i].paid_cents = cents }
         if var sel = selected, sel.id == b.id { sel.paid_cents = cents; selected = sel }
         try? await HubAPI.updatePrenotazione(id: b.id, fields: ["paid_cents": cents])
         await syncColazione(b, paidNow: cents)
+        await syncAndReload()
     }
     // la colazione al bar (solo Booking) diventa un costo quando la prenotazione è incassata
     private func syncColazione(_ b: Prenotazione, paidNow: Int) async {
@@ -835,6 +850,10 @@ struct CamerePSEDashboard: View {
         try? await HubAPI.deletePrenotazione(id: b.id)
         withAnimation(.easeInOut(duration: 0.2)) { selected = nil }
         items.removeAll { $0.id == b.id }
+        // Le pulizie/colazioni della prenotazione spariscono in cascata (FK on
+        // delete cascade); l'entrata resta col riferimento a null — la sync
+        // rimette in ordine il resto.
+        await syncAndReload()
     }
 }
 

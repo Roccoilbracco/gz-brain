@@ -106,6 +106,38 @@ let CASE_PSE: [(String, String)] = [("via-po", "Via Po"), ("via-romagna", "Via R
     }
 }
 
+// Sheet che apre le transazioni di un servizio (pulizie/colazioni) dal Riepilogo:
+// riusa la stessa vista della pagina dedicata, così i dati non possono discordare.
+struct ServizioDettaglioSheet: View {
+    let tab: ServizioTab
+    let onClose: () -> Void
+    @State private var t: ServizioTab
+
+    init(tab: ServizioTab, onClose: @escaping () -> Void) {
+        self.tab = tab; self.onClose = onClose; _t = State(initialValue: tab)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text(t.rawValue.uppercased()).font(.system(size: 14, weight: .heavy)).tracking(1.5).foregroundStyle(PSE.ink)
+                Spacer()
+                // Passare tra pulizie e colazioni senza chiudere la finestra
+                PSESegmented(items: [ServizioTab.pulizie, .colazioni, .utenze].map { ($0, $0.rawValue) }, selection: $t)
+                Button(action: onClose) {
+                    Image(systemName: "xmark").font(.system(size: 12, weight: .bold)).foregroundStyle(PSE.dim)
+                        .frame(width: 26, height: 26).background(Circle().fill(Color.white.opacity(0.05)))
+                }.buttonStyle(.plain).padding(.leading, 6)
+            }
+            .padding(EdgeInsets(top: 18, leading: 20, bottom: 12, trailing: 16))
+            ServiziView(tab: $t).padding(.horizontal, 20)
+        }
+        .frame(width: 900, height: 640)
+        .background(Color(hex: 0x0b0f18))
+        .preferredColorScheme(.dark)
+    }
+}
+
 struct ServiziView: View {
     @Binding var tab: ServizioTab
     @StateObject private var model = ServiziModel()
