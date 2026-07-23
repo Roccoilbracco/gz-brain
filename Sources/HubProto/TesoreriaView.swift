@@ -480,9 +480,15 @@ struct TesoreriaView: View {
     }
 
     // ── Riepilogo (conti + servizi uniti) ──
-    // Ogni card del Riepilogo è un pulsante che apre la sua sotto-finestra.
+    // Ogni card del Riepilogo è un pulsante che apre la sua sotto-finestra, con
+    // la freccetta a destra come le card servizi.
     private func clic<V: View>(_ v: RiepVoce, @ViewBuilder _ card: () -> V) -> some View {
-        Button { voceSheet = v } label: { card() }.buttonStyle(.plain)
+        Button { voceSheet = v } label: {
+            card().overlay(alignment: .trailing) {
+                Image(systemName: "chevron.right").font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(PSE.faint).padding(.trailing, 14)
+            }
+        }.buttonStyle(.plain)
     }
     private var riepilogo: some View {
         VStack(alignment: .leading, spacing: 12) {
