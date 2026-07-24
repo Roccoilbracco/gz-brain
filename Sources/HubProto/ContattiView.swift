@@ -64,8 +64,12 @@ struct TransazioneContatto: Decodable, Identifiable {
 
 // ── API ──────────────────────────────────────────────────────────────────────
 extension HubAPI {
-    static func listContatti() async throws -> [Contatto] {
-        try await sb.fetch("clienti?select=*&order=ragione_sociale.asc&limit=2000")
+    /// `slug` nil = tutti i progetti; valorizzato = solo l'anagrafica di
+    /// quell'agenzia (GZ Ibiza e Wallis 57 non condividono i clienti).
+    static func listContatti(slug: String? = nil) async throws -> [Contatto] {
+        var query = "clienti?select=*&order=ragione_sociale.asc&limit=2000"
+        if let slug { query += "&project_slug=eq.\(slug)" }
+        return try await sb.fetch(query)
     }
     static func updateContatto(id: String, fields: [String: Any?]) async throws {
         var b = fields; b["updated_at"] = isoNowString()
@@ -95,10 +99,14 @@ final class ContattiHubModel: ObservableObject {
     @Published var loading = true
     @Published var error: String?
 
+    /// Progetto di cui mostrare l'anagrafica; nil = tutti.
+    let slug: String?
+    init(slug: String? = nil) { self.slug = slug }
+
     func load() async {
         loading = true
         do {
-            async let c = HubAPI.listContatti()
+            async let c = HubAPI.listContatti(slug: slug)
             async let b = HubAPI.prossimiCompleanni(giorni: 30)
             contatti = try await c
             compleanni = try await b
@@ -132,8 +140,17 @@ enum ContattiTab: String, CaseIterable, Identifiable {
 }
 
 struct ContattiView: View {
-    @StateObject private var model = ContattiHubModel()
-    @StateObject private var leadModel = GZIbizaModel()
+    /// Agenzia di cui è l'anagrafica. nil = tutte, per la voce di sidebar.
+    let slug: String?
+    @StateObject private var model: ContattiHubModel
+    @StateObject private var leadModel: ImmobiliareModel
+
+    init(slug: String? = nil) {
+        self.slug = slug
+        _model     = StateObject(wrappedValue: ContattiHubModel(slug: slug))
+        _leadModel = StateObject(wrappedValue: ImmobiliareModel(kind: .leads, slug: slug))
+    }
+
     @State private var tab: ContattiTab = .clienti
     @State private var search = ""
     @State private var selected: Contatto?
@@ -213,7 +230,7 @@ struct ContattiView: View {
             Ricorrenze.chiediPermesso()
         }
         .sheet(isPresented: $mostraForm, onDismiss: { inModifica = nil }) {
-            ContattoFormView(existing: inModifica) { await model.load() }
+            ContattoFormView(existing: inModifica, slug: slug ?? "gz-ibiza") { await model.load() }
         }
     }
 

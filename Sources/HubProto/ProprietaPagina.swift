@@ -62,10 +62,16 @@ struct ProprietaDetailView: View {
     @State private var proprietari: [Proprietario] = []
     @State private var pdfStato: PDFStato = .fermo
 
-    init(proprietaId: String?) {
+    init(proprietaId: String?, slugIniziale: String = "gz-ibiza") {
         self.proprietaId = proprietaId
         _editing = State(initialValue: proprietaId == nil)
         _loading = State(initialValue: proprietaId != nil)
+        // Nuova proprietà: nasce nell'agenzia da cui è stata aperta la pagina,
+        // non sempre in GZ. Sull'esistente il progetto lo detta la riga sul DB.
+        if proprietaId == nil {
+            var d = PropertyDraft(); d.projectSlug = slugIniziale
+            _draft = State(initialValue: d)
+        }
     }
 
     private enum PDFStato: Equatable {
@@ -534,54 +540,54 @@ struct ProprietaDetailView: View {
 
     private var divider: some View { Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1) }
 
+    /// Riga di sola lettura: a quale agenzia appartiene e se è online.
     private func sitiLabel(_ p: Proprieta?) -> String {
-        let slugs = (p?.site_visibility ?? [:]).filter { $0.value }.keys.sorted()
-        guard !slugs.isEmpty else { return "Non pubblicata su nessun sito" }
-        return slugs.map { s in projects.first { $0.slug == s }?.name ?? s }.joined(separator: " · ")
+        let slug = p?.project_slug ?? "gz-ibiza"
+        let nome = agenzie.first { $0.slug == slug }?.name ?? slug
+        return nome + ((p?.pubblicata ?? false) ? " · pubblicata sul sito" : " · non pubblicata")
     }
+
+    /// Solo i progetti che sono agenzie immobiliari: un immobile non può stare
+    /// dentro Camere PSE o NCREATIVE.
+    private var agenzie: [Project] { projects.filter { AGENZIE_IMMOBILIARI.contains($0.slug) } }
 
     private var visibilitaSiti: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if projects.isEmpty {
+        VStack(alignment: .leading, spacing: 8) {
+            if agenzie.isEmpty {
                 Text("Caricamento progetti…").font(.system(size: 11)).foregroundStyle(Holo.subDim)
             } else {
-                ForEach(projects) { siteRow($0) }
+                // A CHI appartiene: una sola scelta, non una spunta per sito.
+                HStack(spacing: 6) {
+                    ForEach(agenzie) { proj in
+                        let on = draft.projectSlug == proj.slug
+                        Button { draft.projectSlug = proj.slug } label: {
+                            Text(proj.name).font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(on ? Holo.text : Csb.secFg)
+                                .padding(.horizontal, 12).padding(.vertical, 6)
+                                .background(Capsule().fill(on ? Holo.hsl(217, 70, 50).opacity(0.22) : Color.white.opacity(0.04)))
+                                .overlay(Capsule().strokeBorder(on ? Holo.hsl(217, 85, 64).opacity(0.6) : Color.white.opacity(0.1), lineWidth: 1))
+                        }.buttonStyle(.plain)
+                    }
+                    Spacer(minLength: 0)
+                }
+
+                // SE è online sul sito di quell'agenzia.
+                Button { draft.pubblicata.toggle() } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: draft.pubblicata ? "eye.fill" : "eye.slash").font(.system(size: 10))
+                        Text(draft.pubblicata ? "Pubblicata sul sito" : "Pubblica sul sito")
+                            .font(.system(size: 10.5, weight: .semibold))
+                    }
+                    .foregroundStyle(draft.pubblicata ? Holo.hsl(145, 72, 60) : Csb.secFg)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(Capsule().fill(draft.pubblicata ? Holo.hsl(145, 60, 45).opacity(0.18) : Color.white.opacity(0.05)))
+                    .overlay(Capsule().strokeBorder(draft.pubblicata ? Holo.hsl(145, 60, 55).opacity(0.5) : Color.white.opacity(0.1), lineWidth: 1))
+                }.buttonStyle(.plain)
+
+                Text("L'immobile appare nella dash dell'agenzia scelta e, se pubblicato, sul suo sito.")
+                    .font(.system(size: 10.5)).foregroundStyle(Holo.subDim)
             }
         }
-    }
-
-    private func siteRow(_ proj: Project) -> some View {
-        let associated = draft.visibility[proj.slug] != nil
-        let visible = draft.visibility[proj.slug] == true
-        return HStack(spacing: 10) {
-            Button {
-                if associated { draft.visibility[proj.slug] = nil } else { draft.visibility[proj.slug] = false }
-            } label: {
-                Image(systemName: associated ? "checkmark.square.fill" : "square")
-                    .font(.system(size: 15)).foregroundStyle(associated ? Holo.hsl(217, 85, 64) : Csb.secFg)
-            }.buttonStyle(.plain)
-
-            Text(proj.name).font(.system(size: 12.5, weight: .medium)).foregroundStyle(Holo.text)
-            Spacer(minLength: 0)
-
-            Button {
-                guard associated else { return }
-                draft.visibility[proj.slug] = !visible
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: visible ? "eye.fill" : "eye.slash").font(.system(size: 10))
-                    Text(visible ? "Visibile sul sito" : "Rendi visibile").font(.system(size: 10.5, weight: .semibold))
-                }
-                .foregroundStyle(visible ? Holo.hsl(145, 72, 60) : Csb.secFg)
-                .padding(.horizontal, 10).padding(.vertical, 5)
-                .background(Capsule().fill(visible ? Holo.hsl(145, 60, 45).opacity(0.18) : Color.white.opacity(0.05)))
-                .overlay(Capsule().strokeBorder(visible ? Holo.hsl(145, 60, 55).opacity(0.5) : Color.white.opacity(0.1), lineWidth: 1))
-                .opacity(associated ? 1 : 0.35)
-            }.buttonStyle(.plain).disabled(!associated)
-        }
-        .padding(.horizontal, 10).padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 9).fill(associated ? Color.white.opacity(0.05) : Color.white.opacity(0.02)))
-        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
     }
 
     // ── Foto ─────────────────────────────────────────────────────────────────

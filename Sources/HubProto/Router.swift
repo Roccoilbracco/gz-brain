@@ -41,8 +41,8 @@ struct MainRouter: View {
             // salvata finirebbe sull'immobile sbagliato.
             ProprietaDetailView(proprietaId: id).id(id)
                 .id(id)
-        case .proprietaNuova:
-            ProprietaDetailView(proprietaId: nil)
+        case .proprietaNuova(let slug):
+            ProprietaDetailView(proprietaId: nil, slugIniziale: slug)
                 .id("proprieta-nuova")
         case .codeGeneric:
             ProgettoCodeView(project: nil)

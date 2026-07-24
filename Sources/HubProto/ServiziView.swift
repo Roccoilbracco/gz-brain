@@ -56,6 +56,21 @@ extension HubAPI {
     static func listBollette() async throws -> [Bolletta] {
         try await sb.fetch("bollette?select=*&order=scadenza.desc")
     }
+    /// Le bollette inserite a mano non hanno `ext_key`: quella è la chiave
+    /// d'import del foglio del maestro e deve restare libera, altrimenti un
+    /// giorno un re-import si scontrerebbe con una riga scritta qui.
+    @discardableResult
+    static func createBolletta(_ f: [String: Any?]) async throws -> Bolletta {
+        try await sb.insertReturning("bollette", body: f)
+    }
+    static func updateBolletta(id: String, fields: [String: Any?]) async throws {
+        var b = fields; b["updated_at"] = isoNowString()
+        try await sb.mutate("bollette?id=eq.\(id)", method: "PATCH", body: b)
+    }
+    static func deleteBolletta(id: String) async throws {
+        await deleteAllegatiDi(.bolletta, id: id)
+        try await sb.mutate("bollette?id=eq.\(id)", method: "DELETE")
+    }
 }
 
 /// Le voci di spesa delle utenze, nell'ordine in cui vanno mostrate. Immondizia
@@ -95,6 +110,9 @@ let CASE_PSE: [(String, String)] = [("via-po", "Via Po"), ("via-romagna", "Via R
     @Published var colazioni: [Colazione] = []
     @Published var utenze: [EducampRiga] = []
     @Published var bollette: [Bolletta] = []
+    /// Quante fatture in PDF ha ciascuna bolletta: una query sola per tutta la
+    /// tabella, così la graffetta non costa una chiamata per riga.
+    @Published var allegatiPerBolletta: [String: Int] = [:]
     @Published var loading = true
     func load() async {
         loading = true
@@ -102,7 +120,11 @@ let CASE_PSE: [(String, String)] = [("via-po", "Via Po"), ("via-romagna", "Via R
         colazioni = (try? await HubAPI.listColazioni()) ?? []
         utenze = (try? await HubAPI.listEducampRighe()) ?? []
         bollette = (try? await HubAPI.listBollette()) ?? []
+        allegatiPerBolletta = (try? await HubAPI.contaAllegati(.bolletta)) ?? [:]
         loading = false
+    }
+    func ricontaAllegati() async {
+        allegatiPerBolletta = (try? await HubAPI.contaAllegati(.bolletta)) ?? [:]
     }
 }
 
@@ -141,6 +163,8 @@ struct ServizioDettaglioSheet: View {
 struct ServiziView: View {
     @Binding var tab: ServizioTab
     @StateObject private var model = ServiziModel()
+    @State private var bollettaSheet: Bolletta?
+    @State private var nuovaBolletta = false
 
     var body: some View {
         Group {
@@ -159,6 +183,17 @@ struct ServiziView: View {
             }
         }
         .task { await model.load() }
+        // Stessa scheda per la bolletta esistente e per quella nuova: cambia
+        // solo se parte da una riga o da zero.
+        // Alla chiusura si ricontano gli allegati: chi apre la scheda solo per
+        // attaccare il PDF non passa dal salvataggio, e la graffetta in tabella
+        // resterebbe indietro.
+        .sheet(item: $bollettaSheet, onDismiss: { Task { await model.ricontaAllegati() } }) { b in
+            BollettaForm(existing: b) { await model.load() }
+        }
+        .sheet(isPresented: $nuovaBolletta) {
+            BollettaForm(existing: nil) { await model.load() }
+        }
     }
 
     // ── PULIZIE ──
@@ -339,11 +374,34 @@ struct ServiziView: View {
     private func bolletteCasa(_ c: String) -> Int {
         bolletteCorrenti.filter { $0.casa == c }.reduce(0) { $0 + $1.importo_cents }
     }
+    /// Una tabella per casa invece di una sola mescolata: le due strutture hanno
+    /// fornitori e contratti diversi, e leggerle insieme costringe a ricontare a
+    /// occhio quale bolletta appartiene a quale casa. L'ordine è sempre Via Po,
+    /// Via Romagna, Comune; le case senza bollette non fanno una tabella vuota.
+    private func perCasa(_ righe: [Bolletta]) -> [(casa: String, righe: [Bolletta])] {
+        (CASE_PSE.map { $0.0 } + ["comune"]).compactMap { c in
+            let r = righe.filter { $0.casa == c }
+            return r.isEmpty ? nil : (c, r)
+        }
+    }
 
     private var utenzeView: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("UTENZE CHE PAGHIAMO NOI — DA LUGLIO 2026")
-                .font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim)
+            HStack {
+                Text("UTENZE CHE PAGHIAMO NOI — DA LUGLIO 2026")
+                    .font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim)
+                Spacer()
+                Button { nuovaBolletta = true } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "plus").font(.system(size: 10, weight: .bold))
+                        Text("Nuova bolletta").font(.system(size: 11.5, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(Capsule().fill(PSE.warn))
+                    .contentShape(Capsule())
+                }.buttonStyle(.plain)
+            }
             HStack(spacing: 12) {
                 card("TOTALE PAGATO", eurc(bolletteTot), PSE.neg)
                 card("VIA PO", eurc(bolletteCasa("via-po")), PSE.dim)
@@ -358,15 +416,19 @@ struct ServiziView: View {
             if bolletteCorrenti.isEmpty {
                 EmptyStateCard(icon: "doc.text", text: "Nessuna bolletta da luglio 2026 in poi.")
             } else {
-                bolletteTable(bolletteCorrenti, titolo: "BOLLETTE DA LUGLIO 2026")
+                ForEach(perCasa(bolletteCorrenti), id: \.casa) { g in
+                    bolletteTable(g.righe, titolo: "BOLLETTE DA LUGLIO 2026 — \(casaLbl(g.casa).uppercased())")
+                }
             }
-            Text("Si pagano dal conto corrente, non da Cassa/Massimo/Beeper: per questo non compaiono tra i movimenti e non toccano i saldi. Acqua, immondizia e IMU non erano nel foglio del maestro — le voci sono pronte, vanno solo riempite. Le utenze addebitate agli inquilini Educamp sono un'altra cosa e stanno nella scheda Educamp.")
+            Text("Si pagano dal conto corrente, non da Cassa/Massimo/Beeper: per questo non compaiono tra i movimenti e non toccano i saldi. Ogni bolletta che arriva si registra con «Nuova bolletta» e ci si attacca il PDF; le vecchie si aprono cliccando sulla riga. Acqua, immondizia e IMU non erano nel foglio del maestro: le voci sono pronte, vanno solo riempite. Le utenze addebitate agli inquilini Educamp sono un'altra cosa e stanno nella scheda Educamp.")
                 .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
 
             if !bolletteStorico.isEmpty {
                 Text("PRIMA DI LUGLIO 2026 — ARCHIVIO, FUORI DAL CONTEGGIO")
                     .font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint).padding(.top, 10)
-                bolletteTable(bolletteStorico, titolo: nil, spenta: true)
+                ForEach(perCasa(bolletteStorico), id: \.casa) { g in
+                    bolletteTable(g.righe, titolo: "ARCHIVIO — \(casaLbl(g.casa).uppercased())", spenta: true)
+                }
             }
         }
     }
@@ -407,21 +469,28 @@ struct ServiziView: View {
                 th("FORNITORE").frame(width: 110, alignment: .leading)
                 th("PERIODO / NOTA").frame(maxWidth: .infinity, alignment: .leading)
                 th("IMPORTO").frame(width: 84, alignment: .trailing)
+                Image(systemName: "paperclip").font(.system(size: 8.5, weight: .heavy))
+                    .foregroundStyle(PSE.faint).frame(width: 24, alignment: .trailing)
             }
             .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
             .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
+            // La riga apre la scheda della bolletta: è lì che si attacca il PDF
+            // e lo si riapre quando serve controllare un importo.
             ForEach(Array(righe.enumerated()), id: \.element.id) { i, b in
-                HStack(spacing: 10) {
-                    num(svDayYStr(b.scadenza), PSE.dim).frame(width: 78, alignment: .leading)
-                    td(casaLbl(b.casa)).frame(width: 96, alignment: .leading)
-                    Text(TIPI_BOLLETTA.first { $0.0 == b.tipo }?.1 ?? b.tipo.capitalized)
-                        .font(.system(size: 12, weight: .semibold)).foregroundStyle(spenta ? PSE.dim : PSE.ink)
-                        .frame(width: 86, alignment: .leading).lineLimit(1)
-                    td(b.fornitore ?? "—").frame(width: 110, alignment: .leading)
-                    td(b.periodo ?? b.note ?? "—").frame(maxWidth: .infinity, alignment: .leading)
-                    num(eurc(b.importo_cents), spenta ? PSE.dim : PSE.neg).frame(width: 84, alignment: .trailing)
-                }
-                .padding(.horizontal, 16).padding(.vertical, 7)
+                Button { bollettaSheet = b } label: {
+                    HStack(spacing: 10) {
+                        num(svDayYStr(b.scadenza), PSE.dim).frame(width: 78, alignment: .leading)
+                        td(casaLbl(b.casa)).frame(width: 96, alignment: .leading)
+                        Text(TIPI_BOLLETTA.first { $0.0 == b.tipo }?.1 ?? b.tipo.capitalized)
+                            .font(.system(size: 12, weight: .semibold)).foregroundStyle(spenta ? PSE.dim : PSE.ink)
+                            .frame(width: 86, alignment: .leading).lineLimit(1)
+                        td(b.fornitore ?? "—").frame(width: 110, alignment: .leading)
+                        td(b.periodo ?? b.note ?? "—").frame(maxWidth: .infinity, alignment: .leading)
+                        num(eurc(b.importo_cents), spenta ? PSE.dim : PSE.neg).frame(width: 84, alignment: .trailing)
+                        AllegatiPin(n: model.allegatiPerBolletta[b.id] ?? 0).frame(width: 24, alignment: .trailing)
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 7).contentShape(Rectangle())
+                }.buttonStyle(.plain)
                 if i < righe.count - 1 { Divider().overlay(PSE.line).padding(.leading, 16) }
             }
             HStack(spacing: 10) {
@@ -479,5 +548,167 @@ struct ServiziView: View {
     }
     private func num(_ t: String, _ c: Color) -> some View {
         Text(t).font(.system(size: 11.5)).foregroundStyle(c).monospacedDigit().lineLimit(1)
+    }
+}
+
+
+// ── Scheda bolletta: i dati, la fattura in PDF, e il modo di crearne una ────
+//
+// Stessa vista per la bolletta che c'è già e per quella nuova. La riga in
+// tabella dice quanto si è pagato; qui si attacca il documento che lo dimostra,
+// e da qui lo si riapre quando c'è da controllare un conguaglio o discutere un
+// addebito col fornitore.
+private struct BollettaForm: View {
+    let existing: Bolletta?
+    let onSaved: () async -> Void
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var allegati: AllegatiStore
+
+    @State private var casa = "via-po"
+    @State private var tipo = "luce"
+    @State private var fornitore = ""
+    @State private var scadenza = Date()
+    @State private var periodo = ""
+    @State private var importo = ""
+    @State private var pagata = true
+    @State private var note = ""
+    @State private var saving = false
+    @State private var confermaElimina = false
+
+    init(existing: Bolletta?, onSaved: @escaping () async -> Void) {
+        self.existing = existing; self.onSaved = onSaved
+        _allegati = StateObject(wrappedValue: AllegatiStore(entita: .bolletta, entitaId: existing?.id))
+    }
+
+    private var cents: Int? {
+        let s = importo.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespaces)
+        guard let v = Double(s), v > 0 else { return nil }
+        return Int((v * 100).rounded())
+    }
+
+    var body: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text(existing == nil ? "NUOVA BOLLETTA" : "BOLLETTA")
+                    .font(.system(size: 15, weight: .heavy)).tracking(2).foregroundStyle(PSE.ink)
+
+                HStack(spacing: 12) {
+                    pick("Casa", [("via-po", "Via Po"), ("via-romagna", "Via Romagna"), ("comune", "Comune")], casa) { casa = $0 }
+                    pick("Tipo", TIPI_BOLLETTA.map { ($0.0, $0.1) }, tipo) { tipo = $0 }
+                }
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        etichetta("Scadenza")
+                        DatePicker("", selection: $scadenza, displayedComponents: .date)
+                            .labelsHidden().datePickerStyle(.compact).colorScheme(.dark)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                    HoloField(label: "Importo €", text: $importo, placeholder: "112,15").frame(width: 150)
+                }
+                HoloField(label: "Fornitore", text: $fornitore, placeholder: "Enel, Plenitude, Acquambiente…")
+                HoloField(label: "Periodo", text: $periodo, placeholder: "01/03 -> 30/04/26")
+                HoloField(label: "Nota", text: $note, placeholder: "Conguaglio, contatore, numero cliente…")
+
+                // Chi la registra di solito l'ha già pagata: il difetto è
+                // «pagata», e si toglie la spunta solo per quelle in scadenza.
+                Toggle(isOn: $pagata) {
+                    Text("Già pagata").font(.system(size: 12.5)).foregroundStyle(PSE.text)
+                }
+                .toggleStyle(.switch).tint(PSE.pos).fixedSize()
+
+                AllegatiBox(store: allegati, titolo: "FATTURA IN PDF")
+
+                HStack(spacing: 10) {
+                    if let b = existing {
+                        Button { confermaElimina = true } label: {
+                            Text("Elimina").font(.system(size: 13)).foregroundStyle(Color(hex: 0xffb3ad))
+                                .padding(.horizontal, 14).padding(.vertical, 9)
+                        }.buttonStyle(.plain)
+                        .confirmationDialog("Eliminare questa bolletta?", isPresented: $confermaElimina) {
+                            Button("Elimina bolletta", role: .destructive) { Task { await del() } }
+                            Button("Annulla", role: .cancel) {}
+                        } message: {
+                            Text("\(TIPI_BOLLETTA.first { $0.0 == b.tipo }?.1 ?? b.tipo) · \(eurc(b.importo_cents)). Sparisce anche la fattura allegata.")
+                        }
+                    }
+                    Spacer()
+                    Button("Annulla") { dismiss() }.buttonStyle(.plain)
+                        .font(.system(size: 13)).foregroundStyle(PSE.dim).padding(.horizontal, 16).padding(.vertical, 9)
+                    Button { Task { await save() } } label: {
+                        Text(saving ? "Salvataggio…" : (existing == nil ? "Salva bolletta" : "Salva modifiche"))
+                            .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                            .padding(.horizontal, 18).padding(.vertical, 9)
+                            .background(Capsule().fill(PSE.warn))
+                    }.buttonStyle(.plain).disabled(saving || cents == nil)
+                    .opacity(cents == nil ? 0.5 : 1)
+                }.padding(.top, 4)
+            }
+            .padding(22)
+        }
+        .frame(width: 540, height: 700)
+        .background(Color(hex: 0x0b0f18))
+        .preferredColorScheme(.dark)
+        .onAppear(perform: fill)
+    }
+
+    private func etichetta(_ t: String) -> some View {
+        Text(t.uppercased()).font(.system(size: 9.5, weight: .heavy)).tracking(1.5).foregroundStyle(Holo.labelDim)
+    }
+    private func pick(_ label: String, _ opts: [(String, String)], _ sel: String, _ set: @escaping (String) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            etichetta(label)
+            Menu {
+                ForEach(opts, id: \.0) { o in Button(o.1) { set(o.0) } }
+            } label: {
+                HStack(spacing: 8) {
+                    Text(opts.first { $0.0 == sel }?.1 ?? "—").font(.system(size: 13)).foregroundStyle(PSE.ink).lineLimit(1)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(Holo.labelDim)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 9).frame(maxWidth: .infinity)
+                .background(RoundedRectangle(cornerRadius: 9).fill(Color(red: 10/255, green: 16/255, blue: 34/255).opacity(0.8)))
+                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color(red: 130/255, green: 180/255, blue: 1).opacity(0.35), lineWidth: 1))
+                .contentShape(Rectangle())
+            }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func fill() {
+        guard let b = existing else { return }
+        casa = b.casa; tipo = b.tipo
+        fornitore = b.fornitore ?? ""
+        scadenza = svYmd.date(from: String((b.scadenza ?? "").prefix(10))) ?? Date()
+        periodo = b.periodo ?? ""
+        importo = String(format: "%.2f", Double(b.importo_cents) / 100)
+        pagata = b.pagata; note = b.note ?? ""
+    }
+
+    private func fields() -> [String: Any?] {
+        [ "casa": casa, "tipo": tipo,
+          "fornitore": fornitore.trimmingCharacters(in: .whitespaces).isEmpty ? nil : fornitore,
+          "scadenza": svYmd.string(from: scadenza),
+          "periodo": periodo.trimmingCharacters(in: .whitespaces).isEmpty ? nil : periodo,
+          "importo_cents": cents ?? 0, "pagata": pagata,
+          "note": note.trimmingCharacters(in: .whitespaces).isEmpty ? nil : note ]
+    }
+
+    private func save() async {
+        saving = true; defer { saving = false }
+        do {
+            if let b = existing {
+                try await HubAPI.updateBolletta(id: b.id, fields: fields())
+            } else {
+                // La fattura scelta prima di salvare sale solo adesso: prima
+                // non c'era una bolletta a cui attaccarla.
+                let creata = try await HubAPI.createBolletta(fields())
+                await allegati.salvaInAttesa(su: creata.id)
+            }
+            await onSaved(); dismiss()
+        } catch {}
+    }
+
+    private func del() async {
+        guard let b = existing else { return }
+        do { try await HubAPI.deleteBolletta(id: b.id); await onSaved(); dismiss() } catch {}
     }
 }

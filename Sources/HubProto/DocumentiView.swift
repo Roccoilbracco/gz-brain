@@ -1,9 +1,10 @@
 import SwiftUI
 
 // ============================================================================
-// Scheda «Documenti» della dash GZ Ibiza.
+// Scheda «Documenti» delle dash immobiliari (GZ Ibiza, Wallis 57).
 // A sinistra i modelli in bianco da riusare, a destra le copie firmate con il
 // riferimento a chi appartengono. Il filtro per categoria vale per entrambe.
+// Ogni agenzia vede solo i propri: contratti ed encargo non si mescolano.
 // ============================================================================
 
 @MainActor final class DocumentiModel: ObservableObject {
@@ -13,11 +14,14 @@ import SwiftUI
     @Published var loading = true
     @Published var messaggio: String?
 
+    let progetto: String
+    init(progetto: String = "gz-ibiza") { self.progetto = progetto }
+
     func load() async {
         loading = true
-        docs = (try? await HubAPI.listDocumenti()) ?? []
-        owners = (try? await HubAPI.listRePipeline(.owners)) ?? []
-        proprieta = (try? await HubAPI.listProprieta()) ?? []
+        docs = (try? await HubAPI.listDocumenti(progetto: progetto)) ?? []
+        owners = (try? await HubAPI.listRePipeline(.owners, slug: progetto)) ?? []
+        proprieta = (try? await HubAPI.listProprieta(slug: progetto)) ?? []
         loading = false
     }
     /// A chi appartiene un documento firmato, in chiaro.
@@ -31,7 +35,15 @@ import SwiftUI
 }
 
 struct DocumentiView: View {
-    @StateObject private var model = DocumentiModel()
+    /// Agenzia di cui è l'archivio.
+    let progetto: String
+    @StateObject private var model: DocumentiModel
+
+    init(progetto: String = "gz-ibiza") {
+        self.progetto = progetto
+        _model = StateObject(wrappedValue: DocumentiModel(progetto: progetto))
+    }
+
     @State private var categoria: DocCategoria?
     @State private var search = ""
     @State private var busy = false
@@ -124,7 +136,8 @@ struct DocumentiView: View {
         busy = true; model.messaggio = nil
         // La categoria del filtro fa da default: se stai guardando gli encargo,
         // quello che carichi è quasi certamente un encargo.
-        let falliti = await DocUploader.carica(urls, tipo: tipo, categoria: categoria ?? .altro)
+        let falliti = await DocUploader.carica(urls, tipo: tipo, categoria: categoria ?? .altro,
+                                               progetto: progetto)
         await model.load()
         busy = false
         if falliti > 0 { model.messaggio = "\(falliti) file su \(urls.count) non caricati." }

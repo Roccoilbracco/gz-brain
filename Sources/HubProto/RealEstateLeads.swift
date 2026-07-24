@@ -166,12 +166,20 @@ extension HubAPI {
     // ── Propietarios/Inquilinos: pipeline gemella su re_owners ────────────────
     // Stesso modello RELead, tabella diversa. Le funzioni accettano `kind` così
     // board, drawer e form restano condivisi tra le due pipeline.
-    static func listRePipeline(_ kind: PipelineKind) async throws -> [RELead] {
-        try await sb.fetch("\(kind.table)?select=*&order=created_at.desc&limit=2000")
+    //
+    // `slug` è il progetto immobiliare (gz-ibiza, wallis-57): le due agenzie
+    // hanno le stesse tabelle ma non devono vedersi i lead a vicenda. nil = tutti,
+    // per le viste di sistema che non appartengono a un progetto.
+    static func listRePipeline(_ kind: PipelineKind, slug: String? = nil) async throws -> [RELead] {
+        var query = "\(kind.table)?select=*&order=created_at.desc&limit=2000"
+        if let slug { query += "&project_slug=eq.\(slug)" }
+        return try await sb.fetch(query)
     }
     @discardableResult
-    static func createRePipeline(_ kind: PipelineKind, _ fields: [String: Any?]) async throws -> RELead {
-        try await sb.insertReturning(kind.table, body: fields)
+    static func createRePipeline(_ kind: PipelineKind, _ fields: [String: Any?],
+                                 slug: String) async throws -> RELead {
+        var body = fields; body["project_slug"] = slug
+        return try await sb.insertReturning(kind.table, body: body)
     }
     static func updateRePipeline(_ kind: PipelineKind, id: String, fields: [String: Any?]) async throws {
         var body = fields; body["updated_at"] = isoNowString()
@@ -281,6 +289,9 @@ enum LeadFmt {
 struct LeadFormView: View {
     let existing: RELead?
     var kind: PipelineKind = .leads
+    /// Progetto a cui il lead appartiene: lo decide la dash da cui si apre il
+    /// form, non chi compila. Senza, un lead di Wallis finirebbe in GZ.
+    let slug: String
     let onSaved: () async -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -365,7 +376,7 @@ struct LeadFormView: View {
         ]
         do {
             if let e = existing { try await HubAPI.updateRePipeline(kind, id: e.id, fields: body) }
-            else { try await HubAPI.createRePipeline(kind, body) }
+            else { try await HubAPI.createRePipeline(kind, body, slug: slug) }
             await onSaved(); dismiss()
         } catch { saving = false }
     }
@@ -463,6 +474,8 @@ private func rawToBool(_ s: String) -> Bool? { s == "si" ? true : (s == "no" ? f
 // Chi affida un immobile in gestione: dati del contatto + dell'immobile offerto.
 struct OwnerFormView: View {
     let existing: RELead?
+    /// Vedi LeadFormView.slug: il progetto lo porta la dash che apre il form.
+    let slug: String
     let onSaved: () async -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -557,7 +570,7 @@ struct OwnerFormView: View {
         ]
         do {
             if let e = existing { try await HubAPI.updateRePipeline(.owners, id: e.id, fields: body) }
-            else { try await HubAPI.createRePipeline(.owners, body) }
+            else { try await HubAPI.createRePipeline(.owners, body, slug: slug) }
             await onSaved(); dismiss()
         } catch { saving = false }
     }

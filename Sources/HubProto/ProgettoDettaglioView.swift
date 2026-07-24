@@ -1,5 +1,10 @@
 import SwiftUI
 
+/// I progetti che sono agenzie immobiliari: stessa dash, stesse tabelle, dati
+/// separati da `project_slug`. Aggiungerne una vuol dire aggiungere lo slug qui
+/// e la riga in `projects` — non serve altro codice.
+let AGENZIE_IMMOBILIARI: Set<String> = ["gz-ibiza", "wallis-57"]
+
 // ─── Definizione stadi pipeline (griglia 4×2 a serpentina, come ProgettoDettaglio.tsx) ───
 private struct PipeCard {
     let label: String
@@ -81,16 +86,14 @@ struct ProgettoDettaglioView: View {
                 if model.project.slug == "camere-pse" {
                     // dash dedicata Camere PSE: pannello prenotazioni camere
                     CamerePSEDashboard()
-                } else if model.project.slug == "wallis-57" {
-                    // dash dedicata Wallis 57: richieste dal form del sito + WhatsApp
-                    WallisDashboard()
                 } else if model.project.slug == "ncreative" {
                     // dash dedicata NCREATIVE: CRM dell'agenzia social (clienti,
                     // pipeline, calendario contenuti, fatture e spese)
                     NCreativeDashboard()
-                } else if model.project.slug == "gz-ibiza" {
-                    // dash dedicata GZ Ibiza: pipeline lead (re_leads) + WhatsApp
-                    GZIbizaDashboard()
+                } else if AGENZIE_IMMOBILIARI.contains(model.project.slug) {
+                    // GZ Ibiza e Wallis 57 sono la stessa agenzia immobiliare due
+                    // volte: identica dash, dati separati da project_slug.
+                    ImmobiliareDashboard(slug: model.project.slug, titolo: model.project.name)
                 } else {
                     if let err = model.error {
                         GlassCard { Text("Errore: \(err)").foregroundStyle(Color(hex: 0xffb3ad)).padding(20) }

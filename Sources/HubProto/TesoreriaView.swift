@@ -70,6 +70,9 @@ let BREAKFAST_COST = 350   // 3,50 € per persona/notte (solo Booking)
     // Righe Educamp: servono per il «da incassare» netto degli ospiti di Via
     // Romagna, che sono la fonte OTA-equivalente di quella struttura.
     @Published var educampRighe: [EducampRiga] = []
+    /// Quanti allegati ha ciascun movimento, per mostrare la graffetta in
+    /// tabella: una sola query per tutti, non una per riga.
+    @Published var allegatiPerMov: [String: Int] = [:]
     @Published var loading = true
     func load() async {
         loading = true
@@ -78,7 +81,11 @@ let BREAKFAST_COST = 350   // 3,50 € per persona/notte (solo Booking)
         pulizie = (try? await HubAPI.listPulizie()) ?? []
         colazioni = (try? await HubAPI.listColazioni()) ?? []
         educampRighe = (try? await HubAPI.listEducampRighe()) ?? []
+        allegatiPerMov = (try? await HubAPI.contaAllegati(.movimento)) ?? [:]
         loading = false
+    }
+    func ricontaAllegati() async {
+        allegatiPerMov = (try? await HubAPI.contaAllegati(.movimento)) ?? [:]
     }
     /// Quello che gli ospiti Educamp pagano in tutto (affitto + utenze): è la
     /// base giusta per il «da incassare», perché è ciò che entra davvero in cassa.
@@ -422,7 +429,9 @@ struct TesoreriaView: View {
         .onChange(of: newTrigger) { _, v in
             if v { editing = nil; sub = .movimenti; showForm = true; newTrigger = false }
         }
-        .sheet(isPresented: $showForm, onDismiss: { editing = nil }) {
+        // Il riconteggio serve anche a chi chiude con Annulla dopo aver solo
+        // attaccato una fattura: il salvataggio non passa di lì.
+        .sheet(isPresented: $showForm, onDismiss: { editing = nil; Task { await model.ricontaAllegati() } }) {
             TesMovimentoForm(conti: model.conti, existing: editing) { await model.load() }
         }
         .sheet(item: $servizioSheet) { tab in
@@ -827,6 +836,7 @@ struct TesoreriaView: View {
             Text("CATEGORIA").frame(width: 100, alignment: .leading)
             Text("MODALITÀ").frame(width: 84, alignment: .leading)
             Text("IMPORTO").frame(width: 92, alignment: .trailing)
+            Image(systemName: "paperclip").frame(width: 24, alignment: .trailing)
         }
         .font(.system(size: 8.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
         .padding(.horizontal, 16).padding(.vertical, 9)
@@ -866,6 +876,7 @@ struct TesoreriaView: View {
                     .font(.system(size: 13, weight: .bold)).monospacedDigit()
                     .foregroundStyle(entrata ? PSE.pos : PSE.neg)
                     .frame(width: 92, alignment: .trailing)
+                AllegatiPin(n: model.allegatiPerMov[m.id] ?? 0).frame(width: 24, alignment: .trailing)
             }
             .padding(.horizontal, 16).padding(.vertical, 9).contentShape(Rectangle())
         }.buttonStyle(.plain)
@@ -1759,6 +1770,15 @@ private struct TesMovimentoForm: View {
     let onSaved: () async -> Void
     @Environment(\.dismiss) private var dismiss
 
+    // Su un movimento nuovo l'id non c'è ancora: i file scelti restano in attesa
+    // nello store e salgono subito dopo l'INSERT (vedi save()).
+    @StateObject private var allegati: AllegatiStore
+
+    init(conti: [Conto], existing: TesMovimento?, onSaved: @escaping () async -> Void) {
+        self.conti = conti; self.existing = existing; self.onSaved = onSaved
+        _allegati = StateObject(wrappedValue: AllegatiStore(entita: .movimento, entitaId: existing?.id))
+    }
+
     @State private var data = Date()
     @State private var contoId = "cassa"
     @State private var tipo = "uscita"
@@ -1804,6 +1824,8 @@ private struct TesMovimentoForm: View {
                 HoloField(label: "Categoria", text: $categoria, placeholder: "affitto, spesa, pulizia…")
                 HoloField(label: "Nome e cognome", text: $descrizione, placeholder: "Es. Mario Rossi")
 
+                AllegatiBox(store: allegati)
+
                 HStack(spacing: 10) {
                     if existing != nil {
                         Button { confermaElimina = true } label: {
@@ -1832,7 +1854,7 @@ private struct TesMovimentoForm: View {
             }
             .padding(24)
         }
-        .frame(width: 520, height: 540)
+        .frame(width: 520, height: 660)
         .background(LinearGradient(colors: [Color(red: 16/255, green: 24/255, blue: 48/255), Color(red: 8/255, green: 12/255, blue: 26/255)],
                                    startPoint: .top, endPoint: .bottom))
         .preferredColorScheme(.dark)
@@ -1907,13 +1929,24 @@ private struct TesMovimentoForm: View {
     private func save() async {
         saving = true; defer { saving = false }
         do {
-            if let m = existing { try await HubAPI.updateTesMovimento(id: m.id, fields: fields()) }
-            else { try await HubAPI.createTesMovimento(fields()) }
+            if let m = existing {
+                try await HubAPI.updateTesMovimento(id: m.id, fields: fields())
+            } else {
+                // Solo adesso il movimento ha un id: i file scelti prima si
+                // attaccano qui, altrimenti resterebbero dei file senza riga.
+                let creato = try await HubAPI.createTesMovimento(fields())
+                await allegati.salvaInAttesa(su: creato.id)
+            }
             await onSaved(); dismiss()
         } catch {}
     }
     private func del() async {
         guard let m = existing else { return }
-        do { try await HubAPI.deleteTesMovimento(id: m.id); await onSaved(); dismiss() } catch {}
+        do {
+            // Prima gli allegati: cancellato il movimento, le sue fatture non
+            // avrebbero più un modo per essere ritrovate né cancellate.
+            await HubAPI.deleteAllegatiDi(.movimento, id: m.id)
+            try await HubAPI.deleteTesMovimento(id: m.id); await onSaved(); dismiss()
+        } catch {}
     }
 }

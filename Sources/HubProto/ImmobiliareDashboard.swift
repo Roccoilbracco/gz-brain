@@ -1,7 +1,7 @@
 import SwiftUI
 
 @MainActor
-final class GZIbizaModel: ObservableObject {
+final class ImmobiliareModel: ObservableObject {
     @Published var leads: [RELead] = []
     @Published var loading = true
     @Published var error: String?
@@ -11,11 +11,17 @@ final class GZIbizaModel: ObservableObject {
     @Published var azioneFallita: String?
 
     let kind: PipelineKind
-    init(kind: PipelineKind = .leads) { self.kind = kind }
+    /// Progetto immobiliare di cui mostriamo i record. nil = tutti i progetti,
+    /// per le viste di sistema (es. l'elenco potenziali dentro Contatti).
+    let slug: String?
+    init(kind: PipelineKind = .leads, slug: String? = nil) {
+        self.kind = kind
+        self.slug = slug
+    }
 
     func load() async {
         loading = true
-        do { leads = try await HubAPI.listRePipeline(kind); error = nil }
+        do { leads = try await HubAPI.listRePipeline(kind, slug: slug); error = nil }
         catch { self.error = error.localizedDescription }
         loading = false
     }
@@ -104,10 +110,26 @@ enum GZTab: String, CaseIterable, Identifiable {
     }
 }
 
-// ─── Dash GZ Ibiza: pipeline lead + conversazioni WhatsApp ───────────────────
-struct GZIbizaDashboard: View {
-    @StateObject private var model = GZIbizaModel(kind: .leads)
-    @StateObject private var owners = GZIbizaModel(kind: .owners)
+// ─── Dash immobiliare: pipeline lead + conversazioni WhatsApp ────────────────
+// Una sola dash per tutte le agenzie (GZ Ibiza, Wallis 57): stesse schede,
+// stesso layout, stesse tabelle. A cambiare è solo `slug`, che filtra i dati —
+// ogni agenzia ha i suoi immobili, i suoi lead e i suoi contatti.
+struct ImmobiliareDashboard: View {
+    /// Progetto di cui è la dash: gz-ibiza, wallis-57, …
+    let slug: String
+    /// Titolo in testata (il nome del progetto).
+    let titolo: String
+
+    @StateObject private var model: ImmobiliareModel
+    @StateObject private var owners: ImmobiliareModel
+
+    init(slug: String, titolo: String) {
+        self.slug = slug
+        self.titolo = titolo
+        _model  = StateObject(wrappedValue: ImmobiliareModel(kind: .leads,  slug: slug))
+        _owners = StateObject(wrappedValue: ImmobiliareModel(kind: .owners, slug: slug))
+    }
+
     @State private var tab: GZTab = .leads
     @State private var search = ""
     @State private var fonte: LeadSource?
@@ -117,7 +139,7 @@ struct GZIbizaDashboard: View {
     @State private var inModifica: RELead?     // nil = nuovo record
 
     // Il modello della pipeline attualmente mostrata (leads o proprietari/inquilini)
-    private var active: GZIbizaModel { tab == .owners ? owners : model }
+    private var active: ImmobiliareModel { tab == .owners ? owners : model }
     private var kind: PipelineKind { tab.pipeline ?? .leads }
 
     private var filtered: [RELead] {
@@ -179,15 +201,16 @@ struct GZIbizaDashboard: View {
                         }
                     }
                     // WhatsApp: solo per i lead (richieste in arrivo), non per i proprietari
-                    if tab == .leads { WhatsAppSection(slug: "gz-ibiza") }
+                    if tab == .leads { WhatsAppSection(slug: slug) }
                 } else {
-                    // Le tre viste già esistenti, ospitate qui invece che nella
-                    // sidebar: sono lavoro di GZ Ibiza, non voci di sistema.
+                    // Le viste già esistenti, ospitate qui invece che nella
+                    // sidebar: sono lavoro dell'agenzia, non voci di sistema.
+                    // Ognuna vede solo i dati del proprio progetto.
                     switch tab {
-                    case .contatti:   ContattiView()
-                    case .proprieta:  ProprietaView(embedded: true)
-                    case .documenti:  DocumentiView()
-                    case .calendario: CalendarioVisiteView(embedded: true)
+                    case .contatti:   ContattiView(slug: slug)
+                    case .proprieta:  ProprietaView(embedded: true, slug: slug)
+                    case .documenti:  DocumentiView(progetto: slug)
+                    case .calendario: CalendarioVisiteView(embedded: true, slug: slug)
                     default:          EmptyView()
                     }
                 }
@@ -229,13 +252,13 @@ struct GZIbizaDashboard: View {
         .task { await model.load() }
         .task { await owners.load() }
         .sheet(isPresented: $mostraAgente) {
-            AgenteSheet(slug: "gz-ibiza") { mostraAgente = false }
+            AgenteSheet(slug: slug) { mostraAgente = false }
         }
         .sheet(isPresented: $mostraForm, onDismiss: { inModifica = nil }) {
             if tab == .owners {
-                OwnerFormView(existing: inModifica) { await active.load() }
+                OwnerFormView(existing: inModifica, slug: slug) { await active.load() }
             } else {
-                LeadFormView(existing: inModifica, kind: kind) { await active.load() }
+                LeadFormView(existing: inModifica, kind: kind, slug: slug) { await active.load() }
             }
         }
     }
@@ -262,7 +285,7 @@ struct GZIbizaDashboard: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("GZ Ibiza")
+                Text(titolo)
                     .font(.system(size: 20, weight: .semibold)).foregroundStyle(UI.ink)
                 Text(tab.sottotitolo)
                     .font(.system(size: 11.5)).foregroundStyle(UI.faint)

@@ -46,7 +46,9 @@ enum Route: Equatable {
     case lead(slug: String, leadId: String)
     case cliente(id: String)
     case proprieta(id: String)
-    case proprietaNuova         // pagina nuova proprietà (campi editabili in pagina)
+    // pagina nuova proprietà (campi editabili in pagina); lo slug è l'agenzia
+    // da cui si è premuto «Aggiungi proprietà»
+    case proprietaNuova(slug: String)
     case codeGeneric            // terminale Claude generico, senza progetto
 }
 

@@ -140,9 +140,14 @@ final class CalendarioModel: ObservableObject {
 struct CalendarioVisiteView: View {
     /// Vedi ProprietaView.embedded: stessa ragione.
     let embedded: Bool
+    /// Agenda del progetto: ogni agenzia ha le sue fasce e i suoi appuntamenti.
+    let slug: String
     /// Esplicito: con proprietà private il memberwise init sarebbe privato e
     /// la vista non si potrebbe costruire da un altro file.
-    init(embedded: Bool = false) { self.embedded = embedded }
+    init(embedded: Bool = false, slug: String = "gz-ibiza") {
+        self.embedded = embedded
+        self.slug = slug
+    }
     @StateObject private var model = CalendarioModel()
     @State private var giornoScelto = Calendar.current.startOfDay(for: Date())
     @State private var mostraOrari = false
@@ -216,7 +221,9 @@ struct CalendarioVisiteView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(EdgeInsets(top: 40, leading: 30, bottom: 34, trailing: 30))
         }
-        .task { await model.load() }
+        // Incorporata in una dash, il progetto lo decide la dash; da sola, il
+        // selettore in testata (che parte da gz-ibiza).
+        .task(id: slug) { model.slug = slug; await model.load() }
     }
 
     // ── Testata ──

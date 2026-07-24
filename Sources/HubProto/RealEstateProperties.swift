@@ -31,7 +31,17 @@ struct Proprieta: Decodable, Identifiable {
     var latitude: Double?
     var longitude: Double?
     var notes: String?
-    var site_visibility: [String: Bool]?
+    /// Progetto proprietario dell'immobile: gz-ibiza, wallis-57. Non cambia
+    /// nel tempo — è di chi è, non dove appare.
+    var project_slug: String?
+    /// Online sul sito del proprio progetto. Prima era `site_visibility`
+    /// {slug: bool}, che confondeva "di chi è" con "dove si vede".
+    var pubblicata: Bool?
+    /// Il proprietario in pipeline (re_owners) a cui appartiene. Distinto da
+    /// `proprieta_proprietari`, che è la catena storica: questo è chi firma
+    /// l'encargo oggi, e serve al generatore di documenti per non chiedere
+    /// quale immobile quando ne ha uno solo.
+    var owner_id: String?
     let created_at: String?
     var proprieta_storico: [ProprietaStorico]?
 }
@@ -116,8 +126,12 @@ func prettyDate(_ s: String?) -> String {
 
 // ── API ──────────────────────────────────────────────────────────────────────
 extension HubAPI {
-    static func listProprieta() async throws -> [Proprieta] {
-        try await sb.fetch("proprieta?select=*,proprieta_storico(id)&order=created_at.desc&limit=2000")
+    /// `slug` nil = tutti i progetti (vista di sistema nella sidebar); valorizzato
+    /// = solo gli immobili di quell'agenzia, come li vede la sua dash.
+    static func listProprieta(slug: String? = nil) async throws -> [Proprieta] {
+        var query = "proprieta?select=*,proprieta_storico(id)&order=created_at.desc&limit=2000"
+        if let slug { query += "&project_slug=eq.\(slug)" }
+        return try await sb.fetch(query)
     }
     static func getProprieta(id: String) async throws -> Proprieta? {
         let rows: [Proprieta] = try await sb.fetch("proprieta?select=*,proprieta_storico(*)&id=eq.\(id)")
@@ -316,8 +330,14 @@ struct ProprietaView: View {
     /// proprio — sarebbe annidato in quello del progetto — e niente titolo, che
     /// la pagina ospite ha già il suo.
     let embedded: Bool
+    /// Progetto di cui mostrare gli immobili. nil = tutti, per la voce
+    /// «Proprietà» della sidebar che sta sopra ai progetti.
+    let slug: String?
     /// Vedi CalendarioVisiteView.init: il memberwise sarebbe privato.
-    init(embedded: Bool = false) { self.embedded = embedded }
+    init(embedded: Bool = false, slug: String? = nil) {
+        self.embedded = embedded
+        self.slug = slug
+    }
     @State private var items: [Proprieta] = []
     @State private var loading = true
     @State private var errorMsg: String?
@@ -370,7 +390,9 @@ struct ProprietaView: View {
                     Spacer()
                     viewToggle
                     HoloSearchField(placeholder: "Cerca immobile…", text: $search)
-                    MenuPillButton(label: "Aggiungi proprietà", icon: "plus") { AppState.shared.route = .proprietaNuova }
+                    MenuPillButton(label: "Aggiungi proprietà", icon: "plus") {
+                        AppState.shared.route = .proprietaNuova(slug: slug ?? "gz-ibiza")
+                    }
                 }
 
                 // I filtri non hanno senso sulla mappa (che mostra solo i pin)
@@ -401,7 +423,7 @@ struct ProprietaView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(EdgeInsets(top: 54, leading: 30, bottom: 34, trailing: 30))
         }
-        .task { await load(); await geocodeMissing() }
+        .task(id: slug) { await load(); await geocodeMissing() }
     }
 
     // quante proprietà hanno un pin e quante restano da localizzare
@@ -482,7 +504,7 @@ struct ProprietaView: View {
 
     private func load() async {
         loading = true; defer { loading = false }
-        do { items = try await HubAPI.listProprieta() }
+        do { items = try await HubAPI.listProprieta(slug: slug) }
         catch let e { errorMsg = e.localizedDescription }
     }
 
@@ -749,7 +771,11 @@ struct PropertyDraft {
     var status = PropertyStatus.disponibile
     var notes = ""
     var photos: [String] = []
-    var visibility: [String: Bool] = [:]
+    /// Di chi è l'immobile. Si sceglie alla creazione e di norma non cambia:
+    /// spostarlo di agenzia è un'eccezione, non un interruttore di visibilità.
+    var projectSlug = "gz-ibiza"
+    /// Online sul sito del proprio progetto.
+    var pubblicata = false
 
     init() {}
     init(_ e: Proprieta) {
@@ -760,7 +786,8 @@ struct PropertyDraft {
         sqm = e.size_sqm.map(String.init) ?? ""; price = e.price.map(String.init) ?? ""
         priceRent = e.price_rent.map(String.init) ?? ""
         status = .from(e.status); notes = e.notes ?? ""
-        photos = e.photos ?? []; visibility = e.site_visibility ?? [:]
+        photos = e.photos ?? []
+        projectSlug = e.project_slug ?? "gz-ibiza"; pubblicata = e.pubblicata ?? false
     }
 
     var isValid: Bool { !title.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -775,7 +802,7 @@ struct PropertyDraft {
             "category": s(category), "listing_type": s(listingType), "property_type": s(propertyType),
             "bedrooms": Int(bedrooms), "bathrooms": Int(bathrooms), "size_sqm": Int(sqm),
             "price": Int(price), "price_rent": Int(priceRent), "status": status.rawValue,
-            "notes": s(notes), "site_visibility": visibility,
+            "notes": s(notes), "project_slug": projectSlug, "pubblicata": pubblicata,
         ]
     }
     // indirizzo cambiato → le coordinate salvate non valgono più (si rigeocodifica)

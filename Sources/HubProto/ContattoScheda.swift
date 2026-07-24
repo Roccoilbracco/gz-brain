@@ -323,6 +323,8 @@ struct SchedaContattoView: View {
 // ── Form contatto ────────────────────────────────────────────────────────────
 struct ContattoFormView: View {
     let existing: Contatto?
+    /// Agenzia a cui il contatto appartiene: la porta la vista che apre il form.
+    var slug: String = "gz-ibiza"
     let onSaved: () async -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -426,7 +428,7 @@ struct ContattoFormView: View {
             "lingua": vuotoNil(lingua), "note": vuotoNil(note),
         ]
         if tipo == "azienda" { campi["piva"] = vuotoNil(piva) }
-        if existing == nil { campi["source"] = "manuale" }
+        if existing == nil { campi["source"] = "manuale"; campi["project_slug"] = slug }
         let daSalvare = campi
         Task {
             do {

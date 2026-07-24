@@ -32,19 +32,42 @@ struct Documento: Identifiable, Decodable, Equatable {
     var firmato_il: String?
     var note: String?
     var created_at: String?
+    /// Solo per i generati: da quale borrador viene e quando è uscito.
+    /// I dati con cui è stato riempito stanno su `documenti.dati` (jsonb) e non
+    /// si leggono qui — servono a rigenerarlo, non a mostrarlo in lista.
+    var borrador_id: String?
+    var generato_il: String?
 }
 
 enum DocStato: String, CaseIterable, Identifiable {
-    case modello, firmato
+    case modello, generato, firmato
     var id: String { rawValue }
-    var label: String { self == .modello ? "Modelli e bozze" : "Firmati" }
-    var singolare: String { self == .modello ? "Modello" : "Firmato" }
-    var icon: String { self == .modello ? "doc.text" : "checkmark.seal" }
+    var label: String {
+        switch self {
+        case .modello:  return "Modelli e bozze"
+        case .generato: return "Generati"
+        case .firmato:  return "Firmati"
+        }
+    }
+    var singolare: String {
+        switch self {
+        case .modello:  return "Modello"
+        case .generato: return "Generato"
+        case .firmato:  return "Firmato"
+        }
+    }
+    var icon: String {
+        switch self {
+        case .modello:  return "doc.text"
+        case .generato: return "wand.and.stars"
+        case .firmato:  return "checkmark.seal"
+        }
+    }
 }
 
 /// Le categorie del lavoro immobiliare, nell'ordine in cui servono.
 enum DocCategoria: String, CaseIterable, Identifiable {
-    case encargo, honorarios, colaboracion, venta, alquiler, traspaso, mandato, nota, altro
+    case encargo, honorarios, colaboracion, venta, alquiler, reserva, traspaso, mandato, nota, altro
     var id: String { rawValue }
     var label: String {
         switch self {
@@ -53,6 +76,7 @@ enum DocCategoria: String, CaseIterable, Identifiable {
         case .colaboracion: return "Hoja de colaboración"
         case .venta:        return "Contratto di vendita"
         case .alquiler:     return "Contratto di affitto"
+        case .reserva:      return "Riserva / Hoja de reserva"
         case .traspaso:     return "Traspaso"
         case .mandato:      return "Mandato / procura"
         case .nota:         return "Nota d'incarico"
@@ -64,6 +88,7 @@ enum DocCategoria: String, CaseIterable, Identifiable {
         switch self {
         case .honorarios:   return "Honorarios"
         case .colaboracion: return "Colaboración"
+        case .reserva:      return "Riserva"
         default:            return label
         }
     }
@@ -74,6 +99,7 @@ enum DocCategoria: String, CaseIterable, Identifiable {
         case .colaboracion: return "person.2"
         case .venta:        return "house.fill"
         case .alquiler:     return "key.fill"
+        case .reserva:      return "bookmark"
         case .traspaso:     return "arrow.left.arrow.right"
         case .mandato:      return "person.text.rectangle"
         case .nota:         return "doc.plaintext"
