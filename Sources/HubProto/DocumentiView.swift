@@ -47,6 +47,15 @@ struct DocumentiView: View {
     @State private var categoria: DocCategoria?
     @State private var search = ""
     @State private var busy = false
+    @State private var sezione: DocSezione = .archivio
+
+    /// Le due metà della scheda: quello che c'è già e quello che si fa adesso.
+    private enum DocSezione: String, CaseIterable, Identifiable {
+        case archivio, genera
+        var id: String { rawValue }
+        var label: String { self == .archivio ? "Archivio" : "Genera documento" }
+        var icon: String { self == .archivio ? "folder" : "wand.and.stars" }
+    }
 
     private func filtrati(_ tipo: DocStato) -> [Documento] {
         model.docs.filter { d in
@@ -60,45 +69,83 @@ struct DocumentiView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             if let m = model.messaggio { avviso(m) }
+            sezioni
+            switch sezione {
+            case .archivio: archivio
+            case .genera:   DocGeneraView(progetto: progetto) { Task { await model.load() } }
+            }
+        }
+        .task { await model.load() }
+    }
+
+    private var archivio: some View {
+        VStack(alignment: .leading, spacing: 14) {
             filtri
             if model.loading {
                 HStack { Spacer(); ProgressView().controlSize(.small); Spacer() }.padding(.vertical, 40)
             } else {
                 HStack(alignment: .top, spacing: 12) {
-                    colonna(.modello)
-                    colonna(.firmato)
+                    ForEach(DocStato.allCases) { colonna($0) }
                 }
             }
-            Text("I modelli sono le bozze in bianco da riusare: non appartengono a nessuno. I firmati sono sempre agganciati a un proprietario o a un immobile, e si ritrovano anche dalla loro scheda. I file stanno in un archivio privato, non raggiungibile dai siti.")
+            Text("I modelli sono le bozze in bianco da riusare: non appartengono a nessuno. I generati escono da un borrador riempito con i dati definitivi. I firmati sono sempre agganciati a un proprietario o a un immobile, e si ritrovano anche dalla loro scheda. I file stanno in un archivio privato, non raggiungibile dai siti.")
                 .font(.system(size: 10.5)).foregroundStyle(UI.faint)
         }
-        .task { await model.load() }
     }
 
-    private var filtri: some View {
-        HStack(spacing: 6) {
-            FilterChip(label: "Tutte", selected: categoria == nil) { categoria = nil }
-            ForEach(DocCategoria.allCases) { c in
-                FilterChip(label: c.labelBreve, icon: c.icon, selected: categoria == c) {
-                    categoria = categoria == c ? nil : c
-                }
+    private var sezioni: some View {
+        HStack(spacing: 4) {
+            ForEach(DocSezione.allCases) { s in
+                let on = sezione == s
+                Button { withAnimation(.easeInOut(duration: 0.15)) { sezione = s } } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: s.icon).font(.system(size: 10.5, weight: .semibold))
+                        Text(s.label).font(.system(size: 11.5, weight: .semibold)).lineLimit(1).fixedSize()
+                    }
+                    .foregroundStyle(on ? UI.ink : UI.dim)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(on ? UI.accent.opacity(0.16) : UI.surface))
+                    .overlay(RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(on ? UI.accent.opacity(0.55) : UI.line, lineWidth: 1))
+                }.buttonStyle(.plain)
             }
-            HoloSearchField(placeholder: "Cerca documento…", text: $search, width: 160)
             Spacer(minLength: 0)
+        }
+    }
+
+    /// Le chip scorrono: sono dieci categorie più la ricerca, e su uno schermo
+    /// stretto le ultime finivano fuori dalla finestra senza modo di arrivarci.
+    /// La ricerca resta ferma a destra, che è dove la si cerca.
+    private var filtri: some View {
+        HStack(spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    FilterChip(label: "Tutte", selected: categoria == nil) { categoria = nil }
+                    ForEach(DocCategoria.allCases) { c in
+                        FilterChip(label: c.labelBreve, icon: c.icon, selected: categoria == c) {
+                            categoria = categoria == c ? nil : c
+                        }
+                    }
+                }
+                .padding(.vertical, 1)   // il bordo delle chip selezionate non si taglia
+            }
+            HoloSearchField(placeholder: "Cerca documento…", text: $search, width: 150)
         }
     }
 
     private func colonna(_ tipo: DocStato) -> some View {
         let righe = filtrati(tipo)
         return SectionCard(title: tipo.label, count: righe.count, icon: tipo.icon) {
-            GhostButton(label: "Carica", icon: "arrow.up.doc") {
-                Task { await carica(tipo) }
-            }.disabled(busy)
+            // I generati non si caricano: escono dal generatore, e un bottone
+            // «Carica» sotto quella colonna prometterebbe un'altra strada.
+            if tipo != .generato {
+                GhostButton(label: "Carica", icon: "arrow.up.doc") {
+                    Task { await carica(tipo) }
+                }.disabled(busy)
+            }
         } content: {
             if righe.isEmpty {
-                Text(tipo == .modello
-                     ? "Nessun modello. Carica qui l'encargo in bianco e i contratti tipo, così li hai sempre sottomano."
-                     : "Nessun documento firmato. I PDF firmati si caricano da qui o dalla scheda del proprietario.")
+                Text(vuoto(tipo))
                     .font(.system(size: 11)).foregroundStyle(UI.faint)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 18)
             } else {
@@ -111,6 +158,14 @@ struct DocumentiView: View {
                     }
                 }
             }
+        }
+    }
+
+    private func vuoto(_ tipo: DocStato) -> String {
+        switch tipo {
+        case .modello:  return "Nessun modello. Carica qui l'encargo in bianco e i contratti tipo, così li hai sempre sottomano."
+        case .generato: return "Nessun documento generato. Vai su «Genera documento»: scegli il borrador, il proprietario, l'immobile e il cliente, e il contratto esce già compilato."
+        case .firmato:  return "Nessun documento firmato. I PDF firmati si caricano da qui o dalla scheda del proprietario."
         }
     }
 
@@ -181,6 +236,9 @@ struct DocRow: View {
                     if let f = doc.firmato_il {
                         Text("·").foregroundStyle(UI.faint)
                         Text("firmato \(f)").font(.system(size: 10)).foregroundStyle(UI.faint)
+                    } else if let g = doc.generato_il {
+                        Text("·").foregroundStyle(UI.faint)
+                        Text("generato \(g.prefix(10))").font(.system(size: 10)).foregroundStyle(UI.faint)
                     }
                 }
             }

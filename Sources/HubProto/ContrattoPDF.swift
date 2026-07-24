@@ -116,7 +116,9 @@ enum ContrattoPDF {
                           allinea: .left, sopra: 0, sotto: 3, rientro: 16)
         }
         if t.isEmpty {
-            return NSAttributedString(string: "\n", attributes: [.font: serif(5)])
+            // Riga vuota vera: senza un corpo suo, l'elenco puntato e il
+            // paragrafo che lo segue si appiccicavano.
+            return NSAttributedString(string: "\n", attributes: [.font: serif(8)])
         }
         return blocco(t, size: 10.5, bold: false, allinea: .justified, sopra: 0, sotto: 7)
     }

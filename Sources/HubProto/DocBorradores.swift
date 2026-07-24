@@ -325,15 +325,18 @@ struct BorradorEditor: View {
     }
 
     private func importa() {
-        guard let url = BorradorImport.scegliFile() else { return }
-        guard let t = BorradorImport.testo(da: url) else {
-            errore = "Da questo file non riesco a estrarre testo (se è un PDF scansionato non c'è testo da prendere)."
-            return
-        }
-        errore = nil
-        corpo = t
-        if nome.trimmingCharacters(in: .whitespaces).isEmpty {
-            nome = url.deletingPathExtension().lastPathComponent
+        // Il pannello di sistema vive sul thread principale.
+        Task { @MainActor in
+            guard let url = BorradorImport.scegliFile() else { return }
+            guard let t = BorradorImport.testo(da: url) else {
+                errore = "Da questo file non riesco a estrarre testo (se è un PDF scansionato non c'è testo da prendere)."
+                return
+            }
+            errore = nil
+            corpo = t
+            if nome.trimmingCharacters(in: .whitespaces).isEmpty {
+                nome = url.deletingPathExtension().lastPathComponent
+            }
         }
     }
 
