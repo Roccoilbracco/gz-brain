@@ -109,15 +109,26 @@ Deno.serve(async () => {
     // (Beds24 taglia i partiti), quindi modifiche e cancellazioni tardive su una
     // prenotazione già passata non arriverebbero mai. arrivalFrom tiene lo storico.
     const arrivalFrom = "2025-01-01";
-    const bookings: any[] = [];
-    let page = 1;
-    while (true) {
-      const res = await beds24Get(`/bookings?arrivalFrom=${arrivalFrom}&page=${page}`, token);
-      bookings.push(...(res.data ?? []));
-      if (!res.pages?.nextPageExists) break;
-      page++;
-      if (page > 50) break; // guardia
+    async function fetchAll(qs: string): Promise<any[]> {
+      const out: any[] = [];
+      let page = 1;
+      while (true) {
+        const res = await beds24Get(`/bookings?${qs}&page=${page}`, token);
+        out.push(...(res.data ?? []));
+        if (!res.pages?.nextPageExists) break;
+        page++;
+        if (page > 50) break; // guardia
+      }
+      return out;
     }
+    // ⚠️ Beds24 NON restituisce le prenotazioni cancellate nel fetch normale:
+    // vanno chieste esplicitamente con status=cancelled. Senza questa seconda
+    // chiamata una cancellazione non arriverebbe MAI in app, la camera
+    // resterebbe occupata e si rischia di rivenderla → overbooking.
+    const bookings = await fetchAll(`arrivalFrom=${arrivalFrom}`);
+    const cancellate = await fetchAll(`arrivalFrom=${arrivalFrom}&status=cancelled`);
+    const visti = new Set(bookings.map((b) => b.id));
+    for (const c of cancellate) if (!visti.has(c.id)) bookings.push(c);
 
     // righe già presenti (per ext_id)
     const exRes = await fetch(`${SUPABASE_URL}/rest/v1/prenotazioni?select=id,ext_id&ext_id=not.is.null`, { headers: dbHeaders });
@@ -151,6 +162,9 @@ Deno.serve(async () => {
 
       const existingId = byExt.get(extId);
       if (!existingId) {
+        // Cancellata che non abbiamo mai importato: non c'è niente da annullare,
+        // inserirla creerebbe solo rumore nel planning.
+        if (st === "cancellata") { skipped++; continue; }
         toInsert.push({ ...base, status: st });
       } else {
         // aggiorna solo i campi di competenza Beds24; propaga solo le cancellazioni
@@ -175,7 +189,7 @@ Deno.serve(async () => {
       else return new Response(JSON.stringify({ error: "insert_failed", detail: (await ir.text()).slice(0, 300) }), { status: 502, headers: { "content-type": "application/json" } });
     }
 
-    return new Response(JSON.stringify({ ok: true, fetched: bookings.length, inserted, updated, skipped }), { headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ ok: true, fetched: bookings.length, cancellate: cancellate.length, inserted, updated, skipped }), { headers: { "content-type": "application/json" } });
   } catch (e) {
     return new Response(JSON.stringify({ error: String(e) }), { status: 500, headers: { "content-type": "application/json" } });
   }
