@@ -152,7 +152,15 @@ extension HubAPI {
     static func downloadProprietaPhoto(path: String) async throws -> Data {
         try await sb.downloadFile(bucket: "proprieta", path: path)
     }
-    // documenti (contratti, piantine, ecc.) nel bucket 'proprieta' sotto <propId>/docs/
+    /// Bucket PRIVATO dei documenti (contratti, piantine, visure), sotto <propId>/docs/.
+    ///
+    /// Separato da `proprieta`, che è pubblico perché i siti ne servono le foto
+    /// senza chiave: un contratto messo lì sarebbe scaricabile da chiunque ne
+    /// indovinasse l'URL. Qui si entra solo da loggati — staff sempre, il
+    /// proprietario solo sui documenti marcati `visibile_proprietario` delle
+    /// sue proprietà (policy `docs owner read` su storage.objects).
+    static let bucketDocumenti = "proprieta-docs"
+
     static func listProprietaDocumenti(_ propId: String) async throws -> [ProprietaDocumento] {
         try await sb.fetch("proprieta_documenti?select=*&proprieta_id=eq.\(propId)&order=created_at.desc")
     }
@@ -163,17 +171,17 @@ extension HubAPI {
         let safe = fileURL.deletingPathExtension().lastPathComponent
             .replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: " ", with: "_")
         let name = "\(propId)/docs/\(UUID().uuidString.prefix(8))-\(safe).\(ext)"
-        let stored = try await sb.uploadFile(bucket: "proprieta", path: name, data: bytes, contentType: ct)
+        let stored = try await sb.uploadFile(bucket: bucketDocumenti, path: name, data: bytes, contentType: ct)
         try await sb.mutate("proprieta_documenti", method: "POST", body: [
             "proprieta_id": propId, "nome": fileURL.lastPathComponent, "path": stored, "tipo": tipo,
         ])
     }
     static func deleteProprietaDocumento(id: String, path: String?) async throws {
         try await sb.mutate("proprieta_documenti?id=eq.\(id)", method: "DELETE")
-        if let p = path { try? await sb.deleteFile(bucket: "proprieta", path: p) }
+        if let p = path { try? await sb.deleteFile(bucket: bucketDocumenti, path: p) }
     }
     static func downloadProprietaDoc(path: String) async throws -> Data {
-        try await sb.downloadFile(bucket: "proprieta", path: path)
+        try await sb.downloadFile(bucket: bucketDocumenti, path: path)
     }
 }
 
