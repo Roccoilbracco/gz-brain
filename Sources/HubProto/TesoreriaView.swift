@@ -107,7 +107,10 @@ let BREAKFAST_COST = 350   // 3,50 € per persona/notte (solo Booking)
     }
 }
 
-enum TesSub: String, CaseIterable, Identifiable { case riepilogo = "Riepilogo", conti = "Conti", depositi = "Depositi", contoEconomico = "Conto economico", educamp = "Educamp", servizi = "Servizi", movimenti = "Movimenti"; var id: String { rawValue } }
+// L'ordine dei case è quello delle schede a schermo (CaseIterable segue la
+// dichiarazione): prima le viste d'insieme e operative, in fondo le sezioni
+// specialistiche (depositi cauzionali, Educamp).
+enum TesSub: String, CaseIterable, Identifiable { case riepilogo = "Riepilogo", conti = "Conti", contoEconomico = "Conto economico", servizi = "Servizi", movimenti = "Movimenti", depositi = "Depositi", educamp = "Educamp"; var id: String { rawValue } }
 
 // ── Sotto-finestre di dettaglio del Riepilogo ────────────────────────────────
 // Riga generica: un movimento, una prenotazione o una voce di riepilogo.
@@ -293,6 +296,9 @@ struct TesoreriaView: View {
     private func casaStats(_ s: Struttura) -> (inc: Int, spese: Int) {
         var inc = 0, spese = 0
         for m in model.movimenti where m.struttura == s.rawValue {
+            // Cauzioni da restituire e capitale dei soci restano fuori dal «generato»
+            // (vedi fuoriDalGenerato). Il deposito trattenuto (no-show) è ricavo e resta.
+            if fuoriDalGenerato(m) { continue }
             if m.tipo == "entrata" { inc += m.importo_cents } else { spese += m.importo_cents }
         }
         return (inc, spese)
@@ -504,10 +510,12 @@ struct TesoreriaView: View {
             return ("TOTALE DA INCASSARE", "Somma di tutto ciò che resta da incassare.",
                     righe, "TOTALE", daIncassareTot + model.educampDaIncassare)
         case .casa(let s):
-            let mov = model.movimenti.filter { $0.struttura == s.rawValue }.sorted { $0.data > $1.data }
+            // Solo i movimenti che entrano nel «generato»: cauzioni e apporti fuori
+            // (coerente con casaStats), altrimenti la lista non tornerebbe con l'utile.
+            let mov = model.movimenti.filter { $0.struttura == s.rawValue && !fuoriDalGenerato($0) }.sorted { $0.data > $1.data }
             let st = casaStats(s)
-            return ("\(s.label.uppercased()) — MOVIMENTI",
-                    "Entrate \(eurc(st.inc)) · spese \(eurc(st.spese)) · utile \(eurc(st.inc - st.spese)).",
+            return ("\(s.label.uppercased()) — GENERATO",
+                    "Entrate \(eurc(st.inc)) · spese \(eurc(st.spese)) · utile \(eurc(st.inc - st.spese)). Cauzioni e apporti soci sono esclusi (li trovi in «Depositi» e «Conto economico»).",
                     mov.map { rigaDaMov($0) }, "UTILE", st.inc - st.spese)
         case .ricavi:
             let mov = movStrutFiltrati.filter { $0.tipo == "entrata" && !isEntrataNonRicavo($0.categoria) }.sorted { $0.data > $1.data }
@@ -548,51 +556,83 @@ struct TesoreriaView: View {
             }
         }.buttonStyle(.plain)
     }
+    // Colonne a larghezza uguale, riusate da tutte le sezioni così le card di
+    // righe diverse restano allineate in verticale.
+    private func cols(_ n: Int) -> [GridItem] { Array(repeating: GridItem(.flexible(), spacing: 12), count: n) }
+    // Intestazione di sezione uniforme (stesso peso/tracking ovunque).
+    private func sezione(_ t: String, _ c: Color = PSE.faint) -> some View {
+        Text(t).font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(c)
+            .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 6)
+    }
+    private func nota(_ t: String) -> some View {
+        Text(t).font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+    // Totale a barra piena: chiude una sezione senza lasciare celle vuote.
+    private func totaleStrip(_ t: String, _ v: Int, _ c: Color, _ voce: RiepVoce) -> some View {
+        Button { voceSheet = voce } label: {
+            HStack(spacing: 10) {
+                Text(t).font(.system(size: 10, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.dim)
+                Spacer()
+                Text(eurc(v)).font(.system(size: 17, weight: .bold)).foregroundStyle(c).monospacedDigit()
+                Image(systemName: "chevron.right").font(.system(size: 10, weight: .bold)).foregroundStyle(PSE.faint)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            .background(RoundedRectangle(cornerRadius: 12).fill(c.opacity(0.10)))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(c.opacity(0.30), lineWidth: 1))
+        }.buttonStyle(.plain)
+    }
+
     private var riepilogo: some View {
         VStack(alignment: .leading, spacing: 12) {
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+            // ── CONTI ──────────────────────────────────────────────────────
+            sezione("CONTI — saldo attuale").padding(.top, 0)
+            LazyVGrid(columns: cols(3), spacing: 12) {
                 ForEach(model.conti) { c in clic(.conto(c.id)) { contoCard(c) } }
             }
-            HStack(spacing: 12) {
+            LazyVGrid(columns: cols(3), spacing: 12) {
                 clic(.totaleConti) { totCard("TOTALE CONTI (incassato, netto)", model.totaleConti, PSE.accent) }
                 clic(.nostroReale) { totCard("NOSTRO REALE (netto depositi)", nostroReale, nostroReale < 0 ? PSE.neg : PSE.pos) }
                 clic(.potenziale) { totCard("POTENZIALE (+ da incassare)", model.totaleConti + daIncassareTot + model.educampDaIncassare, PSE.pos) }
             }
             if depositiDaRestituire > 0 {
-                Text("Sui conti ci sono \(eurc(depositiDaRestituire)) di depositi cauzionali da restituire agli inquilini (dettaglio nella scheda «Depositi»): il «nostro reale» li toglie dal totale.")
-                    .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+                nota("Sui conti ci sono \(eurc(depositiDaRestituire)) di depositi cauzionali da restituire agli inquilini (dettaglio nella scheda «Depositi»): il «nostro reale» li toglie dal totale.")
             }
-            Text("DA INCASSARE — prenotazioni confermate, soldi non ancora incassati · clicca per il dettaglio").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.warn).padding(.top, 6)
-            HStack(spacing: 12) {
+
+            // ── DA INCASSARE ───────────────────────────────────────────────
+            sezione("DA INCASSARE — prenotazioni confermate, non ancora incassate", PSE.warn)
+            LazyVGrid(columns: cols(4), spacing: 12) {
                 clic(.daIncassareSrc("Booking", ["booking"])) { totCard("BOOKING (lordo)", daIncassareSource(["booking"]), PSE.warn) }
                 clic(.daIncassareSrc("Airbnb", ["airbnb"])) { totCard("AIRBNB", daIncassareSource(["airbnb"]), PSE.warn) }
                 clic(.daIncassareSrc("Dirette", ["diretto", "sito", "whatsapp", "telefono", "email"])) { totCard("DIRETTE", daIncassareDirette, PSE.warn) }
                 clic(.daIncassareEducamp) { totCard("EDUCAMP (netto)", model.educampDaIncassare, PSE.warn) }
             }
-            HStack(spacing: 12) {
-                clic(.daIncassareTotale) { totCard("TOTALE DA INCASSARE", daIncassareTot + model.educampDaIncassare, PSE.pos) }
-                Color.clear.frame(maxWidth: .infinity)
-                Color.clear.frame(maxWidth: .infinity)
-                Color.clear.frame(maxWidth: .infinity)
-            }
-            Text("Educamp (Via Romagna): gli ospiti pagano \(eurc(model.educampTotaleOspite)) in tutto, di cui \(eurc(model.educampIncassato)) già in cassa/beeper → \(eurc(model.educampDaIncassare)) ancora da incassare. Di quel totale, il netto che resta a noi (dopo la commissione) è \(eurc(model.educampNettoTotale)). Dettaglio mese per mese nella scheda Educamp.")
-                .font(.system(size: 10.5)).foregroundStyle(PSE.faint).padding(.top, 2)
-            Text("PER CASA — entrate, spese e utile registrati · clicca per il dettaglio").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint).padding(.top, 6)
-            HStack(spacing: 12) {
+            totaleStrip("TOTALE DA INCASSARE", daIncassareTot + model.educampDaIncassare, PSE.pos, .daIncassareTotale)
+            nota("Educamp (Via Romagna): gli ospiti pagano \(eurc(model.educampTotaleOspite)) in tutto, di cui \(eurc(model.educampIncassato)) già in cassa/beeper → \(eurc(model.educampDaIncassare)) ancora da incassare. Di quel totale, il netto che resta a noi (dopo la commissione) è \(eurc(model.educampNettoTotale)). Dettaglio mese per mese nella scheda Educamp.")
+
+            // ── PER CASA ───────────────────────────────────────────────────
+            sezione("PER CASA — entrate, spese e utile registrati")
+            LazyVGrid(columns: cols(2), spacing: 12) {
                 clic(.casa(.viaPo)) { casaCard(.viaPo) }
                 clic(.casa(.viaRomagna)) { casaCard(.viaRomagna) }
             }
-            Text("SERVIZI — clicca per il dettaglio").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint).padding(.top, 6)
-            HStack(spacing: 12) {
+
+            // ── SERVIZI ────────────────────────────────────────────────────
+            sezione("SERVIZI")
+            LazyVGrid(columns: cols(4), spacing: 12) {
                 servCard("PULIZIA — FATTE", puliziaFatte, "sparkles", PSE.pos) { servizioSheet = .pulizie }
                 servCard("PULIZIA — PREVISTE", puliziePreviste, "sparkles", PSE.warn) { servizioSheet = .pulizie }
                 servCard("COLAZIONI — SERVITE", colazioni.servite, "cup.and.saucer.fill", PSE.pos) { servizioSheet = .colazioni }
                 servCard("COLAZIONI — PREVISTE", colazioni.totale - colazioni.servite, "cup.and.saucer.fill", PSE.warn) { servizioSheet = .colazioni }
             }
-            Text("I saldi dei conti sono NETTI (su Massimo la commissione Booking è già registrata come uscita); il «da incassare» invece è LORDO, quello che il cliente paga all'OTA. Su Booking arriverà circa il 16,5% in meno — oggi ≈ \(eurc(commissioneAttesa)) — mentre Airbnb e le dirette non hanno commissione. Perciò il «potenziale» è un tetto, non l'incasso atteso.")
-                .font(.system(size: 10.5)).foregroundStyle(PSE.faint).padding(.top, 2)
-            Text("OTA (Booking/Airbnb) → conto Massimo · dirette → Beeper o Cassa (scelto per prenotazione). Pulizia 20 €/check-out. Le colazioni Booking (3,50 €/pers·notte) sono aggiunte automaticamente ai Movimenti.")
-                .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+
+            // ── note ───────────────────────────────────────────────────────
+            VStack(alignment: .leading, spacing: 7) {
+                nota("I saldi dei conti sono NETTI (su Massimo la commissione Booking è già registrata come uscita); il «da incassare» invece è LORDO, quello che il cliente paga all'OTA. Su Booking arriverà circa il 16,5% in meno — oggi ≈ \(eurc(commissioneAttesa)) — mentre Airbnb e le dirette non hanno commissione. Perciò il «potenziale» è un tetto, non l'incasso atteso.")
+                nota("OTA (Booking/Airbnb) → conto Massimo · dirette → Beeper o Cassa (scelto per prenotazione). Pulizia 20 €/check-out. Le colazioni Booking (3,50 €/pers·notte) sono aggiunte automaticamente ai Movimenti.")
+            }
+            .padding(.top, 12)
+            .overlay(Rectangle().fill(PSE.line).frame(height: 1).padding(.top, 4), alignment: .top)
         }.padding(.bottom, 20)
     }
     private func contoCard(_ c: Conto) -> some View {
@@ -630,6 +670,17 @@ struct TesoreriaView: View {
     // rendere: non è utile nostro. Qui si separa il «nostro reale».
     private func isDeposito(_ m: TesMovimento) -> Bool {
         m.categoria == "deposito" && !(m.descrizione ?? "").lowercased().contains("trattenut")
+    }
+    // Movimento che sta FUORI dal «generato» di una casa: capitale dei soci
+    // (apporto) e cauzioni da restituire (deposito non trattenuto) non sono né
+    // ricavi né spese — sono soldi di terzi/soci che entrano ed escono. Vanno
+    // esclusi da tutte le viste «generato/per casa». Restano invece nel saldo
+    // vero del conto (senza filtro casa), perché il denaro è davvero lì.
+    // Il deposito TRATTENUTO (penale no-show) è ricavo → NON rientra qui.
+    private func fuoriDalGenerato(_ m: TesMovimento) -> Bool {
+        let c = (m.categoria ?? "").lowercased()
+        if c.contains("apporto") { return true }
+        return m.tipo == "entrata" ? isDeposito(m) : c.contains("deposito")
     }
     private var depositiMov: [TesMovimento] {
         model.movimenti.filter { isDeposito($0) }.sorted { $0.data > $1.data }
@@ -1252,6 +1303,9 @@ struct TesoreriaView: View {
         var t = 0
         for m in model.movimenti where (tuttiIConti || m.conto_id == contoSel)
             && (movStrut == nil || m.struttura == movStrut!.rawValue) && m.data < periodo {
+            // Col filtro casa è un «generato»: cauzioni e apporti restano fuori (come
+            // nel corpo dell'estratto). Senza filtro è il saldo vero e devono restare.
+            if movStrut != nil && fuoriDalGenerato(m) { continue }
             t += (m.tipo == "entrata") ? m.importo_cents : -m.importo_cents
         }
         return t
@@ -1260,7 +1314,16 @@ struct TesoreriaView: View {
         switch id { case "cassa": return "Cassa"; case "massimo": return "Massimo"; case "beeper": return "Beeper"; default: return id ?? "—" }
     }
     private var contiView: some View {
-        let mov = contoMovimenti
+        // Filtrando per casa non si guarda più un saldo ma quanto quella casa ha
+        // generato: chiamarlo «saldo» sarebbe falso, il conto non si divide.
+        let perCasa = movStrut != nil
+        // In vista «generato» (filtro casa) cauzioni da restituire e apporti soci
+        // non contano: non sono ricavi né spese (scheda «Depositi»/«Conto economico»).
+        // Nel saldo vero del conto (senza filtro casa) invece devono restare, o
+        // l'estratto non quadrerebbe col denaro effettivo sul conto.
+        let mov = perCasa
+            ? contoMovimenti.filter { !fuoriDalGenerato($0) }
+            : contoMovimenti
         let entrate = mov.filter { $0.tipo == "entrata" }
         let uscite = mov.filter { $0.tipo == "uscita" }
         let totE = entrate.reduce(0) { $0 + $1.importo_cents }
@@ -1268,9 +1331,6 @@ struct TesoreriaView: View {
         let conto = model.conti.first { $0.id == contoSel }
         let iniz = saldoIniziale
         let nome = tuttiIConti ? "TOTALE" : (conto?.nome.uppercased() ?? "")
-        // Filtrando per casa non si guarda più un saldo ma quanto quella casa ha
-        // generato: chiamarlo «saldo» sarebbe falso, il conto non si divide.
-        let perCasa = movStrut != nil
         return VStack(alignment: .leading, spacing: 12) {
             // intestazione: col periodo filtrato l'estratto parte dal saldo
             // iniziale e chiude sul finale, come un vero estratto conto.

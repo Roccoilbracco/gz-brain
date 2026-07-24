@@ -414,7 +414,6 @@ struct CamerePSEDashboard: View {
             // Il check-out di oggi è l'informazione operativa del mattino: dice
             // quante camere si liberano e quante pulizie ci sono da fare.
             kpi("CHECK-OUT OGGI", "\(attive.filter { isToday($0.checkout) }.count)")
-            kpi("ATTIVE", "\(attive.count)")
             kpi("INCASSATO", eur(incassato))
             kpi("DA INCASSARE", eur(daIncassare))
         }
