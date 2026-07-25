@@ -155,6 +155,22 @@ enum EducampPagamenti {
 
     static func chiave(mese: String, ospite: String) -> String { "\(mese)|\(ospite)" }
 
+    /// Quanto risulta incassato per una prenotazione Educamp, che si chiama
+    /// «Nome (affitto mese)» e può coprire più ospiti («Fabiana e Lucía»).
+    /// Serve a tenere allineato il `paid_cents` della prenotazione con i
+    /// movimenti, invece di doverlo scrivere a mano ogni volta.
+    /// - Returns: nil se per quel mese non c'è nessuna riga con quel nome —
+    ///   così chi chiama sa che non deve toccare niente.
+    static func pagato(perNome nome: String, mese: String,
+                       righe: [EducampRiga], saldi: [String: EducampSaldoRiga]) -> Int? {
+        let parole = Set(eduParole(nome))
+        let coinvolte = righe.filter { r in
+            r.mese == mese && !Set(eduParole(r.ospite).filter { $0.count >= 4 }).isDisjoint(with: parole)
+        }
+        guard !coinvolte.isEmpty else { return nil }
+        return coinvolte.reduce(0) { $0 + (saldi[chiave(mese: $1.mese, ospite: $1.ospite)]?.pagato_cents ?? 0) }
+    }
+
     /// Applica una somma ai mesi di un ospite: prima il mese citato nella
     /// descrizione, poi a cascata dal più vecchio scoperto. L'eccedenza resta
     /// sull'ultimo mese, così si vede subito se qualcuno ha pagato di più.

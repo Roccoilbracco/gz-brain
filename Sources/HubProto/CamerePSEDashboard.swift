@@ -213,6 +213,10 @@ struct CamerePSEDashboard: View {
     // a letto, quindi stanno in una tabella a parte e nel planning si mostrano
     // per ospite, non per stanza.
     @State private var educampOspiti: [EducampOspite] = []
+    // Righe e movimenti Educamp: servono solo a ricalcolare il pagato delle
+    // prenotazioni Educamp, che nessuno deve più aggiornare a mano.
+    @State private var educampRighe: [EducampRiga] = []
+    @State private var movimentiEducamp: [TesMovimento] = []
     @State private var loading = true
     @State private var strutturaFilter: Struttura? = nil
     @State private var selectedDay = Calendar.current.startOfDay(for: Date())
@@ -1245,12 +1249,35 @@ struct CamerePSEDashboard: View {
         defer { if primoAvvio { loading = false } }
         do { items = try await HubAPI.listPrenotazioni() } catch { if primoAvvio { items = [] } }
         educampOspiti = (try? await HubAPI.listEducampOspiti()) ?? []
+        educampRighe = (try? await HubAPI.listEducampRighe()) ?? []
+        movimentiEducamp = (try? await HubAPI.listMovimenti()) ?? []
+        await allineaPagatoEducamp()
         // Date convertite e assegnazione camere: calcolate una volta qui, non a
         // ogni cella. Idem la mappa di occupazione per la striscia calendario.
         rebuildAssignment()
         rebuildDayCache()
         rebuildEducampRooms()
         rebuildStats()          // dati del grafico: dipendono dalle tre cache sopra
+    }
+    /// Il «pagato» delle prenotazioni Educamp lo decidono i movimenti, non la
+    /// mano: si ricalcola a ogni caricamento dall'abbinamento nome→incasso e si
+    /// riscrive solo dove è cambiato. Prima era da aggiornare a mano, e infatti
+    /// i 130 € di Yesim (24/07) sono rimasti fuori per un giorno — bastava che
+    /// il movimento avesse la categoria sbagliata perché nessuno se ne accorgesse.
+    /// Se per quel mese non esiste una riga Educamp col nome della prenotazione,
+    /// non si tocca niente: meglio fermo che sbagliato.
+    private func allineaPagatoEducamp() async {
+        guard !educampRighe.isEmpty else { return }
+        let saldi = await EducampPagamenti.calcola(righe: educampRighe, movimenti: movimentiEducamp).saldi
+        for b in items where b.source == "educamp" && b.status != "cancellata" {
+            guard let ci = b.checkin, ci.count >= 7 else { continue }
+            guard let atteso = await EducampPagamenti.pagato(perNome: b.guest_name, mese: String(ci.prefix(7)),
+                                                             righe: educampRighe, saldi: saldi),
+                  atteso != b.paid_cents else { continue }
+            try? await HubAPI.updatePrenotazione(id: b.id, fields: ["paid_cents": atteso])
+            if let i = items.firstIndex(where: { $0.id == b.id }) { items[i].paid_cents = atteso }
+            if var sel = selected, sel.id == b.id { sel.paid_cents = atteso; selected = sel }
+        }
     }
     /// Dopo ogni modifica a una prenotazione: allinea pulizie, colazioni e
     /// incassi (sync lato DB), poi ricarica. Così conti, servizi e planning
@@ -1398,15 +1425,24 @@ private struct BookingDrawer: View {
                                 Text(eur(max(0, booking.amount_cents - booking.paid_cents)))
                                     .font(.system(size: 14, weight: .bold)).foregroundStyle(PSE.payment(pay))
                             }
-                            HStack(spacing: 8) {
-                                Button("Segna acconto 30%") { onPay(Int(Double(booking.amount_cents) * 0.3)) }
-                                    .buttonStyle(.plain).font(.system(size: 11, weight: .semibold))
-                                    .foregroundStyle(PSE.text).padding(.horizontal, 10).padding(.vertical, 6)
-                                    .background(Capsule().fill(PSE.surface)).overlay(Capsule().strokeBorder(PSE.line, lineWidth: 1))
-                                Button("Segna saldato") { onPay(booking.amount_cents) }
-                                    .buttonStyle(.plain).font(.system(size: 11, weight: .semibold))
-                                    .foregroundStyle(PSE.ink).padding(.horizontal, 10).padding(.vertical, 6)
-                                    .background(Capsule().fill(PSE.accent.opacity(0.85)))
+                            // Sulle righe Educamp il pagato lo decidono i
+                            // movimenti: segnarlo qui a mano durerebbe fino al
+                            // caricamento successivo, meglio dirlo che lasciare
+                            // due bottoni che si disfano da soli.
+                            if booking.source == "educamp" {
+                                Text("Questo importo si aggiorna da solo dai movimenti di categoria «educamp»: per farlo risultare pagato, registra l'incasso in Tesoreria col nome dell'ospite nella descrizione.")
+                                    .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+                            } else {
+                                HStack(spacing: 8) {
+                                    Button("Segna acconto 30%") { onPay(Int(Double(booking.amount_cents) * 0.3)) }
+                                        .buttonStyle(.plain).font(.system(size: 11, weight: .semibold))
+                                        .foregroundStyle(PSE.text).padding(.horizontal, 10).padding(.vertical, 6)
+                                        .background(Capsule().fill(PSE.surface)).overlay(Capsule().strokeBorder(PSE.line, lineWidth: 1))
+                                    Button("Segna saldato") { onPay(booking.amount_cents) }
+                                        .buttonStyle(.plain).font(.system(size: 11, weight: .semibold))
+                                        .foregroundStyle(PSE.ink).padding(.horizontal, 10).padding(.vertical, 6)
+                                        .background(Capsule().fill(PSE.accent.opacity(0.85)))
+                                }
                             }
                         }
                     }
