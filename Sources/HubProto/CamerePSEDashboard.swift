@@ -235,6 +235,8 @@ struct CamerePSEDashboard: View {
     @State private var meseRicerca = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: Date()))!
     /// Il prossimo click sul calendario è la partenza (dopo aver scelto l'arrivo).
     @State private var scegliePartenza = false
+    /// Elenco aperto da una card del riepilogo.
+    @State private var elencoAperto: ElencoPrenotazioni? = nil
 
     private var attive: [Prenotazione] { items.filter { BookingStatus.from($0.status).active } }
 
@@ -261,8 +263,12 @@ struct CamerePSEDashboard: View {
         }
     }
     // camere occupate quella notte (checkin <= d < checkout)
+    /// Camere occupate, non prenotazioni: a Via Romagna gli ospiti Educamp sono
+    /// una riga per letto, e contandoli si arrivava a «12 camere su 9».
     private func occupancy(_ d: Date) -> Int {
-        dayCache.filter { matchesStruttura($0.b) && $0.ci <= d && d < $0.co }.count
+        strutture.reduce(0) { tot, s in
+            tot + roomsFor(s).filter { bookingFor(s, $0, d) != nil || educampOccupies(s, $0, d) }.count
+        }
     }
     private var capacity: Int {
         switch strutturaFilter { case .viaPo: return 4; case .viaRomagna: return 5; case nil: return 9 }
@@ -388,13 +394,13 @@ struct CamerePSEDashboard: View {
                         disponibilitaSection
                         planningSection
                         kpiBar
-                        calendarStrip
-                        // Un elenco solo: la tabella col filtro «giorno» dice le
-                        // stesse righe che diceva la lista qui sopra, con dentro
-                        // anche ricerca, ordinamento e totali.
-                        PrenotazioniTabella(items: items, struttura: strutturaFilter, giorno: selectedDay) { b in
-                            withAnimation(.easeInOut(duration: 0.2)) { selected = b }
-                        }
+                        // Un elenco solo, con dentro la sua striscia dei giorni:
+                        // la tabella col filtro «giorno» dice le stesse righe che
+                        // diceva la lista di prima, più ricerca, ordinamento e
+                        // totali.
+                        PrenotazioniTabella(items: items, struttura: strutturaFilter, giorno: selectedDay,
+                                            onSelect: { b in withAnimation(.easeInOut(duration: 0.2)) { selected = b } },
+                                            striscia: { strisciaGiorni })
                         giorniLiberiSection
                     }
                 }
@@ -436,6 +442,12 @@ struct CamerePSEDashboard: View {
         .sheet(isPresented: $showForm, onDismiss: { editing = nil }) {
             BookingForm(existing: editing) { await syncAndReload() }
         }
+        .sheet(item: $elencoAperto) { e in
+            ElencoPrenotazioniSheet(elenco: e, onClose: { elencoAperto = nil }) { b in
+                elencoAperto = nil
+                withAnimation(.easeInOut(duration: 0.2)) { selected = b }
+            }
+        }
         .alert("Prenotazione cancellata", isPresented: Binding(get: { messaggio != nil }, set: { if !$0 { messaggio = nil } })) {
             Button("Ho capito") { messaggio = nil }
         } message: {
@@ -468,28 +480,54 @@ struct CamerePSEDashboard: View {
             kpiRighe.padding(.horizontal, 12).padding(.bottom, 12)
         }
     }
+    // Ogni numero del riepilogo apre le righe che lo compongono: un totale che
+    // non si può aprire è un numero da prendere per buono, e qui si parla di
+    // camere e di soldi.
     private var kpiRighe: some View {
-        HStack(spacing: 12) {
-            kpi("IN CASA", "\(items.filter { $0.status == "in_casa" }.count)")
-            kpi("CHECK-IN OGGI", "\(attive.filter { isToday($0.checkin) }.count)")
+        let oggi = Calendar.current.startOfDay(for: Date())
+        let inCasa = attive.filter { b in
+            guard let ci = day(b.checkin), let co = day(b.checkout) else { return false }
+            return ci <= oggi && oggi < co
+        }
+        let arrivi = attive.filter { isToday($0.checkin) }
+        let partenze = attive.filter { isToday($0.checkout) }
+        let incassate = items.filter { $0.status != "cancellata" && $0.paid_cents > 0 }
+        let aperte = attive.filter { $0.amount_cents > $0.paid_cents }
+        return HStack(spacing: 12) {
+            kpi("IN CASA", "\(inCasa.count)", inCasa, "Chi dorme qui stanotte")
+            kpi("CHECK-IN OGGI", "\(arrivi.count)", arrivi, "Chi arriva oggi")
             // Il check-out di oggi è l'informazione operativa del mattino: dice
             // quante camere si liberano e quante pulizie ci sono da fare.
-            kpi("CHECK-OUT OGGI", "\(attive.filter { isToday($0.checkout) }.count)")
-            kpi("INCASSATO", eur(incassato))
-            kpi("DA INCASSARE", eur(daIncassare))
+            kpi("CHECK-OUT OGGI", "\(partenze.count)", partenze, "Camere che si liberano oggi, e pulizie da fare")
+            kpi("INCASSATO", eur(incassato), incassate.sorted { $0.paid_cents > $1.paid_cents },
+                "Tutte le prenotazioni con un incasso registrato")
+            kpi("DA INCASSARE", eur(daIncassare), aperte.sorted { ($0.checkin ?? "") < ($1.checkin ?? "") },
+                "Prenotazioni attive con un saldo ancora aperto")
         }
     }
-    private func kpi(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label).font(.system(size: 9, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint)
-                .lineLimit(1).minimumScaleFactor(0.75)
-            Text(value).font(.system(size: 21, weight: .bold)).foregroundStyle(PSE.ink).monospacedDigit()
-                .lineLimit(1).minimumScaleFactor(0.7)
+    private func kpi(_ label: String, _ value: String, _ righe: [Prenotazione], _ spiega: String) -> some View {
+        Button {
+            elencoAperto = ElencoPrenotazioni(titolo: label.capitalized, sottotitolo: spiega, righe: righe)
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 4) {
+                    Text(label).font(.system(size: 9, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint)
+                        .lineLimit(1).minimumScaleFactor(0.75)
+                    Spacer(minLength: 2)
+                    Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(PSE.faint.opacity(righe.isEmpty ? 0.3 : 1))
+                }
+                Text(value).font(.system(size: 21, weight: .bold)).foregroundStyle(PSE.ink).monospacedDigit()
+                    .lineLimit(1).minimumScaleFactor(0.7)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
+            .background(RoundedRectangle(cornerRadius: 12).fill(PSE.surface))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(PSE.line, lineWidth: 1))
+            .contentShape(Rectangle())
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
-        .background(RoundedRectangle(cornerRadius: 12).fill(PSE.surface))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(PSE.line, lineWidth: 1))
+        .buttonStyle(.plain)
+        .help("\(spiega) — clicca per vedere le \(righe.count) prenotazioni")
     }
 
     private var strutturaChips: some View {
@@ -500,14 +538,6 @@ struct CamerePSEDashboard: View {
     }
 
     // ── barra calendario scorrevole ──
-    private var calendarStrip: some View {
-        PSEPieghevole("SCEGLI IL GIORNO",
-                      valore: fullFmt.string(from: selectedDay).capitalized,
-                      colore: PSE.ink, coloreValore: PSE.accent,
-                      nota: "muove l'elenco qui sotto", grande: true, aperta: true) {
-            strisciaGiorni.padding(.horizontal, 12).padding(.bottom, 12)
-        }
-    }
     private var strisciaGiorni: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {

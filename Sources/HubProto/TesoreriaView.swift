@@ -70,6 +70,9 @@ let BREAKFAST_COST = 350   // 3,50 € per persona/notte (solo Booking)
     // Righe Educamp: servono per il «da incassare» netto degli ospiti di Via
     // Romagna, che sono la fonte OTA-equivalente di quella struttura.
     @Published var educampRighe: [EducampRiga] = []
+    /// Bollette: le utenze del riepilogo si leggono da qui, come nella scheda
+    /// Servizi, così i due numeri non possono divergere.
+    @Published var bollette: [Bolletta] = []
     /// Quanti allegati ha ciascun movimento, per mostrare la graffetta in
     /// tabella: una sola query per tutti, non una per riga.
     @Published var allegatiPerMov: [String: Int] = [:]
@@ -81,6 +84,7 @@ let BREAKFAST_COST = 350   // 3,50 € per persona/notte (solo Booking)
         pulizie = (try? await HubAPI.listPulizie()) ?? []
         colazioni = (try? await HubAPI.listColazioni()) ?? []
         educampRighe = (try? await HubAPI.listEducampRighe()) ?? []
+        bollette = (try? await HubAPI.listBollette()) ?? []
         allegatiPerMov = (try? await HubAPI.contaAllegati(.movimento)) ?? [:]
         loading = false
     }
@@ -315,6 +319,24 @@ struct TesoreriaView: View {
     // ── servizi: stessi dati della sezione Servizi (tabelle pulizie/colazioni) ──
     private var puliziaFatte: Int { model.pulizie.filter { $0.stato == "fatta" }.reduce(0) { $0 + $1.costo_cents } }
     private var puliziePreviste: Int { model.pulizie.filter { $0.stato != "fatta" }.reduce(0) { $0 + $1.costo_cents } }
+    // Utenze: le bollette registrate, divise fra quelle già pagate e quelle che
+    // scadranno. Erano solo nella scheda Servizi, e nel riepilogo mancavano.
+    private var utenzePagate: Int { model.bollette.filter { $0.pagata }.reduce(0) { $0 + $1.importo_cents } }
+    private var utenzeDaPagare: Int { model.bollette.filter { !$0.pagata }.reduce(0) { $0 + $1.importo_cents } }
+    /// Manutenzione e spese varie: non hanno una tabella, sono uscite di cassa
+    /// lette per categoria — la stessa regola della scheda Servizi.
+    private func speseServizio(_ t: ServizioTab) -> Int {
+        movStrutFiltrati.filter { m in
+            guard m.tipo == "uscita" else { return false }
+            let c = (m.categoria ?? "").lowercased().trimmingCharacters(in: .whitespaces)
+            if c.contains("manutenzion") || c.contains("riparaz") { return t == .manutenzione }
+            guard t == .speseVarie else { return false }
+            let escluse = ["pulizia", "pulizie", "colazion", "utenz", "bolletta", "luce", "gas", "acqua",
+                           "commission", "airbnb", "booking", "debito", "debiti", "prestito", "mutuo",
+                           "rata", "finanziam", "deposito", "banca"]
+            return !escluse.contains { c.contains($0) }
+        }.reduce(0) { $0 + $1.importo_cents }
+    }
     private var colazioni: (servite: Int, totale: Int) {
         (model.colazioni.reduce(0) { $0 + $1.costo_servito_cents },
          model.colazioni.reduce(0) { $0 + $1.costo_totale_cents })
@@ -635,6 +657,13 @@ struct TesoreriaView: View {
                 servCard("PULIZIA — PREVISTE", puliziePreviste, "sparkles", PSE.warn) { servizioSheet = .pulizie }
                 servCard("COLAZIONI — SERVITE", colazioni.servite, "cup.and.saucer.fill", PSE.pos) { servizioSheet = .colazioni }
                 servCard("COLAZIONI — PREVISTE", colazioni.totale - colazioni.servite, "cup.and.saucer.fill", PSE.warn) { servizioSheet = .colazioni }
+                // Le altre voci di costo che vivono nella scheda Servizi: qui
+                // mancavano, e il riepilogo diceva che i servizi erano solo
+                // pulizie e colazioni.
+                servCard("UTENZE — BOLLETTE PAGATE", utenzePagate, "bolt.fill", PSE.neg) { servizioSheet = .utenze }
+                servCard("UTENZE — DA PAGARE", utenzeDaPagare, "bolt.badge.clock", PSE.warn) { servizioSheet = .utenze }
+                servCard("MANUTENZIONE", speseServizio(.manutenzione), "wrench.and.screwdriver.fill", PSE.neg) { servizioSheet = .manutenzione }
+                servCard("SPESE VARIE", speseServizio(.speseVarie), "cart.fill", PSE.neg) { servizioSheet = .speseVarie }
             }
 
             // ── note ───────────────────────────────────────────────────────

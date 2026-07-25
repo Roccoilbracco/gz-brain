@@ -23,7 +23,7 @@ private func tabFold(_ s: String) -> String {
         .lowercased()
 }
 
-struct PrenotazioniTabella: View {
+struct PrenotazioniTabella<Striscia: View>: View {
     let items: [Prenotazione]
     /// Filtro casa già scelto in cima alla pagina: la tabella lo rispetta.
     let struttura: Struttura?
@@ -32,6 +32,10 @@ struct PrenotazioniTabella: View {
     /// dell'elenco del giorno che stava qui sopra e diceva le stesse righe.
     let giorno: Date
     let onSelect: (Prenotazione) -> Void
+    /// La striscia dei giorni sta qui dentro, non in una sezione a parte:
+    /// serve solo a muovere questo elenco, e separarle voleva dire due scatole
+    /// per una cosa sola.
+    @ViewBuilder let striscia: () -> Striscia
 
     /// Un filtro solo, non due incrociati: «attive» mescolava chi è in casa
     /// adesso, chi deve ancora arrivare e chi è già partito, ed era la cosa che
@@ -191,6 +195,8 @@ struct PrenotazioniTabella: View {
     }
     private func contenuto(_ list: [Prenotazione]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
+            striscia()
+            if filtro == .giorno { riepilogoGiorno }
             HStack(spacing: 10) {
                 filtri
                 campoRicerca
@@ -238,6 +244,46 @@ struct PrenotazioniTabella: View {
         .background(Capsule().fill(PSE.surface))
         .overlay(Capsule().strokeBorder(cercaAttivo ? PSE.accent.opacity(0.7) : PSE.line, lineWidth: 1))
     }
+    // ── La giornata in una riga ──────────────────────────────────────────────
+    // Chi arriva, chi parte, chi resta, e i soldi che si muovono quel giorno:
+    // sono le cose che si vanno a contare a mano sull'elenco, ogni volta.
+    private var riepilogoGiorno: some View {
+        let delGiorno = selezionate(.giorno)
+        let arrivi = delGiorno.filter { ruolo($0, giorno) == "arrivo" }
+        let partenze = delGiorno.filter { ruolo($0, giorno) == "partenza" }
+        let restano = delGiorno.filter { ruolo($0, giorno) == "in casa" }
+        // Da riscuotere all'arrivo: il saldo aperto di chi entra oggi.
+        let daRiscuotere = arrivi.reduce(0) { $0 + max(0, $1.amount_cents - $1.paid_cents) }
+        let daSaldare = partenze.reduce(0) { $0 + max(0, $1.amount_cents - $1.paid_cents) }
+        return HStack(spacing: 8) {
+            pastiglia("ARRIVI", "\(arrivi.count)", PSE.pos, arrivi.isEmpty ? nil : arrivi.map { nomeBreve($0.guest_name) }.joined(separator: ", "))
+            pastiglia("PARTENZE", "\(partenze.count)", PSE.warn, partenze.isEmpty ? nil : partenze.map { nomeBreve($0.guest_name) }.joined(separator: ", "))
+            pastiglia("RESTANO", "\(restano.count)", PSE.dim, nil)
+            if daRiscuotere > 0 {
+                pastiglia("DA RISCUOTERE AL CHECK-IN", eur(daRiscuotere), PSE.warn, "Saldo aperto di chi arriva oggi")
+            }
+            if daSaldare > 0 {
+                pastiglia("DA SALDARE AL CHECK-OUT", eur(daSaldare), PSE.neg, "Saldo aperto di chi parte oggi")
+            }
+            if partenze.count > 0 {
+                pastiglia("PULIZIE", "\(partenze.count)", PSE.accent, "Una per ogni camera che si libera")
+            }
+            Spacer(minLength: 0)
+        }
+    }
+    private func nomeBreve(_ n: String) -> String { n.split(separator: " ").first.map(String.init) ?? n }
+    private func pastiglia(_ t: String, _ v: String, _ c: Color, _ aiuto: String?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(t).font(.system(size: 8, weight: .heavy)).tracking(0.6).foregroundStyle(PSE.faint)
+                .lineLimit(1)
+            Text(v).font(.system(size: 15, weight: .bold)).foregroundStyle(c).monospacedDigit().lineLimit(1)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 10).fill(PSE.surface))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(c.opacity(0.25), lineWidth: 1))
+        .help(aiuto ?? t.capitalized)
+    }
+
     private var filtri: some View {
         HStack(spacing: 8) {
             ForEach(Filtro.allCases) { f in chip(f) }
@@ -408,5 +454,99 @@ struct PrenotazioniTabella: View {
             Text(t).font(.system(size: 8.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
             Text(v).font(.system(size: 12, weight: .bold)).monospacedDigit().foregroundStyle(c)
         }
+    }
+}
+
+// ── Elenco aperto da una card del riepilogo ─────────────────────────────────
+// Un totale che non si può aprire è un numero da prendere per buono: qui ci
+// sono le righe che lo compongono, e da ognuna si va alla prenotazione.
+struct ElencoPrenotazioni: Identifiable {
+    let id = UUID()
+    let titolo: String
+    let sottotitolo: String
+    let righe: [Prenotazione]
+}
+
+struct ElencoPrenotazioniSheet: View {
+    let elenco: ElencoPrenotazioni
+    let onClose: () -> Void
+    let onSelect: (Prenotazione) -> Void
+
+    private var totale: Int { elenco.righe.reduce(0) { $0 + $1.amount_cents } }
+    private var incassato: Int { elenco.righe.reduce(0) { $0 + $1.paid_cents } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(elenco.titolo).font(.system(size: 15, weight: .bold)).foregroundStyle(PSE.ink)
+                    Text(elenco.sottotitolo).font(.system(size: 11)).foregroundStyle(PSE.dim)
+                }
+                Spacer(minLength: 12)
+                Button(action: onClose) {
+                    Image(systemName: "xmark").font(.system(size: 12, weight: .bold)).foregroundStyle(PSE.dim)
+                        .frame(width: 26, height: 26).background(Circle().fill(Color.white.opacity(0.05)))
+                }.buttonStyle(.plain)
+            }
+            .padding(EdgeInsets(top: 18, leading: 20, bottom: 14, trailing: 16))
+
+            if elenco.righe.isEmpty {
+                EmptyStateCard(icon: "tray", text: "Nessuna prenotazione in questa voce.").padding(.horizontal, 20)
+            } else {
+                VStack(spacing: 0) {
+                    ScrollView(showsIndicators: false) {
+                        VStack(spacing: 0) {
+                            ForEach(elenco.righe) { b in
+                                Button { onSelect(b) } label: {
+                                    HStack(spacing: 12) {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(b.guest_name).font(.system(size: 12.5, weight: .semibold))
+                                                .foregroundStyle(PSE.ink).lineLimit(1)
+                                            Text([Struttura.from(b.struttura).label, b.camera].compactMap { $0 }.joined(separator: " · "))
+                                                .font(.system(size: 10)).foregroundStyle(PSE.faint).lineLimit(1)
+                                        }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        Text("\(prettyDate(b.checkin)) → \(prettyDate(b.checkout))")
+                                            .font(.system(size: 10.5)).foregroundStyle(PSE.dim)
+                                            .frame(width: 150, alignment: .leading)
+                                        Text(eur(b.amount_cents)).font(.system(size: 12.5, weight: .bold))
+                                            .foregroundStyle(PSE.text).monospacedDigit()
+                                            .frame(width: 80, alignment: .trailing)
+                                        Text(b.amount_cents > b.paid_cents ? eur(b.amount_cents - b.paid_cents) : "saldato")
+                                            .font(.system(size: b.amount_cents > b.paid_cents ? 12 : 10, weight: .semibold))
+                                            .foregroundStyle(b.amount_cents > b.paid_cents ? PSE.warn : PSE.pos.opacity(0.8))
+                                            .monospacedDigit().frame(width: 80, alignment: .trailing)
+                                    }
+                                    .padding(.horizontal, 16).padding(.vertical, 9).contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .help("Clicca per aprire la prenotazione")
+                                Divider().overlay(PSE.line).padding(.leading, 16)
+                            }
+                        }
+                    }
+                    HStack {
+                        Text("\(elenco.righe.count) PRENOTAZIONI").font(.system(size: 10, weight: .heavy))
+                            .tracking(0.8).foregroundStyle(PSE.ink)
+                        Spacer()
+                        Text("totale \(eur(totale))").font(.system(size: 11)).foregroundStyle(PSE.dim)
+                        Text("incassato \(eur(incassato))").font(.system(size: 11, weight: .semibold)).foregroundStyle(PSE.pos)
+                        if totale > incassato {
+                            Text("da incassare \(eur(totale - incassato))")
+                                .font(.system(size: 11, weight: .semibold)).foregroundStyle(PSE.warn)
+                        }
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 11)
+                    .background(Color.white.opacity(0.04))
+                }
+                .background(RoundedRectangle(cornerRadius: 12).fill(PSE.panel))
+                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(PSE.line, lineWidth: 1))
+                .padding(.horizontal, 20)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(width: 760, height: 520)
+        .background(Color(hex: 0x0b0f18))
+        .preferredColorScheme(.dark)
     }
 }

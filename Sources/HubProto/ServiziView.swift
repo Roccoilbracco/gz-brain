@@ -156,7 +156,7 @@ struct ServizioDettaglioSheet: View {
                 Text(t.rawValue.uppercased()).font(.system(size: 14, weight: .heavy)).tracking(1.5).foregroundStyle(PSE.ink)
                 Spacer()
                 // Passare tra pulizie e colazioni senza chiudere la finestra
-                PSESegmented(items: [ServizioTab.pulizie, .colazioni, .utenze].map { ($0, $0.rawValue) }, selection: $t)
+                PSESegmented(items: ServizioTab.allCases.map { ($0, $0.rawValue) }, selection: $t)
                 Button(action: onClose) {
                     Image(systemName: "xmark").font(.system(size: 12, weight: .bold)).foregroundStyle(PSE.dim)
                         .frame(width: 26, height: 26).background(Circle().fill(Color.white.opacity(0.05)))
