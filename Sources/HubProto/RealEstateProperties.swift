@@ -28,6 +28,8 @@ struct Proprieta: Decodable, Identifiable {
     var price_rent: Int?   // affitto mensile (per i traspaso: costo traspaso in price + affitto qui)
     var status: String
     var photos: [String]?
+    /// Video dell'immobile, stesso bucket pubblico delle foto sotto <id>/video/.
+    var videos: [String]?
     var latitude: Double?
     var longitude: Double?
     var notes: String?
@@ -162,6 +164,28 @@ extension HubAPI {
     }
     static func deleteProprietaPhotoFile(path: String) async throws {
         try await sb.deleteFile(bucket: "proprieta", path: path)
+    }
+    // video: stesso bucket delle foto, in una sottocartella per non mescolarli
+    @discardableResult
+    static func uploadProprietaVideo(propId: String, data: Data, ext: String) async throws -> String {
+        let e = ext.isEmpty ? "mp4" : ext
+        let name = "\(propId)/video/\(UUID().uuidString.prefix(8)).\(e)"
+        let tipo: String
+        switch e {
+        case "mov", "qt": tipo = "video/quicktime"
+        case "m4v": tipo = "video/x-m4v"
+        case "webm": tipo = "video/webm"
+        default: tipo = "video/mp4"
+        }
+        return try await sb.uploadFile(bucket: "proprieta", path: name, data: data, contentType: tipo)
+    }
+    static func deleteProprietaVideoFile(path: String) async throws {
+        try await sb.deleteFile(bucket: "proprieta", path: path)
+    }
+    /// I video non si scaricano interi per guardarli: il bucket è pubblico e
+    /// AVPlayer se li riproduce in streaming da qui.
+    static func urlVideoProprieta(path: String) -> URL? {
+        SupabaseClient.shared?.publicURL(bucket: "proprieta", path: path)
     }
     static func downloadProprietaPhoto(path: String) async throws -> Data {
         try await sb.downloadFile(bucket: "proprieta", path: path)

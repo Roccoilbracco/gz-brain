@@ -110,6 +110,15 @@ struct SupabaseClient {
         return data
     }
 
+    /// Indirizzo diretto di un file in un bucket pubblico: serve a chi legge in
+    /// streaming (i video) invece di scaricare tutto prima di partire.
+    func publicURL(bucket: String, path: String) -> URL? {
+        let quote = path.split(separator: "/").map {
+            $0.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String($0)
+        }.joined(separator: "/")
+        return URL(string: baseURL.absoluteString + "/storage/v1/object/public/\(bucket)/\(quote)")
+    }
+
     func deleteFile(bucket: String, path: String) async throws {
         let url = baseURL.appendingPathComponent("storage/v1/object/\(bucket)/\(path)")
         var req = URLRequest(url: url)

@@ -153,7 +153,8 @@ struct DocumentiView: View {
                     ForEach(Array(righe.enumerated()), id: \.element.id) { i, d in
                         DocRow(doc: d, intestatario: model.intestatario(d),
                                onApri: { Task { await apri(d) } },
-                               onElimina: { Task { await elimina(d) } })
+                               onElimina: { Task { await elimina(d) } },
+                               onRinomina: { nome in Task { await rinomina(d, nome) } })
                         if i < righe.count - 1 { Divider().overlay(UI.line) }
                     }
                 }
@@ -209,6 +210,12 @@ struct DocumentiView: View {
         do { try await HubAPI.deleteDocumento(d); await model.load() }
         catch { model.messaggio = "Eliminazione non riuscita: \(error.localizedDescription)" }
     }
+    private func rinomina(_ d: Documento, _ nome: String) async {
+        do {
+            try await HubAPI.updateDocumento(id: d.id, fields: ["titolo": nome])
+            await model.load()
+        } catch { model.messaggio = "Nome non salvato: \(error.localizedDescription)" }
+    }
 }
 
 // ── Riga documento, riusata anche nelle schede proprietario e immobile ───────
@@ -217,16 +224,39 @@ struct DocRow: View {
     var intestatario: String? = nil
     let onApri: () -> Void
     let onElimina: () -> Void
+    /// nil dove il nome non si tocca: la matita non compare nemmeno.
+    var onRinomina: ((String) -> Void)? = nil
     @State private var hover = false
     @State private var conferma = false
+    @State private var rinominando = false
+    @State private var nuovoNome = ""
+    @FocusState private var campoAttivo: Bool
 
     var body: some View {
         let cat = DocCategoria.from(doc.categoria)
         HStack(spacing: 10) {
             Image(systemName: cat.icon).font(.system(size: 12)).foregroundStyle(UI.dim).frame(width: 18)
             VStack(alignment: .leading, spacing: 2) {
-                Text(doc.titolo).font(.system(size: 12.5, weight: .medium)).foregroundStyle(UI.ink)
-                    .lineLimit(1)
+                if rinominando {
+                    // Invio conferma, Esc lascia perdere: si rinomina di
+                    // seguito senza staccare le mani dalla tastiera.
+                    TextField("", text: $nuovoNome)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(UI.ink)
+                        .focused($campoAttivo)
+                        .onSubmit { salvaNome() }
+                        .onExitCommand { rinominando = false }
+                        .padding(.horizontal, 6).padding(.vertical, 3)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(UI.surface))
+                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(UI.accent.opacity(0.6), lineWidth: 1))
+                } else {
+                    Text(doc.titolo).font(.system(size: 12.5, weight: .medium)).foregroundStyle(UI.ink)
+                        .lineLimit(1)
+                        // Il nome è la cosa che si sbaglia più spesso caricando:
+                        // due clic sopra e si corregge, senza cercare la matita.
+                        .onTapGesture(count: 2) { if onRinomina != nil { iniziaRinomina() } }
+                }
                 HStack(spacing: 6) {
                     Text(cat.label).font(.system(size: 10)).foregroundStyle(UI.faint)
                     if let i = intestatario {
@@ -248,6 +278,15 @@ struct DocRow: View {
             Button(action: onApri) {
                 Image(systemName: "arrow.down.circle").font(.system(size: 13)).foregroundStyle(UI.dim)
             }.buttonStyle(.plain).help("Scarica e apri")
+            if onRinomina != nil {
+                Button { rinominando ? salvaNome() : iniziaRinomina() } label: {
+                    Image(systemName: rinominando ? "checkmark.circle.fill" : "pencil")
+                        .font(.system(size: rinominando ? 13 : 12))
+                        .foregroundStyle(rinominando ? UI.accent : UI.dim)
+                }
+                .buttonStyle(.plain)
+                .help(rinominando ? "Salva il nome" : "Rinomina")
+            }
             Button { conferma = true } label: {
                 Image(systemName: "trash").font(.system(size: 12)).foregroundStyle(UI.tint(.stop).opacity(0.8))
             }.buttonStyle(.plain)
@@ -262,6 +301,21 @@ struct DocRow: View {
         .background(hover ? UI.surfaceHi : Color.clear)
         .contentShape(Rectangle())
         .onHover { hover = $0 }
+    }
+
+    private func iniziaRinomina() {
+        nuovoNome = doc.titolo
+        rinominando = true
+        campoAttivo = true
+    }
+
+    private func salvaNome() {
+        let nome = nuovoNome.trimmingCharacters(in: .whitespaces)
+        rinominando = false
+        // Nome vuoto o uguale: non si scrive niente, un documento senza nome
+        // in lista sarebbe irrecuperabile.
+        guard !nome.isEmpty, nome != doc.titolo else { return }
+        onRinomina?(nome)
     }
 }
 
@@ -313,7 +367,8 @@ struct DocumentiAllegati: View {
                     ForEach(Array(docs.enumerated()), id: \.element.id) { i, d in
                         DocRow(doc: d,
                                onApri: { Task { await apri(d) } },
-                               onElimina: { Task { await elimina(d) } })
+                               onElimina: { Task { await elimina(d) } },
+                               onRinomina: { nome in Task { await rinomina(d, nome) } })
                         if i < docs.count - 1 { Divider().overlay(UI.line) }
                     }
                 }
@@ -346,5 +401,11 @@ struct DocumentiAllegati: View {
     private func elimina(_ d: Documento) async {
         do { try await HubAPI.deleteDocumento(d); await load() }
         catch { messaggio = "Eliminazione non riuscita." }
+    }
+    private func rinomina(_ d: Documento, _ nome: String) async {
+        do {
+            try await HubAPI.updateDocumento(id: d.id, fields: ["titolo": nome])
+            await load()
+        } catch { messaggio = "Nome non salvato." }
     }
 }

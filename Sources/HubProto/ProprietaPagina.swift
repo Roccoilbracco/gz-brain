@@ -61,6 +61,10 @@ struct ProprietaDetailView: View {
     @State private var gestisciAperto = false
     @State private var selezioneFoto: Set<String> = []
     @State private var confermaEliminaFoto = false
+    @State private var videoBusy = false
+    @State private var videoMsg: String?
+    /// Video aperto nel player, nil quando è chiuso.
+    @State private var videoAperto: VideoDaGuardare?
     @State private var projects: [Project] = []
     @State private var proprietari: [Proprietario] = []
     @State private var pdfStato: PDFStato = .fermo
@@ -157,6 +161,7 @@ struct ProprietaDetailView: View {
             Button("Elimina", role: .destructive) { Task { await eliminaSelezionate() } }
             Button("Annulla", role: .cancel) {}
         }
+        .sheet(item: $videoAperto) { v in VideoProprietaSheet(path: v.id) }
     }
 
     // ── 1. Barra azioni: sempre in alto, non cambia posto fra le sezioni ──────
@@ -619,26 +624,17 @@ struct ProprietaDetailView: View {
                         .foregroundStyle(Holo.subDim)
                 }
                 Spacer()
-                Button { Task { await aggiungiFoto() } } label: {
-                    HStack(spacing: 6) {
-                        if fotoBusy {
-                            ProgressView().controlSize(.small).scaleEffect(0.65)
-                        } else {
-                            Image(systemName: "photo.badge.plus").font(.system(size: 10, weight: .bold))
-                        }
-                        Text(fotoBusy ? "Carico…" : "Aggiungi foto")
-                            .font(.system(size: 12, weight: .semibold))
-                    }
-                    .foregroundStyle(Csb.itemFgOn)
-                    .padding(.horizontal, 13).padding(.vertical, 7)
-                    .background(RoundedRectangle(cornerRadius: 9).fill(Csb.tabOn.opacity(0.9)))
-                    .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Csb.tabOnBorder, lineWidth: 1))
-                }
-                .buttonStyle(.plain).disabled(fotoBusy).opacity(fotoBusy ? 0.6 : 1)
+                bottoneCarica(icona: "photo.badge.plus", label: "Aggiungi foto",
+                              inCorso: fotoBusy) { Task { await aggiungiFoto() } }
+                bottoneCarica(icona: "video.badge.plus", label: "Aggiungi video",
+                              inCorso: videoBusy) { Task { await aggiungiVideo() } }
             }
 
             if let fotoMsg {
                 Text(fotoMsg).font(.system(size: 11)).foregroundStyle(Holo.subDim)
+            }
+            if let videoMsg {
+                Text(videoMsg).font(.system(size: 11)).foregroundStyle(Holo.subDim)
             }
 
             if salvate.isEmpty {
@@ -696,6 +692,54 @@ struct ProprietaDetailView: View {
                     .nonTrascinaLaFinestra()
                     .transition(.opacity.combined(with: .move(edge: .top)))
                 }
+            }
+
+            sezioneVideo
+        }
+    }
+
+    /// Stesso bottone per foto e video: cambiano icona, testo e cosa fanno.
+    private func bottoneCarica(icona: String, label: String, inCorso: Bool,
+                               _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if inCorso {
+                    ProgressView().controlSize(.small).scaleEffect(0.65)
+                } else {
+                    Image(systemName: icona).font(.system(size: 10, weight: .bold))
+                }
+                Text(inCorso ? "Carico…" : label)
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundStyle(Csb.itemFgOn)
+            .padding(.horizontal, 13).padding(.vertical, 7)
+            .background(RoundedRectangle(cornerRadius: 9).fill(Csb.tabOn.opacity(0.9)))
+            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Csb.tabOnBorder, lineWidth: 1))
+        }
+        .buttonStyle(.plain).disabled(inCorso).opacity(inCorso ? 0.6 : 1)
+    }
+
+    // ── Video ────────────────────────────────────────────────────────────────
+    //
+    // Blocco a parte sotto le foto: si vede solo quando c'è almeno un video,
+    // così una scheda senza filmati resta corta com'era.
+    @ViewBuilder
+    private var sezioneVideo: some View {
+        let video = p?.videos ?? []
+        if !video.isEmpty {
+            Text("VIDEO").font(.system(size: 10, weight: .heavy)).tracking(2)
+                .foregroundStyle(Holo.hsl(210, 60, 66))
+                .padding(.top, 8)
+            GlassCard {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
+                    ForEach(video, id: \.self) { path in
+                        VideoProprietaCard(
+                            path: path,
+                            onApri: { videoAperto = VideoDaGuardare(id: path) },
+                            onDelete: { Task { await eliminaVideo(path) } })
+                    }
+                }
+                .padding(14)
             }
         }
     }
@@ -824,6 +868,71 @@ struct ProprietaDetailView: View {
         } catch let e {
             p?.photos = precedente
             fotoMsg = "Ordine non salvato: \(e.localizedDescription)"
+        }
+    }
+
+    /// Stessa strada delle foto: si scelgono i file, si caricano nel bucket e
+    /// l'elenco va subito sul database, senza passare dal salvataggio scheda.
+    private func aggiungiVideo() async {
+        guard let id = proprietaId, !videoBusy else { return }
+        let scelte: [URL] = await MainActor.run {
+            let panel = NSOpenPanel()
+            panel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie, .video]
+            panel.allowsMultipleSelection = true
+            panel.canChooseDirectories = false
+            return panel.runModal() == .OK ? panel.urls : []
+        }
+        guard !scelte.isEmpty else { return }
+
+        videoBusy = true
+        defer { videoBusy = false }
+        var paths = p?.videos ?? []
+        var errori: [String] = []
+        var caricati = 0
+        for (i, url) in scelte.enumerated() {
+            // La ricompressione di un video lungo prende minuti: senza dire a
+            // che punto è, sembra che l'app si sia piantata.
+            videoMsg = scelte.count > 1
+                ? "Preparo \(url.lastPathComponent) (\(i + 1) di \(scelte.count))…"
+                : "Preparo \(url.lastPathComponent)…"
+            guard let pronto = await VideoDaCaricare.prepara(url) else {
+                errori.append("\(url.lastPathComponent): file non leggibile")
+                continue
+            }
+            videoMsg = "Carico \(url.lastPathComponent) (\(pronto.dati.count / 1_048_576) MB)…"
+            do {
+                paths.append(try await HubAPI.uploadProprietaVideo(
+                    propId: id, data: pronto.dati, ext: pronto.ext))
+                caricati += 1
+            } catch let e {
+                // Il limite di Supabase (50 MB per file, piano free) è il
+                // motivo tipico: senza il peso in chiaro non si sa cosa tagliare.
+                errori.append("\(url.lastPathComponent) — \(pronto.dati.count / 1_048_576) MB: \(e.localizedDescription)")
+            }
+        }
+        do {
+            if caricati > 0 {
+                try await HubAPI.updateProprieta(id: id, fields: ["videos": paths])
+                await load()
+            }
+            videoMsg = errori.isEmpty ? nil : "Non caricati — " + errori.joined(separator: " · ")
+        } catch let e {
+            videoMsg = "Caricamento non riuscito: \(e.localizedDescription)"
+        }
+    }
+
+    private func eliminaVideo(_ path: String) async {
+        guard let id = proprietaId, !videoBusy else { return }
+        videoBusy = true; videoMsg = nil
+        defer { videoBusy = false }
+        do {
+            let restanti = (p?.videos ?? []).filter { $0 != path }
+            try await HubAPI.updateProprieta(id: id, fields: ["videos": restanti])
+            try? await HubAPI.deleteProprietaVideoFile(path: path)
+            await VideoPosterCache.shared.dimentica(path)
+            await load()
+        } catch let e {
+            videoMsg = "Eliminazione non riuscita: \(e.localizedDescription)"
         }
     }
 
