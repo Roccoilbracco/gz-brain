@@ -292,7 +292,15 @@ struct CamerePSEDashboard: View {
                     guard let ci = day(b.checkin), let co = day(b.checkout), ci < co else { return nil }
                     return Assegnata(b: b, ci: ci, co: co)
                 }
-                .sorted { $0.ci < $1.ci }
+                // A parità di arrivo entra prima il soggiorno più lungo (si prende
+                // la camera che gli serve davvero), e l'id rompe i pari: senza,
+                // l'ordine dipendeva da come tornavano le righe e il planning
+                // rimescolava le camere a ogni ricarica.
+                .sorted {
+                    if $0.ci != $1.ci { return $0.ci < $1.ci }
+                    if $0.co != $1.co { return $0.co > $1.co }
+                    return $0.b.id < $1.b.id
+                }
             for a in bs {
                 let cam = (a.b.camera ?? "")
                 let exact = rooms.firstIndex(of: cam)
@@ -623,6 +631,15 @@ struct CamerePSEDashboard: View {
         let label: String
         let booking: Prenotazione?
         let apertoPrima: Bool, apertoDopo: Bool
+        /// Testo del tooltip quando la barra non è una prenotazione (Educamp).
+        var nota: String? = nil
+        // Due soggiorni nella stessa camera e negli stessi giorni esistono
+        // davvero (doppia prenotazione, o camera sbagliata arrivata dall'OTA):
+        // si dividono la riga in corsie invece di coprirsi a vicenda.
+        var corsia = 0, corsie = 1
+        /// Solo i soggiorni che si accavallano davvero, non tutta la riga.
+        var conflitto = false
+        var fine: Int { start + len }
     }
     /// Soggiorni della camera intersecati col mese mostrato, come segmenti di
     /// colonne contigue (start = indice del primo giorno, len = notti visibili).
@@ -645,20 +662,45 @@ struct CamerePSEDashboard: View {
         // Camere condivise Educamp: una barra sola con quante persone ci sono
         // dentro, invece di una riga per ospite (erano venti righe di rumore).
         if s == .viaRomagna, let occ = educampRoomCache[rm], !occ.isEmpty {
-            var edu = [Bool](repeating: false, count: n)
-            for (i, d) in days.enumerated() where !occupato[i] {
-                edu[i] = occ.contains { $0.ci <= d && d < $0.co }
+            // Chi c'è dentro, giorno per giorno. La barra si spezza quando la
+            // compagnia cambia: se no una doppia con un ricambio il 29 direbbe
+            // «Educamp · 4» per tutto il mese, e nella stanza sono in due.
+            let perGiorno: [[String]] = days.enumerated().map { (i, d) in
+                occupato[i] ? [] : occ.filter { $0.ci <= d && d < $0.co }.map { $0.nome }.sorted()
             }
             var i = 0
             while i < n {
-                guard edu[i] else { i += 1; continue }
+                guard !perGiorno[i].isEmpty else { i += 1; continue }
                 var j = i
-                while j + 1 < n && edu[j + 1] { j += 1 }
-                let nomi = Set(occ.filter { $0.ci <= days[j] && days[i] < $0.co }.map { $0.nome })
+                while j + 1 < n && perGiorno[j + 1] == perGiorno[i] { j += 1 }
+                let nomi = perGiorno[i]
                 out.append(Segmento(id: "edu|\(rm)|\(i)", start: i, len: j - i + 1, color: educampColor,
-                                    label: nomi.count == 1 ? (nomi.first ?? "Educamp") : "Educamp · \(nomi.count)",
-                                    booking: nil, apertoPrima: false, apertoDopo: false))
+                                    label: nomi.count <= 2 ? nomi.joined(separator: " · ") : "Educamp · \(nomi.count)",
+                                    booking: nil, apertoPrima: false, apertoDopo: false,
+                                    nota: "Educamp · \(nomi.count) in camera: " + nomi.joined(separator: ", ")))
                 i = j + 1
+            }
+        }
+        return inCorsie(out)
+    }
+    /// Distribuisce i segmenti sovrapposti su più corsie (la prima libera, come
+    /// un calendario): così una doppia prenotazione si vede tutta invece di
+    /// sparire sotto l'altra barra.
+    private func inCorsie(_ segs: [Segmento]) -> [Segmento] {
+        var out = segs.sorted { ($0.start, $0.len) < ($1.start, $1.len) }
+        var ultima: [Int] = []                     // ultima colonna occupata per corsia
+        for i in out.indices {
+            let c = ultima.firstIndex { $0 <= out[i].start } ?? ultima.count
+            if c == ultima.count { ultima.append(0) }
+            ultima[c] = out[i].fine
+            out[i].corsia = c
+        }
+        let n = max(1, ultima.count)
+        for i in out.indices {
+            out[i].corsie = n
+            // il bordo rosso va su chi si accavalla, non su tutta la riga
+            out[i].conflitto = out.indices.contains { j in
+                j != i && out[j].start < out[i].fine && out[i].start < out[j].fine
             }
         }
         return out
@@ -987,10 +1029,11 @@ struct CamerePSEDashboard: View {
 
     /// Contenitore della colonna etichette: tiene tutte le righe esattamente a
     /// labelW (prima il padding sforava la colonna e la griglia non era allineata).
-    private func gutterRow<C: View>(_ bg: Color, _ inset: CGFloat, _ bordo: Bool, @ViewBuilder _ content: () -> C) -> some View {
+    private func gutterRow<C: View>(_ bg: Color, _ inset: CGFloat, _ bordo: Bool, _ h: CGFloat? = nil,
+                                    @ViewBuilder _ content: () -> C) -> some View {
         HStack(spacing: 0) { content(); Spacer(minLength: 0) }
             .padding(.leading, inset).padding(.trailing, 8)
-            .frame(width: labelW, height: rowH, alignment: .leading)
+            .frame(width: labelW, height: h ?? rowH, alignment: .leading)
             .background(bg)
             .overlay(Rectangle().fill(gLine).frame(height: bordo ? 1 : 0), alignment: .bottom)
     }
@@ -1016,9 +1059,19 @@ struct CamerePSEDashboard: View {
                         .background(Capsule().fill(Color.white.opacity(0.08)))
                 }
             }
-        case .room(_, let rm):
-            gutterRow(Color.clear, 16, true) {
-                Text(rm).font(.system(size: 11)).foregroundStyle(PSE.text).lineLimit(1).minimumScaleFactor(0.8)
+        case .room(let s, let rm):
+            // La riga cresce se la camera ha soggiorni sovrapposti: l'etichetta
+            // deve crescere insieme, se no il reticolo si disallinea.
+            let c = corsieRoom(s, rm)
+            gutterRow(Color.clear, 16, true, rowH * CGFloat(c)) {
+                HStack(spacing: 5) {
+                    Text(rm).font(.system(size: 11)).foregroundStyle(PSE.text).lineLimit(1).minimumScaleFactor(0.8)
+                    if c > 1 {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 9)).foregroundStyle(PSE.neg)
+                            .help("Questa camera ha \(c) soggiorni sovrapposti negli stessi giorni: uno dei due va spostato o è arrivato con la camera sbagliata.")
+                    }
+                }
             }
         case .free:
             gutterRow(PSE.surface, 16, true) {
@@ -1042,18 +1095,24 @@ struct CamerePSEDashboard: View {
     @ViewBuilder private func gridRow(_ row: GRow) -> some View {
         switch row {
         case .room(let s, let rm):
+            let segs = segmenti(s, rm)
+            let h = rowH * CGFloat(max(1, segs.first?.corsie ?? 1))
             ZStack(alignment: .topLeading) {
-                HStack(spacing: 0) { ForEach(monthDays, id: \.self) { d in sfondoCella(d) } }
-                ForEach(segmenti(s, rm)) { seg in barra(seg) }
+                HStack(spacing: 0) { ForEach(monthDays, id: \.self) { d in sfondoCella(d, h) } }
+                ForEach(segs) { seg in barra(seg) }
             }
-            .frame(width: gridW, height: rowH, alignment: .topLeading)
+            .frame(width: gridW, height: h, alignment: .topLeading)
         default:
             HStack(spacing: 0) { ForEach(monthDays, id: \.self) { d in cell(row, d) } }
         }
     }
-    private func sfondoCella(_ d: Date) -> some View {
+    /// Quante corsie servono a questa camera (>1 = soggiorni sovrapposti).
+    private func corsieRoom(_ s: Struttura, _ rm: String) -> Int {
+        max(1, segmenti(s, rm).first?.corsie ?? 1)
+    }
+    private func sfondoCella(_ d: Date, _ h: CGFloat) -> some View {
         Rectangle().fill(colonnaTint(d))
-            .frame(width: dayW, height: rowH)
+            .frame(width: dayW, height: h)
             .overlay(Rectangle().fill(gLine).frame(width: 1), alignment: .trailing)
             .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
             .contentShape(Rectangle())
@@ -1078,7 +1137,10 @@ struct CamerePSEDashboard: View {
             .padding(.leading, stretto ? 7 : 10).padding(.trailing, stretto ? 3 : 7)
             .frame(width: w, height: rowH - 7, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 5).fill(seg.color.opacity(0.28)))
-            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(seg.color.opacity(0.45), lineWidth: 1))
+            // Bordo rosso se la camera è doppia-prenotata: il colore del canale
+            // resta, ma si vede subito quale riga ha un problema.
+            .overlay(RoundedRectangle(cornerRadius: 5)
+                .strokeBorder(seg.conflitto ? PSE.neg.opacity(0.85) : seg.color.opacity(0.45), lineWidth: 1))
             // stanghetta piena all'arrivo: dove comincia il soggiorno si vede
             // anche con la coda di occhio.
             .overlay(alignment: .leading) {
@@ -1089,8 +1151,11 @@ struct CamerePSEDashboard: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .offset(x: CGFloat(seg.start) * dayW + 2, y: 3.5)
-        .help(seg.booking.map { "\($0.guest_name) · \(prettyDate($0.checkin)) → \(prettyDate($0.checkout)) · \(eur($0.amount_cents))" } ?? seg.label)
+        .offset(x: CGFloat(seg.start) * dayW + 2, y: 3.5 + CGFloat(seg.corsia) * rowH)
+        .help(seg.booking.map {
+            "\($0.guest_name) · \(prettyDate($0.checkin)) → \(prettyDate($0.checkout)) · \(eur($0.amount_cents))"
+                + (seg.conflitto ? "\n⚠︎ Sovrapposta a un altro soggiorno nella stessa camera." : "")
+        } ?? (seg.nota ?? seg.label))
     }
 
     @ViewBuilder private func cell(_ row: GRow, _ d: Date) -> some View {
