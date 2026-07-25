@@ -978,9 +978,9 @@ struct CamerePSEDashboard: View {
         case "Stanza 3 · Camera King": return 3
         case "Stanza 4 · Ampia Matrimoniale": return 3
         case "Doppia senza bagno": return 2
-        case "Balcone senza bagno": return 2
-        case "Stanza Camino": return 2
-        case "Balcone con bagno (ragazzi)": return 2
+        case "Balcone senza bagno": return 3
+        case "Stanza Camino": return 3
+        case "Balcone con bagno (ragazzi)": return 3
         case "Mansarda": return 4
         default: return 2
         }
