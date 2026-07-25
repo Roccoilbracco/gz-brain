@@ -166,19 +166,17 @@ struct PrenotazioniTabella: View {
                                text: q.isEmpty ? "Nessuna prenotazione in «\(filtro.label.lowercased())»."
                                                : "Nessuna prenotazione per «\(q)» in «\(filtro.label.lowercased())». Prova con meno parole, o cambia filtro qui sopra.")
             } else {
+                // Niente lista che scorre dentro la pagina che scorre: la rotella
+                // finiva nella lista invece che nella pagina, e il pannello di
+                // dettaglio si apriva vuoto quando la riga veniva da qui. La
+                // tabella è lunga quanto le sue righe, e a tenerla corta ci
+                // pensano i filtri.
                 VStack(spacing: 0) {
                     testata
-                    // Tabella alta al massimo mezza pagina: sotto continua il
-                    // planning, che serve a colpo d'occhio quanto questa.
-                    ScrollView(showsIndicators: true) {
-                        LazyVStack(spacing: 0) {
-                            ForEach(Array(list.enumerated()), id: \.element.id) { i, b in
-                                riga(b, dispari: i.isMultiple(of: 2))
-                                if i < list.count - 1 { Divider().overlay(PSE.line).padding(.leading, 14) }
-                            }
-                        }
+                    ForEach(Array(list.enumerated()), id: \.element.id) { i, b in
+                        riga(b, dispari: i.isMultiple(of: 2))
+                        if i < list.count - 1 { Divider().overlay(PSE.line).padding(.leading, 14) }
                     }
-                    .frame(maxHeight: 460)
                     totali(list)
                 }
                 .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
