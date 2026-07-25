@@ -28,36 +28,48 @@ struct PrenotazioniTabella: View {
     let struttura: Struttura?
     let onSelect: (Prenotazione) -> Void
 
-    enum FiltroStato: String, CaseIterable, Identifiable {
-        case attive, inAttesa, cancellate, tutte
+    /// Un filtro solo, non due incrociati: «attive» mescolava chi è in casa
+    /// adesso, chi deve ancora arrivare e chi è già partito, ed era la cosa che
+    /// rendeva la lista illeggibile. Queste sei voci si escludono a vicenda e
+    /// rispondono ognuna a una domanda precisa.
+    enum Filtro: String, CaseIterable, Identifiable {
+        case inCasa, inArrivo, daConfermare, cancellate, passate, tutto
         var id: String { rawValue }
         var label: String {
             switch self {
-            case .attive: return "Attive"
-            case .inAttesa: return "Da confermare"
+            case .inCasa: return "In casa"
+            case .inArrivo: return "In arrivo"
+            case .daConfermare: return "Da confermare"
             case .cancellate: return "Cancellate"
-            case .tutte: return "Tutte"
+            case .passate: return "Passate"
+            case .tutto: return "Tutto"
             }
         }
-    }
-    enum FiltroPeriodo: String, CaseIterable, Identifiable {
-        case prossime, incorso, passate, tutte
-        var id: String { rawValue }
-        var label: String {
+        var spiega: String {
             switch self {
-            case .prossime: return "In arrivo"
-            case .incorso: return "In casa"
-            case .passate: return "Passate"
-            case .tutte: return "Tutto"
+            case .inCasa: return "Chi sta soggiornando oggi: arrivato e non ancora ripartito."
+            case .inArrivo: return "Deve ancora arrivare."
+            case .daConfermare: return "In attesa di conferma, a qualsiasi data."
+            case .cancellate: return "Cancellate: restano in archivio, fuori dai conti."
+            case .passate: return "Già ripartiti."
+            case .tutto: return "Tutte le prenotazioni, cancellate comprese."
+            }
+        }
+        /// Ordine più utile per ciascuna vista: chi è in casa si legge per
+        /// partenza (chi libera la camera prima), il passato dal più recente.
+        var ordineIniziale: (Colonna, Bool) {
+            switch self {
+            case .inCasa: return (.checkout, true)
+            case .inArrivo, .daConfermare, .tutto: return (.checkin, true)
+            case .cancellate, .passate: return (.checkin, false)
             }
         }
     }
     enum Colonna: String { case ospite, casa, checkin, checkout, notti, importo, saldo, stato }
 
     @State private var q = ""
-    @State private var stato: FiltroStato = .attive
-    @State private var periodo: FiltroPeriodo = .tutte
-    @State private var ordine: Colonna = .checkin
+    @State private var filtro: Filtro = .inCasa
+    @State private var ordine: Colonna = .checkout
     @State private var crescente = true
     @FocusState private var cercaAttivo: Bool
 
@@ -69,30 +81,39 @@ struct PrenotazioniTabella: View {
     private func data(_ s: String?) -> Date? { s.flatMap { tabYmd.date(from: String($0.prefix(10))) } }
 
     // ── selezione ────────────────────────────────────────────────────────────
-    private var filtrate: [Prenotazione] {
+    private var filtrate: [Prenotazione] { selezionate(filtro).sorted(by: prima) }
+    /// Quante righe ha ciascun filtro, con la ricerca già applicata: il numero
+    /// sul bottone è sempre quello che si vedrà cliccandolo.
+    private func conta(_ f: Filtro) -> Int { selezionate(f).count }
+
+    private func selezionate(_ f: Filtro) -> [Prenotazione] {
         let termini = tabFold(q).split(separator: " ").map(String.init).filter { !$0.isEmpty }
         return items.filter { b in
             if let s = struttura, b.struttura != s.rawValue { return false }
-            switch stato {
-            case .attive:     if b.status == "cancellata" { return false }
-            case .inAttesa:   if b.status != "in_attesa" { return false }
-            case .cancellate: if b.status != "cancellata" { return false }
-            case .tutte:      break
-            }
-            let ci = data(b.checkin), co = data(b.checkout)
-            switch periodo {
-            case .prossime: if let ci { if ci < oggi { return false } } else { return false }
-            case .incorso:  guard let ci, let co, ci <= oggi, oggi < co else { return false }
-            case .passate:  if let co { if co > oggi { return false } } else { return false }
-            case .tutte:    break
-            }
+            guard passa(b, f) else { return false }
             guard !termini.isEmpty else { return true }
             // Ogni parola cercata deve comparire da qualche parte nella riga:
             // così «michele king» trova Michele in Camera King.
             let fieno = tabFold(riga(b))
             return termini.allSatisfy { fieno.contains($0) }
         }
-        .sorted(by: prima)
+    }
+    private func passa(_ b: Prenotazione, _ f: Filtro) -> Bool {
+        let annullata = b.status == "cancellata"
+        let ci = data(b.checkin), co = data(b.checkout)
+        switch f {
+        // «In casa» si legge dalle date, non dallo stato: è chi dorme qui
+        // stanotte, che lo stato sia stato aggiornato a mano o no.
+        case .inCasa:       guard !annullata, let ci, let co else { return false }
+                            return ci <= oggi && oggi < co
+        case .inArrivo:     guard !annullata, let ci else { return false }
+                            return ci > oggi
+        case .daConfermare: return b.status == "in_attesa"
+        case .cancellate:   return annullata
+        case .passate:      guard !annullata, let co else { return false }
+                            return co <= oggi
+        case .tutto:        return true
+        }
     }
     /// Tutto quello su cui si può cercare, in una stringa sola.
     private func riga(_ b: Prenotazione) -> String {
@@ -142,8 +163,8 @@ struct PrenotazioniTabella: View {
             filtri
             if list.isEmpty {
                 EmptyStateCard(icon: "magnifyingglass",
-                               text: q.isEmpty ? "Nessuna prenotazione con questi filtri."
-                                               : "Nessuna prenotazione per «\(q)». Prova con meno parole, o cambia i filtri qui sopra.")
+                               text: q.isEmpty ? "Nessuna prenotazione in «\(filtro.label.lowercased())»."
+                                               : "Nessuna prenotazione per «\(q)» in «\(filtro.label.lowercased())». Prova con meno parole, o cambia filtro qui sopra.")
             } else {
                 VStack(spacing: 0) {
                     testata
@@ -195,24 +216,32 @@ struct PrenotazioniTabella: View {
     }
     private var filtri: some View {
         HStack(spacing: 8) {
-            ForEach(FiltroStato.allCases) { s in
-                chip(s.label, attivo: stato == s) { stato = s }
-            }
-            Rectangle().fill(PSE.line).frame(width: 1, height: 16).padding(.horizontal, 2)
-            ForEach(FiltroPeriodo.allCases) { p in
-                chip(p.label, attivo: periodo == p) { periodo = p }
-            }
+            ForEach(Filtro.allCases) { f in chip(f) }
             Spacer()
+            Text(filtro.spiega).font(.system(size: 10.5)).foregroundStyle(PSE.faint).lineLimit(1)
         }
     }
-    private func chip(_ t: String, attivo: Bool, _ azione: @escaping () -> Void) -> some View {
-        Button(action: { withAnimation(.easeOut(duration: 0.12)) { azione() } }) {
-            Text(t).font(.system(size: 11, weight: attivo ? .bold : .medium))
-                .foregroundStyle(attivo ? PSE.ink : PSE.dim)
-                .padding(.horizontal, 11).padding(.vertical, 5)
-                .background(Capsule().fill(attivo ? PSE.accent.opacity(0.75) : PSE.surface))
-                .overlay(Capsule().strokeBorder(attivo ? Color.clear : PSE.line, lineWidth: 1))
-        }.buttonStyle(.plain)
+    private func chip(_ f: Filtro) -> some View {
+        let attivo = filtro == f
+        let n = conta(f)
+        return Button {
+            withAnimation(.easeOut(duration: 0.12)) {
+                filtro = f
+                (ordine, crescente) = f.ordineIniziale
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Text(f.label).font(.system(size: 11, weight: attivo ? .bold : .medium))
+                    .foregroundStyle(attivo ? PSE.ink : (n == 0 ? PSE.faint : PSE.dim))
+                Text("\(n)").font(.system(size: 10, weight: .bold)).monospacedDigit()
+                    .foregroundStyle(attivo ? PSE.ink.opacity(0.85) : PSE.faint)
+            }
+            .padding(.horizontal, 11).padding(.vertical, 5)
+            .background(Capsule().fill(attivo ? PSE.accent.opacity(0.75) : PSE.surface))
+            .overlay(Capsule().strokeBorder(attivo ? Color.clear : PSE.line, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .help(f.spiega)
     }
 
     private var testata: some View {
