@@ -1000,9 +1000,12 @@ struct CamerePSEDashboard: View {
         let m2 = fmt("MMMM").string(from: meseSuccessivo).capitalized
         let tot1 = righe.reduce(0) { $0 + $1.g1.count }
         let tot2 = righe.reduce(0) { $0 + $1.g2.count }
-        return VStack(alignment: .leading, spacing: 10) {
-            Text("GIORNI LIBERI PER CAMERA")
-                .font(.system(size: 13.5, weight: .bold)).foregroundStyle(PSE.ink)
+        // Chiusa di default: è la tabella più lunga della pagina e serve solo
+        // quando si cerca un buco, non a ogni apertura.
+        return PSEPieghevole("GIORNI LIBERI PER CAMERA",
+                             valore: "\(tot1 + tot2) notti libere",
+                             colore: PSE.ink, coloreValore: PSE.pos,
+                             nota: "\(m1) e \(m2)") {
             VStack(spacing: 0) {
                 HStack(spacing: 10) {
                     Text("CASA").frame(width: 96, alignment: .leading)
@@ -1042,12 +1045,10 @@ struct CamerePSEDashboard: View {
                 }
                 .padding(.horizontal, 14).padding(.vertical, 12)
                 .background(Color.white.opacity(0.04))
+                Text("Le date seguono le assegnazioni del planning qui sopra: cambiando mese con le frecce cambiano anche queste due colonne.")
+                    .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+                    .padding(.horizontal, 14).padding(.top, 10)
             }
-            .background(RoundedRectangle(cornerRadius: 12).fill(PSE.panel))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(PSE.line, lineWidth: 1))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            Text("Le date seguono le assegnazioni del planning qui sopra: cambiando mese con le frecce cambiano anche queste due colonne.")
-                .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
         }
     }
     @ViewBuilder private func liberiCella(_ giorni: [Int]) -> some View {

@@ -100,7 +100,14 @@ private func svDayYStr(_ s: String?) -> String {
     return svDayY.string(from: d)
 }
 
-enum ServizioTab: String, CaseIterable, Identifiable { case pulizie = "Pulizie", colazioni = "Colazioni", utenze = "Utenze"; var id: String { rawValue } }
+enum ServizioTab: String, CaseIterable, Identifiable {
+    case pulizie = "Pulizie", colazioni = "Colazioni", utenze = "Utenze"
+    // Le due nuove non hanno una tabella propria: si leggono dalle uscite
+    // registrate in Tesoreria. Manutenzione è quello che si ripara, spese varie
+    // è tutto il resto che non è pulizia, colazione, utenza, OTA o debito.
+    case manutenzione = "Manutenzione", speseVarie = "Spese varie"
+    var id: String { rawValue }
+}
 
 /// Le due strutture, nell'ordine in cui vanno mostrate come sotto-finestre.
 let CASE_PSE: [(String, String)] = [("via-po", "Via Po"), ("via-romagna", "Via Romagna")]
@@ -110,6 +117,9 @@ let CASE_PSE: [(String, String)] = [("via-po", "Via Po"), ("via-romagna", "Via R
     @Published var colazioni: [Colazione] = []
     @Published var utenze: [EducampRiga] = []
     @Published var bollette: [Bolletta] = []
+    /// Uscite di cassa: da qui escono manutenzione e spese varie, che non hanno
+    /// una tabella dedicata ma vivono nei movimenti.
+    @Published var movimenti: [TesMovimento] = []
     /// Quante fatture in PDF ha ciascuna bolletta: una query sola per tutta la
     /// tabella, così la graffetta non costa una chiamata per riga.
     @Published var allegatiPerBolletta: [String: Int] = [:]
@@ -120,6 +130,7 @@ let CASE_PSE: [(String, String)] = [("via-po", "Via Po"), ("via-romagna", "Via R
         colazioni = (try? await HubAPI.listColazioni()) ?? []
         utenze = (try? await HubAPI.listEducampRighe()) ?? []
         bollette = (try? await HubAPI.listBollette()) ?? []
+        movimenti = (try? await HubAPI.listMovimenti()) ?? []
         allegatiPerBolletta = (try? await HubAPI.contaAllegati(.bolletta)) ?? [:]
         loading = false
     }
@@ -177,6 +188,8 @@ struct ServiziView: View {
                         case .pulizie: pulizieView
                         case .colazioni: colazioniView
                         case .utenze: utenzeView
+                        case .manutenzione: usciteView(.manutenzione)
+                        case .speseVarie: usciteView(.speseVarie)
                         }
                     }.padding(.bottom, 20)
                 }
@@ -194,6 +207,89 @@ struct ServiziView: View {
         .sheet(isPresented: $nuovaBolletta) {
             BollettaForm(existing: nil) { await model.load() }
         }
+    }
+
+    // ── MANUTENZIONE E SPESE VARIE ───────────────────────────────────────────
+    // Non hanno una tabella propria: sono le uscite già registrate in Tesoreria,
+    // lette per categoria. «Manutenzione» è quello che si ripara; «spese varie»
+    // è il resto che non è pulizia, colazione, utenza, commissione OTA o debito
+    // — cioè le spese che altrimenti non si guardavano mai perché sparse.
+    private func categoriaUscita(_ m: TesMovimento) -> ServizioTab? {
+        guard m.tipo == "uscita" else { return nil }
+        let c = (m.categoria ?? "").lowercased().trimmingCharacters(in: .whitespaces)
+        if c.contains("manutenzion") || c.contains("riparaz") { return .manutenzione }
+        let escluse = ["pulizia", "pulizie", "colazion", "utenz", "bolletta", "luce", "gas", "acqua",
+                       "commission", "airbnb", "booking", "debito", "debiti", "prestito", "mutuo",
+                       "rata", "finanziam", "deposito", "banca"]
+        if escluse.contains(where: { c.contains($0) }) { return nil }
+        return .speseVarie
+    }
+    private func usciteView(_ t: ServizioTab) -> some View {
+        let righe = model.movimenti.filter { categoriaUscita($0) == t }.sorted { $0.data > $1.data }
+        let tot = righe.reduce(0) { $0 + $1.importo_cents }
+        return VStack(alignment: .leading, spacing: 14) {
+            Text(t == .manutenzione
+                 ? "MANUTENZIONE E RIPARAZIONI — dalle uscite registrate in Tesoreria"
+                 : "SPESE VARIE — le uscite che non sono pulizie, colazioni, utenze, commissioni o debiti")
+                .font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim)
+            HStack(spacing: 12) {
+                card("TOTALE", eurc(tot), PSE.neg)
+                ForEach(CASE_PSE, id: \.0) { slug, nome in
+                    let t2 = righe.filter { $0.struttura == slug }.reduce(0) { $0 + $1.importo_cents }
+                    card(nome.uppercased(), eurc(t2), PSE.ink)
+                }
+                card("N. USCITE", "\(righe.count)", PSE.accent)
+            }
+            if righe.isEmpty {
+                EmptyStateCard(icon: t == .manutenzione ? "wrench.and.screwdriver" : "cart",
+                               text: t == .manutenzione
+                                 ? "Nessuna manutenzione registrata. Le uscite con categoria «manutenzione» finiscono qui."
+                                 : "Nessuna spesa varia registrata.")
+            } else {
+                ForEach(CASE_PSE, id: \.0) { slug, nome in
+                    let r = righe.filter { $0.struttura == slug }
+                    if !r.isEmpty { usciteCasaTable(nome, r) }
+                }
+                let senza = righe.filter { ($0.struttura ?? "").isEmpty }
+                if !senza.isEmpty { usciteCasaTable("Senza casa", senza) }
+            }
+            Text(t == .manutenzione
+                 ? "Per far comparire una spesa qui: registrala in Tesoreria come uscita con categoria «manutenzione»."
+                 : "Per far comparire una spesa qui basta che sia un'uscita con una categoria diversa da pulizia, colazione, utenza, commissione, banca o debito.")
+                .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+        }
+    }
+    private func usciteCasaTable(_ nome: String, _ righe: [TesMovimento]) -> some View {
+        let tot = righe.reduce(0) { $0 + $1.importo_cents }
+        return VStack(alignment: .leading, spacing: 0) {
+            intestazioneCasa(nome, "\(righe.count) uscite · \(eurc(tot))")
+            HStack(spacing: 10) {
+                Text("DATA").frame(width: 66, alignment: .leading)
+                Text("DESCRIZIONE").frame(maxWidth: .infinity, alignment: .leading)
+                Text("CATEGORIA").frame(width: 120, alignment: .leading)
+                Text("IMPORTO").frame(width: 92, alignment: .trailing)
+            }
+            .font(.system(size: 8.5, weight: .heavy)).tracking(0.7).foregroundStyle(PSE.faint)
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
+            ForEach(Array(righe.enumerated()), id: \.element.id) { i, m in
+                HStack(spacing: 10) {
+                    Text(svDayYStr(m.data)).font(.system(size: 11.5)).monospacedDigit()
+                        .foregroundStyle(PSE.dim).frame(width: 66, alignment: .leading)
+                    Text(m.descrizione ?? "—").font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(PSE.ink).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                    Text((m.categoria ?? "—").capitalized.trimmingCharacters(in: .whitespaces))
+                        .font(.system(size: 11)).foregroundStyle(PSE.faint)
+                        .frame(width: 120, alignment: .leading).lineLimit(1)
+                    Text("−" + eurc(m.importo_cents)).font(.system(size: 12.5, weight: .bold))
+                        .foregroundStyle(PSE.neg).monospacedDigit().frame(width: 92, alignment: .trailing)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                if i < righe.count - 1 { Divider().overlay(PSE.line).padding(.leading, 14) }
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
     }
 
     // ── PULIZIE ──

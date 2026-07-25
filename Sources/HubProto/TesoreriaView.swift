@@ -946,9 +946,13 @@ struct TesoreriaView: View {
     // dei soci (capitale). Entrano in cassa ma non fanno margine, come i debiti
     // sul lato uscite.
     private func isEntrataNonRicavo(_ cat: String?) -> Bool {
-        let c = (cat ?? "").lowercased()
-        return c.contains("deposito") || c.contains("apporto")
+        isCauzione(cat) || isApporto(cat)
     }
+    // Cauzioni e apporti stavano in una casella sola, ma sono due cose diverse:
+    // la cauzione è denaro dell'inquilino da restituire, l'apporto è capitale
+    // messo da un socio. Sommarle nascondeva quanto deve rientrare e quanto no.
+    private func isCauzione(_ cat: String?) -> Bool { (cat ?? "").lowercased().contains("deposito") }
+    private func isApporto(_ cat: String?) -> Bool { (cat ?? "").lowercased().contains("apporto") }
     private func perCategoria(_ tipo: String) -> [(cat: String, tot: Int)] {
         var map: [String: Int] = [:]
         for m in movStrutFiltrati where m.tipo == tipo {
@@ -976,6 +980,10 @@ struct TesoreriaView: View {
     private var totEntrate: Int { movStrutFiltrati.filter { $0.tipo == "entrata" && !isEntrataNonRicavo($0.categoria) }.reduce(0) { $0 + $1.importo_cents } }
     // Cauzioni + apporti soci: entrate non da attività, tenute fuori dal margine.
     private var totEntrateFinanziarie: Int { movStrutFiltrati.filter { $0.tipo == "entrata" && isEntrataNonRicavo($0.categoria) }.reduce(0) { $0 + $1.importo_cents } }
+    private var cauzioniMov: [TesMovimento] { movStrutFiltrati.filter { $0.tipo == "entrata" && isCauzione($0.categoria) }.sorted { $0.data > $1.data } }
+    private var apportiMov: [TesMovimento] { movStrutFiltrati.filter { $0.tipo == "entrata" && isApporto($0.categoria) }.sorted { $0.data > $1.data } }
+    private var totCauzioni: Int { cauzioniMov.reduce(0) { $0 + $1.importo_cents } }
+    private var totApporti: Int { apportiMov.reduce(0) { $0 + $1.importo_cents } }
     private var totUscite: Int { movStrutFiltrati.filter { $0.tipo == "uscita" }.reduce(0) { $0 + $1.importo_cents } }
     private var totCostiOperativi: Int { movStrutFiltrati.filter { $0.tipo == "uscita" && !isDebito($0.categoria) }.reduce(0) { $0 + $1.importo_cents } }
     private var totDebiti: Int { movStrutFiltrati.filter { $0.tipo == "uscita" && isDebito($0.categoria) }.reduce(0) { $0 + $1.importo_cents } }
@@ -993,10 +1001,17 @@ struct TesoreriaView: View {
                 testoCard("MARGINE OP.", totEntrate > 0 ? "\(margineOp)%" : "—", PSE.accent)
             }
             // Sotto la gestione: debiti/finanziamenti e utile netto reale
+            // Cauzioni e apporti in due caselle distinte: una è debito verso gli
+            // inquilini, l'altra è capitale dei soci. Sommate non dicevano niente.
             if totDebiti > 0 || totEntrateFinanziarie > 0 {
                 HStack(spacing: 12) {
                     clic(.debiti) { totCard("DEBITI / FINANZIAMENTI", totDebiti, PSE.warn) }
-                    clic(.cauzioniApporti) { totCard("CAUZIONI + APPORTI (fuori ricavi)", totEntrateFinanziarie, PSE.dim) }
+                    clic(.movimenti("Cauzioni ricevute", cauzioniMov, totCauzioni)) {
+                        totCard("CAUZIONI (da restituire)", totCauzioni, PSE.warn)
+                    }
+                    clic(.movimenti("Apporti dei soci", apportiMov, totApporti)) {
+                        totCard("APPORTI SOCI (capitale)", totApporti, PSE.accent)
+                    }
                     totCard("UTILE NETTO (dopo debiti)", utileNetto, utileNetto >= 0 ? PSE.pos : PSE.neg)
                 }
             }
@@ -1053,19 +1068,32 @@ struct TesoreriaView: View {
         return prenotazioni.first { $0.id == pid }
     }
     /// Entrate in contante: solo quelle passate dalla cassa.
+    // Cauzioni e apporti stavano dentro le entrate generate — le cauzioni sul
+    // conto Beeper finivano nel blocco «bonifici» — e gonfiavano il totale di
+    // soldi che non sono ricavi. Ora escono di qui e hanno le loro sezioni.
     private func diretteContante(_ s: Struttura) -> [TesMovimento] {
-        movCasa(s).filter { $0.tipo == "entrata" && $0.conto_id == "cassa" }.sorted { $0.data < $1.data }
+        movCasa(s).filter { $0.tipo == "entrata" && $0.conto_id == "cassa" && !isEntrataNonRicavo($0.categoria) }
+            .sorted { $0.data < $1.data }
     }
-    /// Entrate arrivate in banca (Beeper): affitti bonificati, depositi, giroconti.
+    /// Entrate arrivate in banca (Beeper): affitti bonificati, giroconti.
     /// Stavano mescolate al contante e il blocco diceva «contante» anche per loro.
     private func entrateBonifico(_ s: Struttura) -> [TesMovimento] {
-        movCasa(s).filter { $0.tipo == "entrata" && $0.conto_id != "cassa" && $0.conto_id != "massimo" }
+        movCasa(s).filter { $0.tipo == "entrata" && $0.conto_id != "cassa" && $0.conto_id != "massimo"
+                            && !isEntrataNonRicavo($0.categoria) }
             .sorted { $0.data < $1.data }
     }
     /// Uscite registrate, senza le commissioni OTA: quelle sono già dedotte nel
     /// blocco Booking (che mostra il netto) e conteggiarle qui le raddoppierebbe.
     private func usciteCasa(_ s: Struttura) -> [TesMovimento] {
         movCasa(s).filter { $0.tipo == "uscita" && $0.categoria != "commissione" }.sorted { $0.data < $1.data }
+    }
+    /// Cauzioni e apporti di questa casa: fuori dal generato, ma vanno mostrati
+    /// perché sono soldi che stanno sui conti e che non sono utile.
+    private func cauzioniCasa(_ s: Struttura) -> [TesMovimento] {
+        movCasa(s).filter { $0.tipo == "entrata" && isCauzione($0.categoria) }.sorted { $0.data < $1.data }
+    }
+    private func apportiCasa(_ s: Struttura) -> [TesMovimento] {
+        movCasa(s).filter { $0.tipo == "entrata" && isApporto($0.categoria) }.sorted { $0.data < $1.data }
     }
 
     private struct RigaOTA: Identifiable {
@@ -1129,29 +1157,41 @@ struct TesoreriaView: View {
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .background(RoundedRectangle(cornerRadius: 10).fill(PSE.accent.opacity(0.18)))
 
-            if !dirette.isEmpty { blocco("ENTRATE GENERATE — DIRETTE (contante)", PSE.pos) { direttaTable(dirette, totale: totDirette, titoloTot: "SUBTOTALE DIRETTE (contante)") } }
-            if !bonifici.isEmpty { blocco("ENTRATE GENERATE — BONIFICI (banca)", PSE.pos) { direttaTable(bonifici, totale: totBonifici, titoloTot: "SUBTOTALE BONIFICI (banca)") } }
-            if !incassato.isEmpty { blocco("OTA — GIÀ INCASSATO (commissioni dedotte)", PSE.pos) { otaTable(incassato, titoloTot: "SUBTOTALE INCASSATO") } }
+            if !dirette.isEmpty { blocco("ENTRATE GENERATE — DIRETTE (contante)", PSE.pos, totale: totDirette) { direttaTable(dirette, totale: totDirette, titoloTot: "SUBTOTALE DIRETTE (contante)") } }
+            if !bonifici.isEmpty { blocco("ENTRATE GENERATE — BONIFICI (banca)", PSE.pos, totale: totBonifici) { direttaTable(bonifici, totale: totBonifici, titoloTot: "SUBTOTALE BONIFICI (banca)") } }
+            if !incassato.isEmpty { blocco("OTA — GIÀ INCASSATO (commissioni dedotte)", PSE.pos, totale: totIncassatoNetto) { otaTable(incassato, titoloTot: "SUBTOTALE INCASSATO") } }
             rigaTotale("TOTALE ENTRATE GENERATE (contante + bonifici + OTA netto)", totGenerate, PSE.pos)
-            if !uscite.isEmpty { blocco("USCITE (già registrate)", PSE.neg) { uscitaTable(uscite, totale: totUscite) } }
+            if !uscite.isEmpty { blocco("USCITE (già registrate)", PSE.neg, totale: totUscite) { uscitaTable(uscite, totale: totUscite) } }
             rigaTotale("SALDO GENERATO (entrate − uscite)", totGenerate - totUscite, totGenerate - totUscite >= 0 ? PSE.pos : PSE.neg)
             if !future.isEmpty {
-                blocco("ENTRATE FUTURE — DA INCASSARE", PSE.warn) { otaTable(future, titoloTot: "TOTALE DA INCASSARE") }
+                blocco("ENTRATE FUTURE — DA INCASSARE", PSE.warn, totale: totFutureNetto) { otaTable(future, titoloTot: "TOTALE DA INCASSARE") }
                 rigaTotale("TOTALE POTENZIALE (generato + futuro netto)", totGenerate - totUscite + totFutureNetto, PSE.accent)
+            }
+            // Fuori dal saldo generato, ma sono soldi di questa casa che stanno
+            // sui conti: le cauzioni torneranno agli inquilini, gli apporti sono
+            // capitale dei soci. Tenerli separati evita di leggerli come utile.
+            let cauz = cauzioniCasa(s), app = apportiCasa(s)
+            if !cauz.isEmpty || !app.isEmpty {
+                Text("FUORI DAL GENERATO — NON SONO RICAVI")
+                    .font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.dim)
+                    .padding(.top, 4)
+            }
+            if !cauz.isEmpty {
+                let t = cauz.reduce(0) { $0 + $1.importo_cents }
+                blocco("CAUZIONI RICEVUTE — DA RESTITUIRE", PSE.warn, totale: t) { uscitaTable(cauz, totale: t) }
+            }
+            if !app.isEmpty {
+                let t = app.reduce(0) { $0 + $1.importo_cents }
+                blocco("APPORTI DEI SOCI — CAPITALE", PSE.accent, totale: t) { uscitaTable(app, totale: t) }
             }
         }
     }
 
-    private func blocco<C: View>(_ titolo: String, _ c: Color, @ViewBuilder _ content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(titolo).font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(c)
-                .lineLimit(1).minimumScaleFactor(0.8)
-                .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
-            content()
-            Color.clear.frame(height: 6)
-        }
-        .background(RoundedRectangle(cornerRadius: 12).fill(PSE.panel))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(PSE.line, lineWidth: 1))
+    /// Blocco del dettaglio per casa: chiuso, col totale già in testata. Il
+    /// numero si legge senza aprire; le righe si aprono se servono.
+    private func blocco<C: View>(_ titolo: String, _ c: Color, totale: Int? = nil,
+                                 @ViewBuilder _ content: @escaping () -> C) -> some View {
+        PSEPieghevole(titolo, valore: totale.map { eurc($0) }, colore: c, coloreValore: c, contenuto: content)
     }
     private func rigaTotale(_ t: String, _ v: Int, _ c: Color) -> some View {
         HStack {
@@ -1541,7 +1581,6 @@ struct TesoreriaView: View {
     private var ripartizionePerCasa: some View {
         let righe = righeCase
         let tot = rigaCasa("TOTALE") { _ in true }
-        let nonAttrib = righe.first { $0.nome == "Non attribuito" }?.netto ?? 0
         return VStack(alignment: .leading, spacing: 0) {
             Text("DA DOVE VENGONO E DOVE SI SPENDONO — RIPARTIZIONE PER CASA")
                 .font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint)
@@ -1563,15 +1602,59 @@ struct TesoreriaView: View {
                 Divider().overlay(PSE.line).padding(.leading, 16)
             }
             casaRow(tot, grassetto: true)
-            if nonAttrib != 0 {
-                Text("«Non attribuito» sono i movimenti senza casa: depositi degli inquilini, rata del prestito, spese bancarie e il bonifico dell'asta. Finché restano così, \(eurc(abs(nonAttrib))) non si sanno leggere per struttura — basta assegnare la casa dal singolo movimento.")
-                    .font(.system(size: 10.5)).foregroundStyle(PSE.warn)
-                    .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 12)
-            }
+            if !movNonAttribuiti.isEmpty { spiegazioneNonAttribuito }
         }
         .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
     }
+    // ── «Non attribuito», detto per nome ─────────────────────────────────────
+    // Prima c'era una frase generica che elencava categorie a memoria, e per
+    // sapere davvero cos'erano quei soldi bisognava andarli a cercare nei
+    // movimenti. Adesso la spiegazione la scrive il dato: riga per riga, con
+    // data e importo, e si apre cliccando.
+    private var movNonAttribuiti: [TesMovimento] {
+        model.movimenti.filter { nelPeriodo($0) && ($0.struttura ?? "").isEmpty }
+            .sorted { $0.data > $1.data }
+    }
+    private var spiegazioneNonAttribuito: some View {
+        let entrate = movNonAttribuiti.filter { $0.tipo == "entrata" }
+        let uscite = movNonAttribuiti.filter { $0.tipo == "uscita" }
+        let totE = entrate.reduce(0) { $0 + $1.importo_cents }
+        let totU = uscite.reduce(0) { $0 + $1.importo_cents }
+        return VStack(alignment: .leading, spacing: 0) {
+            PSEPieghevole("NON ATTRIBUITO — CHE COSA SONO",
+                          valore: "+\(eurc(totE)) · −\(eurc(totU))", colore: PSE.warn, coloreValore: PSE.warn,
+                          nota: "\(movNonAttribuiti.count) movimenti senza casa") {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(movNonAttribuiti) { m in
+                        Button { editing = m; showForm = true } label: {
+                            HStack(spacing: 12) {
+                                Text(tesPrettyStr(m.data)).font(.system(size: 11.5, weight: .semibold))
+                                    .foregroundStyle(PSE.dim).frame(width: 58, alignment: .leading).monospacedDigit()
+                                Text(m.descrizione ?? (m.categoria ?? "—")).font(.system(size: 12.5, weight: .medium))
+                                    .foregroundStyle(PSE.ink).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                                Text((m.categoria ?? "—").capitalized).font(.system(size: 11))
+                                    .foregroundStyle(PSE.faint).frame(width: 100, alignment: .leading).lineLimit(1)
+                                Text(contoNomeBreve(m.conto_id)).font(.system(size: 10.5, weight: .semibold))
+                                    .foregroundStyle(PSE.accent).frame(width: 76, alignment: .leading).lineLimit(1)
+                                Text((m.tipo == "entrata" ? "+" : "−") + eurc(m.importo_cents))
+                                    .font(.system(size: 12.5, weight: .bold)).monospacedDigit()
+                                    .foregroundStyle(m.tipo == "entrata" ? PSE.pos : PSE.neg)
+                                    .frame(width: 92, alignment: .trailing)
+                            }
+                            .padding(.horizontal, 16).padding(.vertical, 8).contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                        Divider().overlay(PSE.line).padding(.leading, 16)
+                    }
+                    Text("Sono i movimenti che non appartengono a una casa sola: il resto del denaro dell'asta, la rata del prestito, le spese di banca. Non è un errore — ma finché stanno qui non entrano nel conto di Via Po né in quello di Via Romagna. Clicca una riga per assegnarle una casa, se ce n'è una.")
+                        .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+                        .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 4)
+                }
+            }
+            .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 12)
+        }
+    }
+
     private func casaRow(_ r: RigaCasa, grassetto: Bool) -> some View {
         HStack(spacing: 10) {
             Text(r.nome).font(.system(size: grassetto ? 11 : 12, weight: grassetto ? .heavy : .semibold))
@@ -1606,13 +1689,8 @@ struct TesoreriaView: View {
         }
     }
     private func contoLedger(_ title: String, _ items: [TesMovimento], _ tot: Int, _ c: Color, _ sign: String, showConto: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(title).font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint)
-                Spacer()
-                Text(sign + eurc(tot)).font(.system(size: 12, weight: .bold)).foregroundStyle(c).monospacedDigit()
-            }
-            .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
+        PSEPieghevole(title, valore: sign + eurc(tot), coloreValore: c,
+                      nota: "\(items.count) movimenti") {
             ForEach(Array(items.enumerated()), id: \.element.id) { i, m in
                 Button { editing = m; showForm = true } label: {
                     HStack(spacing: 12) {
@@ -1629,10 +1707,7 @@ struct TesoreriaView: View {
                 }.buttonStyle(.plain)
                 if i < items.count - 1 { Divider().overlay(PSE.line).padding(.leading, 16) }
             }
-            Color.clear.frame(height: 6)
         }
-        .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
     }
     private func casaLabel(_ s: String?) -> String {
         s == "via-po" ? "Via Po" : s == "via-romagna" ? "Via Romagna" : "—"
