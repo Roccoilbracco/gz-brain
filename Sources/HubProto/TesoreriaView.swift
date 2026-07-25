@@ -1085,7 +1085,13 @@ struct TesoreriaView: View {
     /// Uscite registrate, senza le commissioni OTA: quelle sono già dedotte nel
     /// blocco Booking (che mostra il netto) e conteggiarle qui le raddoppierebbe.
     private func usciteCasa(_ s: Struttura) -> [TesMovimento] {
-        movCasa(s).filter { $0.tipo == "uscita" && $0.categoria != "commissione" }.sorted { $0.data < $1.data }
+        movCasa(s).filter { $0.tipo == "uscita" && !isCommissioneOTA($0) }.sorted { $0.data < $1.data }
+    }
+    /// Commissione OTA: si riconosce dalla categoria, ma anche dalla descrizione.
+    /// Tre commissioni Booking erano state salvate in categoria «airbnb» e così
+    /// non venivano dedotte dal netto OTA e comparivano tra i costi di gestione.
+    private func isCommissioneOTA(_ m: TesMovimento) -> Bool {
+        m.categoria == "commissione" || (m.descrizione ?? "").lowercased().hasPrefix("commissione")
     }
     /// Cauzioni e apporti di questa casa: fuori dal generato, ma vanno mostrati
     /// perché sono soldi che stanno sui conti e che non sono utile.
@@ -1108,15 +1114,19 @@ struct TesoreriaView: View {
         return String(t)
     }
     private func bookingIncassato(_ s: Struttura) -> [RigaOTA] {
-        let commissioni = movCasa(s).filter { $0.tipo == "uscita" && $0.categoria == "commissione" }
+        let commissioni = movCasa(s).filter { $0.tipo == "uscita" && isCommissioneOTA($0) }
         return movCasa(s).filter { $0.tipo == "entrata" && $0.conto_id == "massimo" }
             .sorted { $0.data < $1.data }
             .map { m in
                 let rif = rifBooking(m.descrizione)
                 let c = commissioni.first { rif != nil && rifBooking($0.descrizione) == rif }
                 let nome = (m.descrizione ?? "").replacingOccurrences(of: "Booking — ", with: "")
+                // Il canale lo dice la prenotazione collegata, non la categoria
+                // del movimento: la categoria si sbaglia a scriverla, e infatti
+                // tre incassi Booking risultavano Airbnb.
+                let canale = prenDi(m)?.source ?? m.categoria ?? "booking"
                 return RigaOTA(id: m.id, periodo: tesPrettyStr(m.data), ospite: nome,
-                               canale: (m.categoria ?? "booking").capitalized,
+                               canale: canale.capitalized,
                                lordo: m.importo_cents, commissione: c?.importo_cents ?? 0)
             }
     }
