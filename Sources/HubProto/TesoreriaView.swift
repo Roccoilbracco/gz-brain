@@ -1851,7 +1851,9 @@ struct TesoreriaView: View {
     /// La stessa cosa detta a parole, con dentro i numeri del periodo scelto.
     private func raccontoConto(utileOp: Int, utileNetto: Int, margine: Int) -> some View {
         let periodoTxt = periodo == "tutto" ? "da quando è aperto" : "in \(periodoLabel.lowercased())"
-        var t = "\(periodoTxt.capitalized) sono entrati \(eurc(totEntrate)) di ricavi veri. "
+        // .capitalized alzerebbe ogni parola («Da Quando È Aperto»): qui va solo
+        // la prima lettera, come in una frase.
+        var t = "\(periodoTxt.prefix(1).uppercased() + periodoTxt.dropFirst()) sono entrati \(eurc(totEntrate)) di ricavi veri. "
         t += "Farli girare è costato \(eurc(totCostiOperativi)): resta \(eurc(utileOp)), cioè \(margine) centesimi ogni euro incassato. "
         if totDebiti > 0 {
             t += "Poi \(eurc(totDebiti)) se ne sono andati a rimborsare debiti — che non sono costi dell'attività, sono soldi restituiti — quindi in cassa restano \(eurc(utileNetto)). "
