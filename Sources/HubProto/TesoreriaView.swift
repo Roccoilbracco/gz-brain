@@ -418,7 +418,9 @@ struct TesoreriaView: View {
                     case .conti: contiView
                     case .depositi: depositiView
                     case .contoEconomico: contoEconomico
-                    case .educamp: EducampView()
+                    // I movimenti arrivano da qui: registrato un incasso, il
+                    // modello si ricarica e le spunte «pagato» seguono subito.
+                    case .educamp: EducampView(movimenti: model.movimenti)
                     case .servizi: ServiziView(tab: $servizioSel)
                     case .movimenti: movimentiList
                     }

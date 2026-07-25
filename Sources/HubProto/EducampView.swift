@@ -59,15 +59,19 @@ private func eduDayStr(_ s: String?) -> String {
 @MainActor final class EducampModel: ObservableObject {
     @Published var ospiti: [EducampOspite] = []
     @Published var righe: [EducampRiga] = []
+    /// Incassi Educamp: arrivano da Tesoreria (vedi `movimenti` passati alla
+    /// vista) oppure, se la scheda si apre da sola, si leggono qui.
+    @Published var movimentiLocali: [TesMovimento] = []
     // Le bollette servono qui per il confronto: quanto riprendiamo dagli
     // inquilini contro quanto esce davvero di utenze.
     @Published var bollette: [Bolletta] = []
     @Published var loading = true
-    func load() async {
+    func load(caricaMovimenti: Bool) async {
         loading = true
         ospiti = (try? await HubAPI.listEducampOspiti()) ?? []
         righe = (try? await HubAPI.listEducampRighe()) ?? []
         bollette = (try? await HubAPI.listBollette()) ?? []
+        if caricaMovimenti { movimentiLocali = (try? await HubAPI.listMovimenti()) ?? [] }
         loading = false
     }
     var mesi: [String] { Array(Set(righe.map { $0.mese })).sorted() }
@@ -77,13 +81,20 @@ private func eduDayStr(_ s: String?) -> String {
 }
 
 struct EducampView: View {
+    /// Movimenti di cassa passati da Tesoreria: appena si registra un incasso
+    /// la lista cambia e le spunte di «pagato» si aggiornano da sole.
+    var movimenti: [TesMovimento]? = nil
     @StateObject private var model = EducampModel()
 
     // larghezze colonne tabella mensile
-    private let wCamera: CGFloat = 150, wGiorni: CGFloat = 46, wSoldi: CGFloat = 82, wComm: CGFloat = 70
+    private let wStato: CGFloat = 15, wCamera: CGFloat = 150, wGiorni: CGFloat = 46, wSoldi: CGFloat = 82, wComm: CGFloat = 70
+    private let wManca: CGFloat = 76
+
+    private var incassi: [TesMovimento] { movimenti ?? model.movimentiLocali }
 
     var body: some View {
-        Group {
+        let esito = EducampPagamenti.calcola(righe: model.righe, movimenti: incassi)
+        return Group {
             if model.loading {
                 HStack { Spacer(); ProgressView().controlSize(.large); Spacer() }.padding(.top, 30)
             } else {
@@ -91,9 +102,11 @@ struct EducampView: View {
                     VStack(alignment: .leading, spacing: 14) {
                         intestazione
                         kpi
+                        incassiBlocco(esito.saldi, esito.orfani)
                         utenzeBlocco
                         elencoOspiti
-                        ForEach(model.mesi, id: \.self) { m in meseTable(m) }
+                        ForEach(model.mesi, id: \.self) { m in meseTable(m, esito.saldi) }
+                        if !esito.orfani.isEmpty { orfaniBlocco(esito.orfani) }
                         riepilogoMese
                         Text("Affitto lordo = quello che paga l'ospite (380 €/mese per letto, commissione inclusa). La commissione è la parte per l'intermediario. Utenze: 8 €/giorno per camera divisi tra i presenti (6 € se resta una persona). Il mese è contato come 30 giorni.")
                             .font(.system(size: 10.5)).foregroundStyle(PSE.faint).padding(.top, 2)
@@ -102,7 +115,7 @@ struct EducampView: View {
                 }
             }
         }
-        .task { await model.load() }
+        .task { await model.load(caricaMovimenti: movimenti == nil) }
     }
 
     private var intestazione: some View {
@@ -128,6 +141,58 @@ struct EducampView: View {
             card("UTENZE DA INCASSARE DAGLI INQUILINI", eurc(utenze), PSE.accent)
             card("AFFITTO LORDO", eurc(lordo), PSE.dim)
         }
+    }
+
+    // ── Incassi: quanto è già arrivato in cassa dagli ospiti ────────────────
+    // Il totale nasce dagli stessi movimenti che colorano le righe: se un
+    // numero non torna, la riga colorata dice subito dove guardare.
+    private func incassiBlocco(_ saldi: [String: EducampSaldoRiga], _ orfani: [EducampMovNonAbbinato]) -> some View {
+        let dovuto = model.righe.reduce(0) { $0 + $1.totale_ospite_cents }
+        // Anche gli incassi orfani sono soldi arrivati: entrano nel totale, se no
+        // questa card direbbe meno di «Educamp incassato» in Tesoreria.
+        let abbinato = saldi.values.reduce(0) { $0 + $1.pagato_cents }
+        let incassato = abbinato + orfani.reduce(0) { $0 + $1.importo }
+        let stati = model.righe.map { (saldi[EducampPagamenti.chiave(mese: $0.mese, ospite: $0.ospite)] ?? EducampSaldoRiga()).stato }
+        let saldate = stati.filter { $0 == .pagato }.count
+        let affittoOk = stati.filter { $0 == .affittoOk }.count
+        let acconti = stati.filter { $0 == .acconto }.count
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("INCASSI — CHI HA PAGATO")
+                .font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.pos)
+            HStack(spacing: 10) {
+                card("INCASSATO DAGLI OSPITI", eurc(incassato), PSE.pos)
+                card("ANCORA DA INCASSARE", eurc(max(0, dovuto - incassato)), PSE.warn)
+                card("MENSILITÀ SALDATE", "\(saldate) di \(model.righe.count)", PSE.ink)
+                card("AFFITTO OK, MANCANO UTENZE", "\(affittoOk)", affittoOk > 0 ? PSE.accent : PSE.faint)
+                card("SOLO UN ACCONTO", "\(acconti)", acconti > 0 ? PSE.warn : PSE.faint)
+            }
+            Text("Nelle tabelle qui sotto: ✓ pieno verde = mensilità saldata, ✓ vuoto = affitto incassato ma utenze ancora da prendere, mezzo cerchio ambra = solo un acconto, cerchio vuoto = niente. La colonna «MANCA» dice quanto resta da avere. Il conto si rifà da solo a ogni nuovo movimento di categoria «educamp»: l'ospite si riconosce dal nome scritto nella descrizione, e passando il mouse su una riga si vedono i versamenti che la coprono.")
+                .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+        }
+    }
+
+    // Un incasso Educamp senza nome riconoscibile non deve sparire: è denaro
+    // arrivato che nessuna riga sta contando.
+    private func orfaniBlocco(_ orfani: [EducampMovNonAbbinato]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("INCASSI EDUCAMP NON ABBINATI A NESSUN OSPITE")
+                .font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.warn)
+                .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
+            ForEach(orfani) { o in
+                HStack(spacing: 10) {
+                    td(eduDayStr(o.data)).frame(width: 74, alignment: .leading)
+                    Text(o.desc).font(.system(size: 11.5)).foregroundStyle(PSE.ink)
+                        .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
+                    num(eurc(o.importo), PSE.pos).frame(width: wSoldi, alignment: .trailing).bold()
+                }
+                .padding(.horizontal, 16).padding(.vertical, 7)
+            }
+            Text("Scrivi il nome dell'ospite nella descrizione del movimento (anche solo il nome proprio) e la spunta comparirà da sola sulla riga giusta.")
+                .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+                .padding(.horizontal, 16).padding(.bottom, 12).padding(.top, 2)
+        }
+        .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.warn.opacity(0.30), lineWidth: 1))
     }
 
     // ── Utenze: quanto riprendiamo, quando, e quanto esce davvero ───────────
@@ -235,20 +300,33 @@ struct EducampView: View {
     }
 
     // ── Tabella mensile ──
-    private func meseTable(_ mese: String) -> some View {
+    private func meseTable(_ mese: String, _ saldi: [String: EducampSaldoRiga]) -> some View {
         let righe = model.righe(mese)
         let sub = subtotali(righe)
+        let incassato = righe.reduce(0) { $0 + (saldi[EducampPagamenti.chiave(mese: mese, ospite: $1.ospite)]?.pagato_cents ?? 0) }
+        let manca = max(0, sub.to - incassato)
         return VStack(alignment: .leading, spacing: 0) {
-            Text("\(eduMeseNome(mese).uppercased())  ·  mese contato come 30 giorni")
-                .font(.system(size: 10, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.accent)
-                .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
+            HStack(spacing: 8) {
+                Text("\(eduMeseNome(mese).uppercased())  ·  mese contato come 30 giorni")
+                    .font(.system(size: 10, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.accent)
+                Spacer(minLength: 8)
+                Text("INCASSATO \(eurc(incassato)) di \(eurc(sub.to))")
+                    .font(.system(size: 9.5, weight: .heavy)).tracking(0.4).foregroundStyle(PSE.pos)
+                if manca > 0 {
+                    Text("MANCA \(eurc(manca))")
+                        .font(.system(size: 9.5, weight: .heavy)).tracking(0.4).foregroundStyle(PSE.warn)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Capsule().fill(PSE.warn.opacity(0.13)))
+                }
+            }
+            .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
             meseHeader
             ForEach(Array(righe.enumerated()), id: \.element.id) { i, r in
-                meseRow(r)
+                meseRow(r, saldi[EducampPagamenti.chiave(mese: r.mese, ospite: r.ospite)] ?? EducampSaldoRiga())
                 if i < righe.count - 1 { Divider().overlay(PSE.line).padding(.leading, 16) }
             }
             Divider().overlay(PSE.line)
-            subtotaleRow(sub, label: "SUBTOTALE \(eduMeseNome(mese).uppercased())")
+            subtotaleRow(sub, label: "SUBTOTALE \(eduMeseNome(mese).uppercased())", manca: manca)
         }
         .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
@@ -256,6 +334,7 @@ struct EducampView: View {
 
     private var meseHeader: some View {
         HStack(spacing: 8) {
+            th("").frame(width: wStato)
             th("OSPITE").frame(maxWidth: .infinity, alignment: .leading)
             th("CAMERA").frame(width: wCamera, alignment: .leading)
             th("GIORNI").frame(width: wGiorni, alignment: .trailing)
@@ -265,13 +344,17 @@ struct EducampView: View {
             th("UTENZE").frame(width: wComm, alignment: .trailing)
             th("TOT. OSPITE").frame(width: wSoldi, alignment: .trailing)
             th("NETTO NOI").frame(width: wSoldi, alignment: .trailing)
+            th("MANCA").frame(width: wManca, alignment: .trailing)
         }
         .padding(.horizontal, 16).padding(.bottom, 8)
         .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
     }
-    private func meseRow(_ r: EducampRiga) -> some View {
+    private func meseRow(_ r: EducampRiga, _ s: EducampSaldoRiga) -> some View {
+        let stato = s.stato
         return HStack(spacing: 8) {
-            Text(r.ospite).font(.system(size: 12, weight: .semibold)).foregroundStyle(PSE.ink)
+            EducampStatoIcona(stato: stato).frame(width: wStato)
+            Text(r.ospite).font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(stato == .pagato ? PSE.pos : PSE.ink)
                 .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
             td(r.camera ?? "—").frame(width: wCamera, alignment: .leading)
             num("\(r.giorni ?? 0)", PSE.dim).frame(width: wGiorni, alignment: .trailing)
@@ -281,8 +364,50 @@ struct EducampView: View {
             num(eurc(r.utenze_cents), PSE.accent).frame(width: wComm, alignment: .trailing)
             num(eurc(r.totale_ospite_cents), PSE.ink).frame(width: wSoldi, alignment: .trailing)
             num(eurc(r.netto_noi_cents), PSE.pos).frame(width: wSoldi, alignment: .trailing).bold()
+            // Quanto resta da avere: il numero conta più dell'icona quando
+            // manca solo un pezzo di utenze.
+            Group {
+                if stato == .pagato {
+                    Text("saldato").font(.system(size: 10, weight: .semibold)).foregroundStyle(PSE.pos.opacity(0.8))
+                } else if s.pagato_cents > 0 {
+                    num("−" + eurc(s.residuo), stato == .affittoOk ? PSE.accent : PSE.warn)
+                } else {
+                    Text("—").font(.system(size: 11)).foregroundStyle(PSE.faint)
+                }
+            }
+            .frame(width: wManca, alignment: .trailing)
         }
         .padding(.horizontal, 16).padding(.vertical, 7)
+        // Verde = saldato, ambra = arrivato solo un acconto: si legge la riga
+        // intera senza cercare l'icona.
+        .background(statoSfondo(stato))
+        .help(statoTesto(r, s))
+    }
+    private func statoSfondo(_ stato: StatoPagamento) -> Color {
+        switch stato {
+        case .pagato: return PSE.pos.opacity(0.08)
+        case .affittoOk: return PSE.pos.opacity(0.035)
+        case .acconto: return PSE.warn.opacity(0.06)
+        case .nulla: return .clear
+        }
+    }
+    /// Il tooltip dice da dove arrivano i soldi: senza, una spunta sbagliata
+    /// sarebbe impossibile da smontare.
+    private func statoTesto(_ r: EducampRiga, _ s: EducampSaldoRiga) -> String {
+        var t: String
+        switch s.stato {
+        case .pagato:
+            t = "Saldato: \(eurc(s.pagato_cents)) di \(eurc(r.totale_ospite_cents))"
+        case .affittoOk:
+            t = "Affitto pagato (\(eurc(s.dovuto_affitto_cents))) — mancano \(eurc(s.residuo_utenze)) di utenze"
+        case .acconto:
+            t = "Acconto \(eurc(s.pagato_cents)) di \(eurc(r.totale_ospite_cents)) — manca \(eurc(s.residuo)) (affitto \(eurc(s.residuo_affitto)) + utenze \(eurc(s.residuo_utenze)))"
+        case .nulla:
+            t = "Nessun incasso registrato — dovuti \(eurc(r.totale_ospite_cents))"
+        }
+        for f in s.fonti { t += "\n• \(eduDayStr(f.data)) · \(eurc(f.quota)) — \(f.desc)" }
+        if s.stato == .nulla { t += "\nL'abbinamento usa il nome scritto nella descrizione del movimento (categoria «educamp»)." }
+        return t
     }
 
     private func subtotali(_ rs: [EducampRiga]) -> (g: Int, lo: Int, co: Int, ne: Int, ut: Int, to: Int, nn: Int) {
@@ -291,8 +416,9 @@ struct EducampView: View {
              a.4 + r.utenze_cents, a.5 + r.totale_ospite_cents, a.6 + r.netto_noi_cents)
         }
     }
-    private func subtotaleRow(_ s: (g: Int, lo: Int, co: Int, ne: Int, ut: Int, to: Int, nn: Int), label: String) -> some View {
+    private func subtotaleRow(_ s: (g: Int, lo: Int, co: Int, ne: Int, ut: Int, to: Int, nn: Int), label: String, manca: Int) -> some View {
         return HStack(spacing: 8) {
+            Color.clear.frame(width: wStato, height: 1)
             Text(label).font(.system(size: 10, weight: .heavy)).tracking(0.5).foregroundStyle(PSE.ink)
                 .frame(maxWidth: .infinity, alignment: .leading)
             td("").frame(width: wCamera)
@@ -303,6 +429,11 @@ struct EducampView: View {
             num(eurc(s.ut), PSE.accent).frame(width: wComm, alignment: .trailing).bold()
             num(eurc(s.to), PSE.ink).frame(width: wSoldi, alignment: .trailing).bold()
             num(eurc(s.nn), PSE.pos).frame(width: wSoldi, alignment: .trailing).bold()
+            Group {
+                if manca > 0 { num("−" + eurc(manca), PSE.warn).bold() }
+                else { Text("tutto incassato").font(.system(size: 9.5, weight: .semibold)).foregroundStyle(PSE.pos).lineLimit(1) }
+            }
+            .frame(width: wManca, alignment: .trailing)
         }
         .padding(.horizontal, 16).padding(.vertical, 9)
         .background(Color.white.opacity(0.03))
