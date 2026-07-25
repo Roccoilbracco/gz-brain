@@ -157,6 +157,20 @@ extension HubAPI {
     static func syncCamerePSE() async {
         _ = try? await sb.rpc("sync_camere_pse")
     }
+    /// Cancella la prenotazione e porta via quello che ne dipendeva: la pulizia
+    /// prevista, le colazioni non servite e — se `stralciaIncasso` — l'incasso
+    /// che la sincronizzazione aveva già scritto in cassa. Ritorna il riepilogo
+    /// di cosa ha toccato, o nil se la funzione non risponde.
+    static func annullaPrenotazione(id: String, stralciaIncasso: Bool) async -> [String: Any]? {
+        guard let d = try? await sb.rpc("annulla_prenotazione",
+                                        args: ["p_id": id, "p_stralcia_incasso": stralciaIncasso]),
+              let j = try? JSONSerialization.jsonObject(with: d) else { return nil }
+        // PostgREST incarta il ritorno scalare in un oggetto o in un array a
+        // seconda della versione: si accettano tutte e due le forme.
+        if let o = j as? [String: Any] { return o }
+        if let a = j as? [[String: Any]] { return a.first }
+        return nil
+    }
 }
 
 enum PSEViewMode { case prenotazioni, tesoreria }
@@ -208,6 +222,8 @@ struct CamerePSEDashboard: View {
     @State private var showForm = false
     @State private var viewMode: PSEViewMode = .prenotazioni
     @State private var newMovimento = false
+    /// Esito dell'ultima cancellazione: si mostra in chiaro, perché tocca i conti.
+    @State private var messaggio: String? = nil
 
     private var attive: [Prenotazione] { items.filter { BookingStatus.from($0.status).active } }
 
@@ -370,6 +386,9 @@ struct CamerePSEDashboard: View {
                     } else {
                         calendarStrip
                         daySection
+                        PrenotazioniTabella(items: items, struttura: strutturaFilter) { b in
+                            withAnimation(.easeInOut(duration: 0.2)) { selected = b }
+                        }
                         planningSection
                         giorniLiberiSection
                     }
@@ -386,6 +405,7 @@ struct CamerePSEDashboard: View {
                     onStatus: { s in Task { await setStatus(selected!, s) } },
                     onPay: { cents in Task { await setPaid(selected!, cents) } },
                     onEdit: { editing = selected; selected = nil; showForm = true },
+                    onAnnulla: { stralcia in Task { await annulla(selected!, stralcia: stralcia) } },
                     onDelete: { Task { await remove(selected!) } },
                     onClose: { withAnimation(.easeInOut(duration: 0.2)) { selected = nil } }
                 )
@@ -399,6 +419,11 @@ struct CamerePSEDashboard: View {
         .onChange(of: strutturaFilter) { _, _ in rebuildStats() }
         .sheet(isPresented: $showForm, onDismiss: { editing = nil }) {
             BookingForm(existing: editing) { await syncAndReload() }
+        }
+        .alert("Prenotazione cancellata", isPresented: Binding(get: { messaggio != nil }, set: { if !$0 { messaggio = nil } })) {
+            Button("Ho capito") { messaggio = nil }
+        } message: {
+            Text(messaggio ?? "")
         }
     }
 
@@ -1230,6 +1255,38 @@ struct CamerePSEDashboard: View {
         // a partire da agosto); il vecchio syncColazione qui creava un doppione.
         await syncAndReload()
     }
+    /// Cancellazione «vera»: la prenotazione resta in archivio ma esce dai
+    /// conti. Se la funzione lato database non c'è ancora, almeno lo stato si
+    /// mette a cancellata — e il messaggio lo dice, invece di far credere che
+    /// sia stato ripulito tutto.
+    private func annulla(_ b: Prenotazione, stralcia: Bool) async {
+        let esito = await HubAPI.annullaPrenotazione(id: b.id, stralciaIncasso: stralcia)
+        if esito == nil {
+            try? await HubAPI.updatePrenotazione(id: b.id, fields: ["status": "cancellata"])
+        }
+        withAnimation(.easeInOut(duration: 0.2)) { selected = nil }
+        await syncAndReload()
+        messaggio = testoEsito(b, esito, stralcia: stralcia)
+    }
+    private func testoEsito(_ b: Prenotazione, _ e: [String: Any]?, stralcia: Bool) -> String {
+        guard let e else {
+            return "\(b.guest_name): stato messo a «cancellata». La pulizia e le colazioni collegate non sono state tolte — manca la funzione «annulla_prenotazione» sul database."
+        }
+        func n(_ k: String) -> Int { (e[k] as? Int) ?? 0 }
+        var parti: [String] = []
+        if n("pulizie_rimosse") > 0 { parti.append("tolta \(n("pulizie_rimosse")) pulizia prevista") }
+        if n("pulizie_tenute") > 0 { parti.append("\(n("pulizie_tenute")) pulizia già fatta resta nei costi") }
+        if n("colazioni_rimosse") > 0 { parti.append("tolte \(n("colazioni_rimosse")) colazioni") }
+        if n("colazioni_tenute") > 0 { parti.append("\(n("colazioni_tenute")) colazioni già servite restano") }
+        let str = n("incasso_stralciato_cents")
+        if str > 0 { parti.append("stralciato l'incasso di \(eur(str))") }
+        else if stralcia && b.paid_cents > 0 { parti.append("nessun incasso automatico da stralciare") }
+        if n("movimenti_manuali_collegati") > 0 {
+            parti.append("attenzione: \(n("movimenti_manuali_collegati")) movimenti inseriti a mano restano in Tesoreria, vanno tolti lì se non spettano più")
+        }
+        if parti.isEmpty { parti.append("non c'era nulla di collegato da ripulire") }
+        return "\(b.guest_name) cancellata · " + parti.joined(separator: " · ") + "."
+    }
     private func remove(_ b: Prenotazione) async {
         try? await HubAPI.deletePrenotazione(id: b.id)
         withAnimation(.easeInOut(duration: 0.2)) { selected = nil }
@@ -1247,9 +1304,12 @@ private struct BookingDrawer: View {
     let onStatus: (BookingStatus) -> Void
     let onPay: (Int) -> Void
     let onEdit: () -> Void
+    /// true = stralcia anche l'incasso già registrato in cassa.
+    let onAnnulla: (Bool) -> Void
     let onDelete: () -> Void
     let onClose: () -> Void
     @State private var confermaElimina = false
+    @State private var confermaAnnulla = false
 
     private var st: BookingStatus { .from(booking.status) }
     private var str: Struttura { .from(booking.struttura) }
@@ -1357,6 +1417,37 @@ private struct BookingDrawer: View {
                             Text("\(booking.guest_name) · \(eur(booking.amount_cents)). L'operazione non si può annullare.")
                         }
                     }.padding(.top, 8)
+                    // Cancellare non è eliminare: la prenotazione resta in
+                    // archivio ma esce dai conti (pulizia prevista, colazioni non
+                    // servite, e se serve l'incasso registrato). Il calendario OTA
+                    // si sblocca da solo al giro dopo di beds24-push.
+                    if st != .cancellata {
+                        Button { confermaAnnulla = true } label: {
+                            Label("Cancella prenotazione", systemImage: "calendar.badge.minus")
+                                .font(.system(size: 12.5, weight: .semibold))
+                                .foregroundStyle(PSE.status(.cancellata))
+                                .frame(maxWidth: .infinity).padding(.vertical, 9)
+                                .background(RoundedRectangle(cornerRadius: 9).fill(PSE.status(.cancellata).opacity(0.13)))
+                                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(PSE.status(.cancellata).opacity(0.45), lineWidth: 1))
+                        }.buttonStyle(.plain)
+                        .confirmationDialog("Cancellare la prenotazione?", isPresented: $confermaAnnulla) {
+                            // Con dei soldi già incassati la domanda vera è una
+                            // sola: li teniamo o li togliamo dai conti? Si chiede
+                            // adesso, non dopo in Tesoreria quando non ci si
+                            // ricorda più il perché.
+                            if booking.paid_cents > 0 {
+                                Button("Cancella e stralcia l'incasso", role: .destructive) { onAnnulla(true) }
+                                Button("Cancella, l'incasso resta (penale)") { onAnnulla(false) }
+                            } else {
+                                Button("Cancella", role: .destructive) { onAnnulla(false) }
+                            }
+                            Button("Lascia stare", role: .cancel) {}
+                        } message: {
+                            Text(testoAnnulla)
+                        }
+                        Text("Resta in archivio tra le cancellate, ma sparisce dal planning e dai conti.")
+                            .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+                    }
                 }
                 .padding(.horizontal, 22).padding(.bottom, 20)
             }
@@ -1366,6 +1457,13 @@ private struct BookingDrawer: View {
         .overlay(Rectangle().frame(width: 1).foregroundStyle(Holo.cardBorder), alignment: .leading)
         .ignoresSafeArea()
     }
+    /// Cosa succede a premere «Cancella», detto prima di premerlo.
+    private var testoAnnulla: String {
+        var t = "La camera torna libera e la prenotazione esce dai conti: spariscono la pulizia prevista e le colazioni non ancora servite. Quelle già fatte restano, sono costi veri. La prenotazione resta in archivio, tra le cancellate."
+        if booking.paid_cents > 0 { t += "\n\nRisultano incassati \(eur(booking.paid_cents))." }
+        return t
+    }
+
     private func section<C: View>(_ title: String, @ViewBuilder _ content: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 9) {
             Text(title).font(.system(size: 9.5, weight: .heavy)).tracking(1.5).foregroundStyle(PSE.faint)
