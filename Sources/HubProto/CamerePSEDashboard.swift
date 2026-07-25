@@ -316,7 +316,7 @@ struct CamerePSEDashboard: View {
     // Le camere sono condivise: una stanza è occupata se un ospite Educamp
     // assegnato a quella camera è presente quel giorno. Serve a segnare
     // occupate le stanze anche senza una prenotazione per-camera.
-    @State private var educampRoomCache: [String: [(ci: Date, co: Date)]] = [:]
+    @State private var educampRoomCache: [String: [(ci: Date, co: Date, nome: String)]] = [:]
     private func educampGridRoom(_ cam: String?) -> String? {
         let c = (cam ?? "").lowercased()
         if c.contains("doppia") { return "Doppia senza bagno" }        // incl. "Camino → Doppia s.b."
@@ -326,16 +326,16 @@ struct CamerePSEDashboard: View {
         return nil
     }
     private func rebuildEducampRooms() {
-        var m: [String: [(Date, Date)]] = [:]
+        var m: [String: [(ci: Date, co: Date, nome: String)]] = [:]
         for o in educampOspiti {
             guard let room = educampGridRoom(o.camera), let ci = day(o.checkin), let co = day(o.checkout) else { continue }
-            m[room, default: []].append((ci, co))
+            m[room, default: []].append((ci, co, firstName(o.ospite)))
         }
         educampRoomCache = m
     }
     private func educampOccupies(_ s: Struttura, _ room: String, _ d: Date) -> Bool {
         guard s == .viaRomagna else { return false }
-        return (educampRoomCache[room] ?? []).contains { $0.0 <= d && d < $0.1 }
+        return (educampRoomCache[room] ?? []).contains { $0.ci <= d && d < $0.co }
     }
     private func bookingFor(_ s: Struttura, _ room: String, _ d: Date) -> Prenotazione? {
         guard let idx = roomIndex(s, room) else { return nil }
@@ -385,6 +385,10 @@ struct CamerePSEDashboard: View {
             }
         }
         .task { await load() }
+        // Il grafico guarda il mese mostrato e la struttura filtrata: se cambiano,
+        // i suoi dati vanno rifatti (le celle invece si ricalcolano da sole).
+        .onChange(of: monthAnchor) { _, _ in rebuildStats() }
+        .onChange(of: strutturaFilter) { _, _ in rebuildStats() }
         .sheet(isPresented: $showForm, onDismiss: { editing = nil }) {
             BookingForm(existing: editing) { await syncAndReload() }
         }
@@ -562,9 +566,11 @@ struct CamerePSEDashboard: View {
     }
 
     // ── planning mensile: camere (righe) × giorni (colonne) ──
+    // Le prenotazioni si disegnano come barre continue sopra il reticolo, non
+    // come celle ripetute: il nome si legge una volta sola e a colpo d'occhio si
+    // vede dove comincia e dove finisce ogni soggiorno.
     private enum GRow: Hashable {
         case header, title(Struttura), room(Struttura, String), free(Struttura)
-        case educampTitle, educampGuest(String)   // String = id ospite Educamp
     }
     private var gridRows: [GRow] {
         var r: [GRow] = [.header]
@@ -572,44 +578,90 @@ struct CamerePSEDashboard: View {
             r.append(.title(s))
             for rm in roomsFor(s) { r.append(.room(s, rm)) }
             r.append(.free(s))
-            // Sotto le stanze di Via Romagna, gli ospiti Educamp del mese: una
-            // riga per persona, perché le camere sono condivise a letto.
-            if s == .viaRomagna {
-                let osp = educampVisibili
-                if !osp.isEmpty {
-                    r.append(.educampTitle)
-                    for o in osp { r.append(.educampGuest(o.id)) }
-                }
-            }
         }
         return r
     }
-    // Ospiti Educamp il cui soggiorno tocca il mese mostrato (con data valida:
-    // l'annullata ha checkin/checkout nulli e resta fuori).
-    private var educampVisibili: [EducampOspite] {
-        guard strutture.contains(.viaRomagna) else { return [] }
-        let c = Calendar.current
-        guard let range = c.range(of: .day, in: .month, for: monthAnchor),
-              let mStart = c.date(from: c.dateComponents([.year, .month], from: monthAnchor)),
-              let mEnd = c.date(byAdding: .day, value: range.count, to: mStart) else { return [] }
-        return educampOspiti.filter { o in
-            guard let ci = day(o.checkin), let co = day(o.checkout) else { return false }
-            return ci < mEnd && mStart < co      // il soggiorno si sovrappone al mese
-        }.sorted { ($0.gruppo ?? "") + ($0.checkin ?? "") < ($1.gruppo ?? "") + ($1.checkin ?? "") }
+    private var rowH: CGFloat { 29 }
+    private var labelW: CGFloat { 208 }
+    // Larghezza colonna: si adatta alla finestra così il mese ci sta tutto senza
+    // scorrere (entro limiti leggibili). La aggiorna adattaDayW().
+    @State private var dayW: CGFloat = 34
+    private var gridW: CGFloat { CGFloat(monthDays.count) * dayW }
+    private func adattaDayW(_ total: CGFloat) {
+        let n = CGFloat(max(1, monthDays.count))
+        let w = min(48, max(30, ((total - labelW - 2) / n).rounded(.down)))
+        if abs(w - dayW) > 0.5 { dayW = w }
     }
-    private func educampBy(_ id: String) -> EducampOspite? { educampOspiti.first { $0.id == id } }
-    private var rowH: CGFloat { 27 }
-    private var dayW: CGFloat { 34 }
-    private var labelW: CGFloat { 210 }
-    private var occFill: Color { Color(hue: 5/360, saturation: 0.34, brightness: 0.48).opacity(0.34) }
-    private var bookingFill: Color { Color(hue: 45/360, saturation: 0.44, brightness: 0.52).opacity(0.34) }
-    private var airbnbFill: Color { Color(hue: 22/360, saturation: 0.50, brightness: 0.56).opacity(0.34) }
-    private var freeFill: Color { Color(hue: 150/360, saturation: 0.30, brightness: 0.42).opacity(0.20) }
-    private var educampFill: Color { Color(hue: 185/360, saturation: 0.45, brightness: 0.55).opacity(0.40) }
-    private var gLine: Color { Color.white.opacity(0.06) }
-    // tinta cella occupata in base alla fonte (Booking giallo, Airbnb arancio, resto rosa)
-    private func sourceFill(_ s: String?) -> Color {
-        switch s { case "booking": return bookingFill; case "airbnb": return airbnbFill; default: return occFill }
+    private var gLine: Color { Color.white.opacity(0.055) }
+    // Tinte per canale: colore solo dove c'è qualcuno. Le celle libere restano
+    // vuote (prima erano verdine e facevano rumore), così l'occupato risalta.
+    private func sourceColor(_ s: String?) -> Color {
+        switch s {
+        case "booking": return Color(hue: 42/360,  saturation: 0.62, brightness: 0.80)
+        case "airbnb":  return Color(hue: 8/360,   saturation: 0.58, brightness: 0.78)
+        default:        return Color(hue: 206/360, saturation: 0.52, brightness: 0.80)
+        }
+    }
+    private var educampColor: Color { Color(hue: 168/360, saturation: 0.46, brightness: 0.72) }
+    private func strutturaColor(_ s: Struttura) -> Color {
+        Color(hue: s.hue/360, saturation: 0.42, brightness: 0.74)
+    }
+    private func isWeekend(_ d: Date) -> Bool { Calendar.current.isDateInWeekend(d) }
+    /// Sfondo della colonna: giorno selezionato > oggi > weekend > niente.
+    private func colonnaTint(_ d: Date) -> Color {
+        let c = Calendar.current
+        if c.isDate(d, inSameDayAs: selectedDay) { return PSE.accent.opacity(0.20) }
+        if c.isDateInToday(d) { return PSE.accent.opacity(0.10) }
+        return isWeekend(d) ? Color.white.opacity(0.030) : Color.clear
+    }
+
+    // ── barre del planning ───────────────────────────────────────────────────
+    private struct Segmento: Identifiable {
+        let id: String
+        let start: Int, len: Int
+        let color: Color
+        let label: String
+        let booking: Prenotazione?
+        let apertoPrima: Bool, apertoDopo: Bool
+    }
+    /// Soggiorni della camera intersecati col mese mostrato, come segmenti di
+    /// colonne contigue (start = indice del primo giorno, len = notti visibili).
+    private func segmenti(_ s: Struttura, _ rm: String) -> [Segmento] {
+        let days = monthDays
+        guard let first = days.first, let idx = roomIndex(s, rm) else { return [] }
+        let cal = Calendar.current, n = days.count
+        var out: [Segmento] = []
+        var occupato = [Bool](repeating: false, count: n)
+        for a in (assignCache[s.rawValue]?[idx] ?? []) {
+            let s0 = cal.dateComponents([.day], from: first, to: a.ci).day ?? 0
+            let e0 = cal.dateComponents([.day], from: first, to: a.co).day ?? 0
+            let a0 = max(0, s0), b0 = min(n, e0)
+            guard b0 > a0 else { continue }
+            for i in a0..<b0 { occupato[i] = true }
+            out.append(Segmento(id: a.b.id, start: a0, len: b0 - a0, color: sourceColor(a.b.source),
+                                label: firstName(a.b.guest_name), booking: a.b,
+                                apertoPrima: s0 < 0, apertoDopo: e0 > n))
+        }
+        // Camere condivise Educamp: una barra sola con quante persone ci sono
+        // dentro, invece di una riga per ospite (erano venti righe di rumore).
+        if s == .viaRomagna, let occ = educampRoomCache[rm], !occ.isEmpty {
+            var edu = [Bool](repeating: false, count: n)
+            for (i, d) in days.enumerated() where !occupato[i] {
+                edu[i] = occ.contains { $0.ci <= d && d < $0.co }
+            }
+            var i = 0
+            while i < n {
+                guard edu[i] else { i += 1; continue }
+                var j = i
+                while j + 1 < n && edu[j + 1] { j += 1 }
+                let nomi = Set(occ.filter { $0.ci <= days[j] && days[i] < $0.co }.map { $0.nome })
+                out.append(Segmento(id: "edu|\(rm)|\(i)", start: i, len: j - i + 1, color: educampColor,
+                                    label: nomi.count == 1 ? (nomi.first ?? "Educamp") : "Educamp · \(nomi.count)",
+                                    booking: nil, apertoPrima: false, apertoDopo: false))
+                i = j + 1
+            }
+        }
+        return out
     }
 
     private var planningSection: some View {
@@ -617,34 +669,204 @@ struct CamerePSEDashboard: View {
             HStack(spacing: 12) {
                 Text("PLANNING · \(fmt("MMMM yyyy").string(from: monthAnchor).uppercased())")
                     .font(.system(size: 13.5, weight: .bold)).foregroundStyle(PSE.ink)
-                HStack(spacing: 10) {
-                    legendItem(freeFill, "Libera"); legendItem(occFill, "Diretta")
-                    legendItem(bookingFill, "Booking"); legendItem(airbnbFill, "Airbnb")
-                    if strutture.contains(.viaRomagna) { legendItem(educampFill, "Educamp") }
-                }
                 Spacer()
-                HStack(spacing: 6) {
+                HStack(spacing: 12) {
+                    legendItem(sourceColor(nil), "Diretta"); legendItem(sourceColor("booking"), "Booking")
+                    legendItem(sourceColor("airbnb"), "Airbnb")
+                    if strutture.contains(.viaRomagna) { legendItem(educampColor, "Educamp") }
+                }
+                Button { withAnimation(.easeOut(duration: 0.15)) { andaAOggi() } } label: {
+                    Text("Oggi").font(.system(size: 11, weight: .semibold)).foregroundStyle(PSE.dim)
+                        .padding(.horizontal, 10).padding(.vertical, 4)
+                        .background(Capsule().fill(PSE.surface))
+                        .overlay(Capsule().strokeBorder(PSE.line, lineWidth: 1))
+                }.buttonStyle(.plain)
+                HStack(spacing: 8) {
                     Button { shiftMonth(-1) } label: { Image(systemName: "chevron.left") }.buttonStyle(.plain).foregroundStyle(PSE.dim)
                     Button { shiftMonth(1) } label: { Image(systemName: "chevron.right") }.buttonStyle(.plain).foregroundStyle(PSE.dim)
                 }.font(.system(size: 12, weight: .bold))
             }
+            // Grafico e reticolo condividono la stessa griglia di colonne: la
+            // barra del giorno sta esattamente sopra la sua colonna di camere.
             HStack(alignment: .top, spacing: 0) {
-                VStack(spacing: 0) { ForEach(gridRows, id: \.self) { leftCell($0) } }.frame(width: labelW)
+                VStack(spacing: 0) {
+                    chartGutter
+                    ForEach(gridRows, id: \.self) { leftCell($0) }
+                }
+                .frame(width: labelW)
+                .overlay(Rectangle().fill(PSE.line).frame(width: 1), alignment: .trailing)
                 ScrollView(.horizontal, showsIndicators: false) {
                     VStack(spacing: 0) {
-                        ForEach(gridRows, id: \.self) { row in
-                            HStack(spacing: 0) { ForEach(monthDays, id: \.self) { d in cell(row, d) } }
-                        }
+                        chartRow
+                        ForEach(gridRows, id: \.self) { gridRow($0) }
                     }
                 }
             }
-            .background(RoundedRectangle(cornerRadius: 12).fill(PSE.panel))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(PSE.line, lineWidth: 1))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .background(GeometryReader { g in
+                Color.clear
+                    .onAppear { adattaDayW(g.size.width) }
+                    .onChange(of: g.size.width) { _, w in adattaDayW(w) }
+            })
         }
     }
     private func legendItem(_ c: Color, _ t: String) -> some View {
-        HStack(spacing: 4) { RoundedRectangle(cornerRadius: 2).fill(c).frame(width: 12, height: 10); Text(t).font(.system(size: 10)).foregroundStyle(PSE.faint) }
+        HStack(spacing: 5) {
+            RoundedRectangle(cornerRadius: 2.5).fill(c.opacity(0.35))
+                .overlay(RoundedRectangle(cornerRadius: 2.5).strokeBorder(c.opacity(0.6), lineWidth: 1))
+                .frame(width: 14, height: 10)
+            Text(t).font(.system(size: 10)).foregroundStyle(PSE.faint)
+        }
+    }
+    private func andaAOggi() {
+        let c = Calendar.current
+        selectedDay = c.startOfDay(for: Date())
+        monthAnchor = c.date(from: c.dateComponents([.year, .month], from: Date())) ?? monthAnchor
+        rebuildStats()
+    }
+
+    // ── grafico occupazione interattivo ──────────────────────────────────────
+    // Passando col mouse su una barra il pannello a sinistra racconta il giorno;
+    // cliccandola si seleziona il giorno (evidenzia la colonna del reticolo e
+    // aggiorna l'elenco prenotazioni qui sopra).
+    private enum PSEMetric: Hashable { case camere, ricavi }
+    private struct PSEDayStat: Identifiable {
+        let id: Int              // giorno del mese
+        let date: Date
+        let occ: Int, cap: Int, occPo: Int, occRo: Int
+        let ricavo: Int          // centesimi, quota per notte delle prenotazioni in corso
+        let arrivi: Int, partenze: Int
+        var frac: Double { cap > 0 ? Double(occ) / Double(cap) : 0 }
+    }
+    @State private var chartMetric: PSEMetric = .camere
+    @State private var hoverDay: Int? = nil
+    @State private var stats: [PSEDayStat] = []
+    private var chartH: CGFloat { 104 }
+    // altezza utile delle barre: tolti padding, etichetta del valore e pallino
+    // "tutto pieno" che stanno sopra la barra.
+    private var plotH: CGFloat { chartH - 31 }
+
+    private func rebuildStats() {
+        let cal = Calendar.current
+        stats = monthDays.enumerated().map { (_, d) in
+            var po = 0, ro = 0, cap = 0
+            for s in strutture {
+                let rooms = roomsFor(s)
+                cap += rooms.count
+                let n = rooms.filter { bookingFor(s, $0, d) != nil || educampOccupies(s, $0, d) }.count
+                if s == .viaPo { po = n } else { ro = n }
+            }
+            var ric = 0, arr = 0, par = 0
+            for a in dayCache where matchesStruttura(a.b) {
+                if a.ci <= d && d < a.co {
+                    let notti = max(1, cal.dateComponents([.day], from: a.ci, to: a.co).day ?? 1)
+                    ric += a.b.amount_cents / notti
+                }
+                if a.ci == d { arr += 1 }
+                if a.co == d { par += 1 }
+            }
+            return PSEDayStat(id: cal.component(.day, from: d), date: d, occ: po + ro, cap: cap,
+                              occPo: po, occRo: ro, ricavo: ric, arrivi: arr, partenze: par)
+        }
+    }
+    private var mediaFrac: Double {
+        guard !stats.isEmpty else { return 0 }
+        return stats.map(\.frac).reduce(0, +) / Double(stats.count)
+    }
+
+    private var chartGutter: some View {
+        let hovered = hoverDay.flatMap { id in stats.first { $0.id == id } }
+        let sel = stats.first { Calendar.current.isDate($0.date, inSameDayAs: selectedDay) }
+        let mostrato = hovered ?? sel
+        return VStack(alignment: .leading, spacing: 3) {
+            Text(chartMetric == .camere ? "OCCUPAZIONE" : "RICAVI PER NOTTE")
+                .font(.system(size: 8.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint)
+            if let g = mostrato {
+                Text(fmt("EEEE d").string(from: g.date).capitalized)
+                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(PSE.ink).lineLimit(1)
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text("\(g.occ)/\(g.cap)").font(.system(size: 17, weight: .bold)).foregroundStyle(PSE.ink).monospacedDigit()
+                    Text("camere · \(Int((g.frac * 100).rounded()))%").font(.system(size: 10)).foregroundStyle(PSE.dim)
+                }
+                Text("\(eur(g.ricavo)) · \(g.arrivi) arrivi · \(g.partenze) partenze")
+                    .font(.system(size: 10)).foregroundStyle(PSE.faint).lineLimit(1).minimumScaleFactor(0.8)
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text("\(Int((mediaFrac * 100).rounded()))%").font(.system(size: 20, weight: .bold)).foregroundStyle(PSE.ink).monospacedDigit()
+                    Text("media del mese").font(.system(size: 10)).foregroundStyle(PSE.dim)
+                }
+                Text("\(stats.reduce(0) { $0 + $1.occ }) notti vendute · \(eur(stats.reduce(0) { $0 + $1.ricavo }))")
+                    .font(.system(size: 10)).foregroundStyle(PSE.faint).lineLimit(1).minimumScaleFactor(0.8)
+            }
+            Spacer(minLength: 0)
+            HStack(spacing: 3) {
+                metricPill("Camere", .camere); metricPill("Ricavi", .ricavi)
+            }
+        }
+        .padding(.leading, 12).padding(.trailing, 10).padding(.vertical, 9)
+        .frame(width: labelW, height: chartH, alignment: .topLeading)
+        .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
+    }
+    private func metricPill(_ t: String, _ m: PSEMetric) -> some View {
+        let on = chartMetric == m
+        return Text(t).font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(on ? PSE.ink : PSE.faint)
+            .padding(.horizontal, 9).padding(.vertical, 3.5)
+            .background(Capsule().fill(on ? PSE.accent.opacity(0.85) : PSE.surface))
+            .contentShape(Capsule())
+            .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { chartMetric = m } }
+    }
+
+    private var chartRow: some View {
+        let maxRic = max(1, stats.map(\.ricavo).max() ?? 1)
+        return ZStack(alignment: .bottomLeading) {
+            HStack(spacing: 0) { ForEach(stats) { st in chartColumn(st, maxRic) } }
+            if chartMetric == .camere && mediaFrac > 0.02 {
+                Path { p in p.move(to: .zero); p.addLine(to: CGPoint(x: gridW, y: 0)) }
+                    .stroke(style: StrokeStyle(lineWidth: 1, dash: [3, 4]))
+                    .foregroundStyle(PSE.accent.opacity(0.5))
+                    .frame(width: gridW, height: 1)
+                    .offset(y: -(plotH * CGFloat(mediaFrac) + 7))
+                    .allowsHitTesting(false)
+            }
+        }
+        .frame(width: gridW, height: chartH, alignment: .bottomLeading)
+        .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
+    }
+    private func chartColumn(_ st: PSEDayStat, _ maxRic: Int) -> some View {
+        let hov = hoverDay == st.id
+        let selezionato = Calendar.current.isDate(st.date, inSameDayAs: selectedDay)
+        let pieno = st.cap > 0 && st.occ >= st.cap
+        let hPo = plotH * CGFloat(st.cap > 0 ? Double(st.occPo) / Double(st.cap) : 0)
+        let hRo = plotH * CGFloat(st.cap > 0 ? Double(st.occRo) / Double(st.cap) : 0)
+        let hRic = plotH * CGFloat(min(1, Double(st.ricavo) / Double(maxRic)))
+        let barW = max(6, dayW - 9)
+        return VStack(spacing: 0) {
+            Text(hov || selezionato ? (chartMetric == .camere ? "\(st.occ)" : eur(st.ricavo)) : " ")
+                .font(.system(size: 8.5, weight: .bold)).monospacedDigit().foregroundStyle(PSE.ink)
+                .lineLimit(1).minimumScaleFactor(0.55).frame(height: 11)
+            Circle().fill(pieno ? PSE.warn : Color.clear).frame(width: 4, height: 4).padding(.bottom, 2)
+            Spacer(minLength: 0)
+            VStack(spacing: 1) {
+                if chartMetric == .camere {
+                    if hRo > 0.5 { Rectangle().fill(strutturaColor(.viaRomagna).opacity(hov ? 1 : 0.8)).frame(height: hRo) }
+                    if hPo > 0.5 { Rectangle().fill(strutturaColor(.viaPo).opacity(hov ? 1 : 0.8)).frame(height: hPo) }
+                } else if hRic > 0.5 {
+                    Rectangle().fill(PSE.pos.opacity(hov ? 1 : 0.75)).frame(height: hRic)
+                }
+            }
+            .frame(width: barW)
+            .clipShape(RoundedRectangle(cornerRadius: 3))
+        }
+        .padding(.vertical, 7)
+        .frame(width: dayW, height: chartH)
+        .background(colonnaTint(st.date))
+        .overlay(Rectangle().fill(gLine).frame(width: 1), alignment: .trailing)
+        .contentShape(Rectangle())
+        .onHover { inside in hoverDay = inside ? st.id : (hoverDay == st.id ? nil : hoverDay) }
+        .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { selectedDay = st.date } }
     }
 
     // ── Riepilogo giorni liberi per camera ──────────────────────────────────
@@ -756,102 +978,155 @@ struct CamerePSEDashboard: View {
             .foregroundStyle(n == 0 ? PSE.faint : PSE.pos)
     }
     private func shiftMonth(_ n: Int) {
-        if let d = Calendar.current.date(byAdding: .month, value: n, to: monthAnchor) { withAnimation(.easeOut(duration: 0.15)) { monthAnchor = d } }
+        if let d = Calendar.current.date(byAdding: .month, value: n, to: monthAnchor) {
+            withAnimation(.easeOut(duration: 0.15)) { monthAnchor = d }
+            hoverDay = nil
+            rebuildStats()
+        }
+    }
+
+    /// Contenitore della colonna etichette: tiene tutte le righe esattamente a
+    /// labelW (prima il padding sforava la colonna e la griglia non era allineata).
+    private func gutterRow<C: View>(_ bg: Color, _ inset: CGFloat, _ bordo: Bool, @ViewBuilder _ content: () -> C) -> some View {
+        HStack(spacing: 0) { content(); Spacer(minLength: 0) }
+            .padding(.leading, inset).padding(.trailing, 8)
+            .frame(width: labelW, height: rowH, alignment: .leading)
+            .background(bg)
+            .overlay(Rectangle().fill(gLine).frame(height: bordo ? 1 : 0), alignment: .bottom)
     }
 
     @ViewBuilder private func leftCell(_ row: GRow) -> some View {
         switch row {
         case .header:
-            Text("CAMERA").font(.system(size: 8.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint)
-                .frame(width: labelW, height: rowH, alignment: .leading).padding(.leading, 12)
-                .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
+            gutterRow(Color.clear, 12, true) {
+                Text("CAMERA").font(.system(size: 8.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint)
+            }
         case .title(let s):
-            Text(s.label.uppercased()).font(.system(size: 10, weight: .heavy)).tracking(0.5).foregroundStyle(PSE.ink)
-                .frame(width: labelW, height: rowH, alignment: .leading).padding(.leading, 12)
-                .background(PSE.accent.opacity(0.14))
-        case .room(_, let rm):
-            Text(rm).font(.system(size: 10.5)).foregroundStyle(PSE.text).lineLimit(1)
-                .frame(width: labelW, height: rowH, alignment: .leading).padding(.leading, 14)
-                .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
-        case .free:
-            Text("Camere libere").font(.system(size: 9.5, weight: .heavy)).foregroundStyle(PSE.dim)
-                .frame(width: labelW, height: rowH, alignment: .leading).padding(.leading, 14)
-                .background(PSE.surface)
-                .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
-        case .educampTitle:
-            Text("EDUCAMP · CAMERE CONDIVISE").font(.system(size: 9, weight: .heavy)).tracking(0.5)
-                .foregroundStyle(educampFill.opacity(2)).lineLimit(1)
-                .frame(width: labelW, height: rowH, alignment: .leading).padding(.leading, 12)
-                .background(educampFill.opacity(0.4))
-        case .educampGuest(let id):
-            let o = educampBy(id)
-            HStack(spacing: 5) {
-                Text(o.map { firstName($0.ospite) } ?? "—")
-                    .font(.system(size: 10.5, weight: .medium)).foregroundStyle(PSE.text).lineLimit(1)
-                if let cam = o?.camera, !cam.isEmpty {
-                    Text(cam).font(.system(size: 9)).foregroundStyle(PSE.faint).lineLimit(1)
+            // Nome della casa + occupazione del mese: il numero che serve prima
+            // ancora di leggere le righe.
+            let pct = occupazioneMese(s)
+            gutterRow(strutturaColor(s).opacity(0.16), 12, false) {
+                HStack(spacing: 7) {
+                    RoundedRectangle(cornerRadius: 1.5).fill(strutturaColor(s)).frame(width: 3, height: 12)
+                    Text(s.label.uppercased()).font(.system(size: 10, weight: .heavy)).tracking(0.6).foregroundStyle(PSE.ink)
+                    Spacer(minLength: 0)
+                    Text("\(pct)%").font(.system(size: 9.5, weight: .bold)).monospacedDigit()
+                        .foregroundStyle(PSE.ink.opacity(0.85))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Capsule().fill(Color.white.opacity(0.08)))
                 }
             }
-            .frame(width: labelW, height: rowH, alignment: .leading).padding(.leading, 16)
-            .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
+        case .room(_, let rm):
+            gutterRow(Color.clear, 16, true) {
+                Text(rm).font(.system(size: 11)).foregroundStyle(PSE.text).lineLimit(1).minimumScaleFactor(0.8)
+            }
+        case .free:
+            gutterRow(PSE.surface, 16, true) {
+                Text("Camere libere").font(.system(size: 9.5, weight: .heavy)).tracking(0.3).foregroundStyle(PSE.dim)
+            }
         }
+    }
+
+    /// Percentuale di notti vendute nel mese mostrato, per struttura.
+    private func occupazioneMese(_ s: Struttura) -> Int {
+        let rooms = roomsFor(s), days = monthDays
+        guard !rooms.isEmpty, !days.isEmpty else { return 0 }
+        let occ = days.reduce(0) { tot, d in
+            tot + rooms.filter { bookingFor(s, $0, d) != nil || educampOccupies(s, $0, d) }.count
+        }
+        return Int((Double(occ) / Double(rooms.count * days.count) * 100).rounded())
+    }
+
+    /// Una riga della griglia. Le camere non sono celle ripetute ma un fondo di
+    /// colonne vuote con sopra le barre dei soggiorni.
+    @ViewBuilder private func gridRow(_ row: GRow) -> some View {
+        switch row {
+        case .room(let s, let rm):
+            ZStack(alignment: .topLeading) {
+                HStack(spacing: 0) { ForEach(monthDays, id: \.self) { d in sfondoCella(d) } }
+                ForEach(segmenti(s, rm)) { seg in barra(seg) }
+            }
+            .frame(width: gridW, height: rowH, alignment: .topLeading)
+        default:
+            HStack(spacing: 0) { ForEach(monthDays, id: \.self) { d in cell(row, d) } }
+        }
+    }
+    private func sfondoCella(_ d: Date) -> some View {
+        Rectangle().fill(colonnaTint(d))
+            .frame(width: dayW, height: rowH)
+            .overlay(Rectangle().fill(gLine).frame(width: 1), alignment: .trailing)
+            .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
+            .contentShape(Rectangle())
+            .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { selectedDay = d } }
+    }
+    private func barra(_ seg: Segmento) -> some View {
+        let w = CGFloat(seg.len) * dayW - 4
+        let largo = w > 82, stretto = w < 62      // una o due notti: tutto lo spazio al nome
+        return Button {
+            if let b = seg.booking { withAnimation(.easeInOut(duration: 0.2)) { selected = b } }
+        } label: {
+            HStack(spacing: 6) {
+                Text(seg.label).font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(PSE.ink).lineLimit(1).minimumScaleFactor(0.6)
+                if largo, let b = seg.booking {
+                    Spacer(minLength: 0)
+                    Text("\(seg.len)n · \(eur(b.amount_cents))")
+                        .font(.system(size: 9, weight: .medium)).foregroundStyle(PSE.ink.opacity(0.55))
+                        .lineLimit(1)
+                }
+            }
+            .padding(.leading, stretto ? 7 : 10).padding(.trailing, stretto ? 3 : 7)
+            .frame(width: w, height: rowH - 7, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 5).fill(seg.color.opacity(0.28)))
+            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(seg.color.opacity(0.45), lineWidth: 1))
+            // stanghetta piena all'arrivo: dove comincia il soggiorno si vede
+            // anche con la coda di occhio.
+            .overlay(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 1.5).fill(seg.color)
+                    .frame(width: stretto ? 2 : 3).padding(.vertical, 3).padding(.leading, stretto ? 2 : 3)
+                    .opacity(seg.apertoPrima ? 0 : 1)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .offset(x: CGFloat(seg.start) * dayW + 2, y: 3.5)
+        .help(seg.booking.map { "\($0.guest_name) · \(prettyDate($0.checkin)) → \(prettyDate($0.checkout)) · \(eur($0.amount_cents))" } ?? seg.label)
     }
 
     @ViewBuilder private func cell(_ row: GRow, _ d: Date) -> some View {
         switch row {
         case .header:
-            let today = Calendar.current.isDateInToday(d)
-            VStack(spacing: 0) {
-                Text(String(wdFmt.string(from: d).prefix(1)).uppercased()).font(.system(size: 7.5, weight: .semibold)).foregroundStyle(PSE.faint)
-                Text(dNumFmt.string(from: d)).font(.system(size: 11, weight: .bold)).foregroundStyle(today ? PSE.accent : PSE.text).monospacedDigit()
+            let cal = Calendar.current
+            let today = cal.isDateInToday(d)
+            let sel = cal.isDate(d, inSameDayAs: selectedDay)
+            VStack(spacing: 1) {
+                Text(String(wdFmt.string(from: d).prefix(1)).uppercased())
+                    .font(.system(size: 7.5, weight: .heavy)).tracking(0.4)
+                    .foregroundStyle(isWeekend(d) ? PSE.warn.opacity(0.8) : PSE.faint)
+                Text(dNumFmt.string(from: d)).font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(today ? PSE.ink : (sel ? PSE.ink : PSE.text)).monospacedDigit()
+                    .frame(width: 19, height: 15)
+                    .background(Capsule().fill(today ? PSE.accent.opacity(0.9) : Color.clear))
             }
             .frame(width: dayW, height: rowH)
-            .background(today ? PSE.accent.opacity(0.14) : Color.clear)
+            .background(today ? Color.clear : colonnaTint(d))
             .overlay(Rectangle().fill(gLine).frame(width: 1), alignment: .trailing)
             .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
-        case .title:
-            Rectangle().fill(PSE.accent.opacity(0.14)).frame(width: dayW, height: rowH)
+            .contentShape(Rectangle())
+            .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { selectedDay = d } }
+        case .title(let s):
+            Rectangle().fill(strutturaColor(s).opacity(0.16)).frame(width: dayW, height: rowH)
                 .overlay(Rectangle().fill(gLine).frame(width: 1), alignment: .trailing)
-        case .room(let s, let rm):
-            let b = bookingFor(s, rm, d)
-            // Stanza condivisa Educamp occupata anche senza prenotazione: tinta
-            // Educamp, il dettaglio è nelle righe Educamp qui sotto.
-            let eduOcc = b == nil && educampOccupies(s, rm, d)
-            Button {
-                if let b { withAnimation(.easeInOut(duration: 0.2)) { selected = b } }
-                else { withAnimation(.easeOut(duration: 0.15)) { selectedDay = d } }
-            } label: {
-                Text(b.map { firstName($0.guest_name) } ?? "")
-                    .font(.system(size: 8.5, weight: .medium)).foregroundStyle(PSE.text).lineLimit(1).minimumScaleFactor(0.7)
-                    .frame(width: dayW, height: rowH)
-                    .background(b != nil ? sourceFill(b?.source) : (eduOcc ? educampFill : freeFill))
-                    .overlay(Rectangle().fill(gLine).frame(width: 1), alignment: .trailing)
-                    .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
-                    .contentShape(Rectangle())
-            }.buttonStyle(.plain)
+        case .room:
+            EmptyView()          // gestita da gridRow con le barre
         case .free(let s):
             let n = freeInGrid(s, d)
-            Text("\(n)").font(.system(size: 10, weight: .bold)).monospacedDigit()
-                .foregroundStyle(n == 0 ? PSE.faint : PSE.text)
+            // Zero camere libere = giornata piena: si evidenzia, è l'unica cifra
+            // di questa riga che cambia le decisioni.
+            Text("\(n)").font(.system(size: 10.5, weight: .bold)).monospacedDigit()
+                .foregroundStyle(n == 0 ? PSE.warn : PSE.text.opacity(0.85))
                 .frame(width: dayW, height: rowH)
-                .background(PSE.surface)
-                .overlay(Rectangle().fill(gLine).frame(width: 1), alignment: .trailing)
-                .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
-        case .educampTitle:
-            Rectangle().fill(educampFill.opacity(0.4)).frame(width: dayW, height: rowH)
-                .overlay(Rectangle().fill(gLine).frame(width: 1), alignment: .trailing)
-        case .educampGuest(let id):
-            // barra piena nei giorni del soggiorno, col nome in ogni cella come
-            // le camere di Via Po: così si legge chi c'è anche scorrendo.
-            let o = educampBy(id)
-            let dentro: Bool = {
-                guard let o, let ci = day(o.checkin), let co = day(o.checkout) else { return false }
-                return ci <= d && d < co
-            }()
-            Text(dentro ? (o.map { firstName($0.ospite) } ?? "") : "")
-                .font(.system(size: 8.5, weight: .medium)).foregroundStyle(PSE.text).lineLimit(1).minimumScaleFactor(0.7)
-                .frame(width: dayW, height: rowH)
-                .background(dentro ? educampFill : Color.clear)
+                .background(n == 0 ? PSE.warn.opacity(0.13) : PSE.surface)
                 .overlay(Rectangle().fill(gLine).frame(width: 1), alignment: .trailing)
                 .overlay(Rectangle().fill(gLine).frame(height: 1), alignment: .bottom)
         }
@@ -867,6 +1142,7 @@ struct CamerePSEDashboard: View {
         rebuildAssignment()
         rebuildDayCache()
         rebuildEducampRooms()
+        rebuildStats()          // dati del grafico: dipendono dalle tre cache sopra
     }
     /// Dopo ogni modifica a una prenotazione: allinea pulizie, colazioni e
     /// incassi (sync lato DB), poi ricarica. Così conti, servizi e planning
