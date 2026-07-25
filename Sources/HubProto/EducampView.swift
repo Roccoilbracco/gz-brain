@@ -92,6 +92,37 @@ struct EducampView: View {
 
     private var incassi: [TesMovimento] { movimenti ?? model.movimentiLocali }
 
+    /// Finestra aperta cliccando una spunta o una card degli incassi: mostra i
+    /// versamenti che stanno dietro a quel numero. Prima erano solo nel tooltip,
+    /// che si legge male e non si può copiare.
+    struct MovimentiAperti: Identifiable {
+        let id = UUID()
+        let titolo: String
+        let sottotitolo: String
+        let righe: [TesMovimento]
+    }
+    @State private var movimentiAperti: MovimentiAperti? = nil
+
+    /// I movimenti che finanziano una riga ospite-mese, riconosciuti per data e
+    /// descrizione: `fonti` porta la quota, qui si risale al movimento intero.
+    private func movimentiDi(_ s: EducampSaldoRiga) -> [TesMovimento] {
+        let chiavi = Set(s.fonti.map { "\($0.data)|\($0.desc)" })
+        return incassi.filter { chiavi.contains("\($0.data)|\($0.descrizione ?? "")") }
+            .sorted { $0.data < $1.data }
+    }
+    private func apri(_ titolo: String, _ sottotitolo: String, _ righe: [TesMovimento]) {
+        movimentiAperti = MovimentiAperti(titolo: titolo, sottotitolo: sottotitolo, righe: righe)
+    }
+    /// Card cliccabile: stesso aspetto di prima, più la freccetta.
+    private func cardClic(_ t: String, _ v: String, _ c: Color, _ azione: @escaping () -> Void) -> some View {
+        Button(action: azione) {
+            card(t, v, c).overlay(alignment: .topTrailing) {
+                Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(PSE.faint).padding(10)
+            }
+        }.buttonStyle(.plain)
+    }
+
     var body: some View {
         let esito = EducampPagamenti.calcola(righe: model.righe, movimenti: incassi)
         return Group {
@@ -116,6 +147,11 @@ struct EducampView: View {
             }
         }
         .task { await model.load(caricaMovimenti: movimenti == nil) }
+        .sheet(item: $movimentiAperti) { m in
+            EducampMovimentiSheet(titolo: m.titolo, sottotitolo: m.sottotitolo, righe: m.righe) {
+                movimentiAperti = nil
+            }
+        }
     }
 
     private var intestazione: some View {
@@ -160,7 +196,11 @@ struct EducampView: View {
             Text("INCASSI — CHI HA PAGATO")
                 .font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.pos)
             HStack(spacing: 10) {
-                card("INCASSATO DAGLI OSPITI", eurc(incassato), PSE.pos)
+                cardClic("INCASSATO DAGLI OSPITI", eurc(incassato), PSE.pos) {
+                    apri("Incassi Educamp", "Tutti i versamenti registrati, dal primo all'ultimo",
+                         incassi.filter { $0.tipo == "entrata" && ($0.categoria ?? "") == "educamp" }
+                                .sorted { $0.data < $1.data })
+                }
                 card("ANCORA DA INCASSARE", eurc(max(0, dovuto - incassato)), PSE.warn)
                 card("MENSILITÀ SALDATE", "\(saldate) di \(model.righe.count)", PSE.ink)
                 card("AFFITTO OK, MANCANO UTENZE", "\(affittoOk)", affittoOk > 0 ? PSE.accent : PSE.faint)
@@ -352,7 +392,17 @@ struct EducampView: View {
     private func meseRow(_ r: EducampRiga, _ s: EducampSaldoRiga) -> some View {
         let stato = s.stato
         return HStack(spacing: 8) {
-            EducampStatoIcona(stato: stato).frame(width: wStato)
+            // La spunta si clicca: apre i versamenti che la giustificano. Il
+            // tooltip li diceva già, ma non si potevano leggere con calma.
+            Button {
+                apri("\(r.ospite) — \(eduMeseNome(r.mese))",
+                     s.pagato_cents > 0
+                        ? "Versamenti che coprono questa mensilità · dovuti \(eurc(r.totale_ospite_cents)), arrivati \(eurc(s.pagato_cents))"
+                        : "Nessun incasso abbinato: dovuti \(eurc(r.totale_ospite_cents)). L'abbinamento usa il nome scritto nella descrizione del movimento.",
+                     movimentiDi(s))
+            } label: {
+                EducampStatoIcona(stato: stato).frame(width: wStato).contentShape(Rectangle())
+            }.buttonStyle(.plain)
             Text(r.ospite).font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(stato == .pagato ? PSE.pos : PSE.ink)
                 .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
@@ -490,5 +540,91 @@ struct EducampView: View {
     }
     private func num(_ t: String, _ c: Color) -> some View {
         Text(t).font(.system(size: 11.5)).foregroundStyle(c).monospacedDigit().lineLimit(1)
+    }
+}
+
+// ── Finestra dei movimenti dietro a una spunta ──────────────────────────────
+// Serve a rispondere a «perché questa riga risulta pagata?» senza andare a
+// cercare in Tesoreria: qui ci sono i versamenti veri, con data, conto e modo.
+struct EducampMovimentiSheet: View {
+    let titolo: String
+    let sottotitolo: String
+    let righe: [TesMovimento]
+    let onClose: () -> Void
+
+    private var totale: Int { righe.reduce(0) { $0 + $1.importo_cents } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(titolo).font(.system(size: 15, weight: .bold)).foregroundStyle(PSE.ink)
+                    Text(sottotitolo).font(.system(size: 11)).foregroundStyle(PSE.dim)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 12)
+                Button(action: onClose) {
+                    Image(systemName: "xmark").font(.system(size: 12, weight: .bold)).foregroundStyle(PSE.dim)
+                        .frame(width: 26, height: 26).background(Circle().fill(Color.white.opacity(0.05)))
+                }.buttonStyle(.plain)
+            }
+            .padding(EdgeInsets(top: 18, leading: 20, bottom: 14, trailing: 16))
+
+            if righe.isEmpty {
+                EmptyStateCard(icon: "banknote",
+                               text: "Nessun movimento abbinato. Un incasso entra qui se ha categoria «educamp» e il nome dell'ospite scritto nella descrizione.")
+                    .padding(.horizontal, 20)
+            } else {
+                VStack(spacing: 0) {
+                    HStack(spacing: 10) {
+                        Text("DATA").frame(width: 70, alignment: .leading)
+                        Text("DESCRIZIONE").frame(maxWidth: .infinity, alignment: .leading)
+                        Text("MODO").frame(width: 80, alignment: .leading)
+                        Text("CONTO").frame(width: 80, alignment: .leading)
+                        Text("IMPORTO").frame(width: 90, alignment: .trailing)
+                    }
+                    .font(.system(size: 8.5, weight: .heavy)).tracking(0.7).foregroundStyle(PSE.faint)
+                    .padding(.horizontal, 16).padding(.vertical, 9)
+                    .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
+                    ScrollView(showsIndicators: false) {
+                        VStack(spacing: 0) {
+                            ForEach(righe) { m in
+                                HStack(spacing: 10) {
+                                    Text(eduDayStr(m.data)).font(.system(size: 11.5)).monospacedDigit()
+                                        .foregroundStyle(PSE.dim).frame(width: 70, alignment: .leading)
+                                    Text(m.descrizione ?? "—").font(.system(size: 12.5, weight: .medium))
+                                        .foregroundStyle(PSE.ink).frame(maxWidth: .infinity, alignment: .leading)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    Text((m.modalita ?? "—").capitalized).font(.system(size: 11))
+                                        .foregroundStyle(PSE.faint).frame(width: 80, alignment: .leading).lineLimit(1)
+                                    Text((m.conto_id ?? "—").capitalized).font(.system(size: 11, weight: .semibold))
+                                        .foregroundStyle(PSE.accent).frame(width: 80, alignment: .leading).lineLimit(1)
+                                    Text("+" + eurc(m.importo_cents)).font(.system(size: 12.5, weight: .bold))
+                                        .foregroundStyle(PSE.pos).monospacedDigit().frame(width: 90, alignment: .trailing)
+                                }
+                                .padding(.horizontal, 16).padding(.vertical, 9)
+                                Divider().overlay(PSE.line).padding(.leading, 16)
+                            }
+                        }
+                    }
+                    HStack {
+                        Text("TOTALE \(righe.count) VERSAMENTI").font(.system(size: 10, weight: .heavy))
+                            .tracking(0.8).foregroundStyle(PSE.ink)
+                        Spacer()
+                        Text(eurc(totale)).font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(PSE.pos).monospacedDigit()
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 11)
+                    .background(Color.white.opacity(0.04))
+                }
+                .background(RoundedRectangle(cornerRadius: 12).fill(PSE.panel))
+                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(PSE.line, lineWidth: 1))
+                .padding(.horizontal, 20)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(width: 780, height: 520)
+        .background(Color(hex: 0x0b0f18))
+        .preferredColorScheme(.dark)
     }
 }

@@ -58,6 +58,7 @@ struct ProprietaDetailView: View {
     @State private var confirmDelete = false
     @State private var fotoBusy = false
     @State private var fotoMsg: String?
+    @State private var gestisciAperto = false
     @State private var projects: [Project] = []
     @State private var proprietari: [Proprietario] = []
     @State private var pdfStato: PDFStato = .fermo
@@ -637,17 +638,40 @@ struct ProprietaDetailView: View {
                 // qualsiasi altra senza scorrerle tutte in fila.
                 GalleriaFoto(paths: salvate)
 
-                Text("GESTISCI").font(.system(size: 9, weight: .heavy)).tracking(1.4)
-                    .foregroundStyle(Csb.secFg).padding(.top, 4)
-                GlassCard {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
-                        ForEach(salvate, id: \.self) { path in
-                            RemotePhotoThumb(path: path, altezza: 100) {
-                                Task { await eliminaFoto(path) }
-                            }
+                // "Gestisci" si apre e si chiude: chi guarda la scheda vede solo
+                // la galleria, chi deve mettere ordine entra qui e trascina.
+                Button { withAnimation(.easeInOut(duration: 0.18)) { gestisciAperto.toggle() } } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 8, weight: .black))
+                            .rotationEffect(.degrees(gestisciAperto ? 90 : 0))
+                        Text("GESTISCI").font(.system(size: 9, weight: .heavy)).tracking(1.4)
+                        if gestisciAperto {
+                            Text("trascina le foto per riordinarle")
+                                .font(.system(size: 10)).tracking(0)
+                                .foregroundStyle(Holo.subDim)
                         }
                     }
-                    .padding(14)
+                    .foregroundStyle(Csb.secFg)
+                    .padding(.vertical, 3)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).padding(.top, 4)
+
+                if gestisciAperto {
+                    GlassCard {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
+                            ForEach(salvate, id: \.self) { path in
+                                FotoRiordinabile(
+                                    path: path,
+                                    copertina: path == salvate.first,
+                                    onDelete: { Task { await eliminaFoto(path) } },
+                                    onDropSopra: { src in Task { await spostaFoto(src, su: path) } })
+                            }
+                        }
+                        .padding(14)
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
         }
@@ -686,6 +710,31 @@ struct ProprietaDetailView: View {
             fotoMsg = falliti > 0 ? "\(falliti) file non caricati (formato non supportato?)" : nil
         } catch let e {
             fotoMsg = "Caricamento non riuscito: \(e.localizedDescription)"
+        }
+    }
+
+    /// Sposta `src` nella posizione di `dst`. L'ordine è quello che vale sul
+    /// sito (la prima è la copertina), quindi si salva subito; la griglia si
+    /// aggiorna prima della rete, altrimenti la foto tornerebbe indietro
+    /// sotto le dita per il tempo della chiamata.
+    private func spostaFoto(_ src: String, su dst: String) async {
+        guard let id = proprietaId, src != dst else { return }
+        var arr = p?.photos ?? []
+        guard let from = arr.firstIndex(of: src), let to = arr.firstIndex(of: dst) else { return }
+        arr.remove(at: from)
+        // Trascinando in avanti si finisce dopo la foto di arrivo, indietro
+        // prima: è il verso che ci si aspetta guardando dove si lascia.
+        let dest = arr.firstIndex(of: dst).map { from < to ? $0 + 1 : $0 } ?? arr.count
+        arr.insert(src, at: dest)
+
+        let precedente = p?.photos
+        withAnimation(.easeInOut(duration: 0.16)) { p?.photos = arr }
+        fotoMsg = nil
+        do {
+            try await HubAPI.updateProprieta(id: id, fields: ["photos": arr])
+        } catch let e {
+            p?.photos = precedente
+            fotoMsg = "Ordine non salvato: \(e.localizedDescription)"
         }
     }
 
@@ -888,6 +937,46 @@ struct ProprietaDetailView: View {
                 await MainActor.run { errorMsg = "Eliminazione fallita: \(e.localizedDescription)" }
             }
         }
+    }
+}
+
+// ── Foto trascinabile: si prende e si lascia sopra un'altra ─────────────────
+//
+// L'ordine delle foto è quello che finisce sul sito, copertina compresa, e
+// finora si poteva cambiare solo ricaricandole nell'ordine giusto.
+private struct FotoRiordinabile: View {
+    let path: String
+    let copertina: Bool
+    let onDelete: () -> Void
+    let onDropSopra: (String) -> Void
+    @State private var targeted = false
+
+    var body: some View {
+        RemotePhotoThumb(path: path, altezza: 100, onDelete: onDelete)
+            .overlay(alignment: .bottomLeading) {
+                if copertina {
+                    Text("COPERTINA")
+                        .font(.system(size: 8, weight: .heavy)).tracking(1)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6).padding(.vertical, 3)
+                        .background(Capsule().fill(.black.opacity(0.6)))
+                        .padding(6)
+                }
+            }
+            .overlay {
+                if targeted {
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(Holo.hsl(210, 90, 65), lineWidth: 2.5)
+                        .shadow(color: Holo.hsl(210, 90, 60).opacity(0.8), radius: 5)
+                }
+            }
+            .opacity(targeted ? 0.75 : 1)
+            .draggable(path)
+            .dropDestination(for: String.self) { items, _ in
+                guard let s = items.first, s != path else { return false }
+                onDropSopra(s); return true
+            } isTargeted: { targeted = $0 }
+            .help("Trascina per cambiare l'ordine")
     }
 }
 
