@@ -757,11 +757,21 @@ struct CamerePSEDashboard: View {
         return out
     }
 
+    /// Occupazione del mese mostrata a sezione chiusa: due percentuali dicono
+    /// già com'è andato il mese, senza aprire il reticolo.
+    private var occupazioneRiassunto: String {
+        strutture.map { "\($0.label) \(occupazioneMese($0))%" }.joined(separator: " · ")
+    }
     private var planningSection: some View {
+        PSEPieghevole("PLANNING",
+                      valore: occupazioneRiassunto, colore: PSE.ink, coloreValore: PSE.accent,
+                      nota: fmt("MMMM yyyy").string(from: monthAnchor).capitalized) {
+            planningContenuto.padding(.horizontal, 12).padding(.bottom, 10)
+        }
+    }
+    private var planningContenuto: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
-                Text("PLANNING · \(fmt("MMMM yyyy").string(from: monthAnchor).uppercased())")
-                    .font(.system(size: 13.5, weight: .bold)).foregroundStyle(PSE.ink)
                 Spacer()
                 HStack(spacing: 12) {
                     legendItem(sourceColor(nil), "Diretta"); legendItem(sourceColor("booking"), "Booking")
