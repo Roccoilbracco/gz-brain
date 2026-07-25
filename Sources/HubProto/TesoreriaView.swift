@@ -1082,6 +1082,16 @@ struct TesoreriaView: View {
             ForEach(caseDaMostrare, id: \.self) { s in
                 dettaglioCasa(s).padding(.top, 16)
             }
+
+            // In fondo i grafici: com'è andata, cosa c'è già in calendario, e
+            // dove si va a finire se il ritmo resta questo.
+            PSEPieghevole("GRAFICI E PROIEZIONI",
+                          valore: "andamento · prenotato · anni a venire",
+                          colore: PSE.ink, coloreValore: PSE.accent,
+                          nota: "tre viste, un menu", grande: true) {
+                GraficiTesoreria(movimenti: movStrutFiltrati, prenotazioni: prenotazioni, struttura: movStrut)
+            }
+            .padding(.top, 16)
         }.padding(.bottom, 20)
     }
 
@@ -1192,13 +1202,27 @@ struct TesoreriaView: View {
         let totUscite = uscite.reduce(0) { $0 + $1.importo_cents }
         let totFutureNetto = future.reduce(0) { $0 + $1.netto }
 
+        // Una casa = una scatola che si apre, col saldo già in testata: prima
+        // erano sedici righe in colonna per due case, e per arrivare al numero
+        // di Via Romagna si scorreva tutto il conto di Via Po.
+        PSEPieghevole("\(s.label.uppercased()) — ENTRATE E USCITE",
+                      valore: eurc(totGenerate - totUscite), colore: PSE.ink,
+                      coloreValore: totGenerate - totUscite >= 0 ? PSE.pos : PSE.neg,
+                      nota: "saldo generato · \(eurc(totGenerate)) entrate, \(eurc(totUscite)) uscite",
+                      grande: true) {
+            dettaglioCasaContenuto(s, dirette: dirette, bonifici: bonifici, incassato: incassato,
+                                   uscite: uscite, future: future, totDirette: totDirette,
+                                   totBonifici: totBonifici, totIncassatoNetto: totIncassatoNetto,
+                                   totGenerate: totGenerate, totUscite: totUscite, totFutureNetto: totFutureNetto)
+            .padding(.horizontal, 12).padding(.bottom, 12)
+        }
+    }
+    @ViewBuilder
+    private func dettaglioCasaContenuto(_ s: Struttura, dirette: [TesMovimento], bonifici: [TesMovimento],
+                                        incassato: [RigaOTA], uscite: [TesMovimento], future: [RigaOTA],
+                                        totDirette: Int, totBonifici: Int, totIncassatoNetto: Int,
+                                        totGenerate: Int, totUscite: Int, totFutureNetto: Int) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("\(s.label.uppercased()) — ENTRATE E USCITE")
-                .font(.system(size: 12, weight: .heavy)).tracking(1).foregroundStyle(PSE.ink)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 14).padding(.vertical, 10)
-                .background(RoundedRectangle(cornerRadius: 10).fill(PSE.accent.opacity(0.18)))
-
             if !dirette.isEmpty { blocco("ENTRATE GENERATE — DIRETTE (contante)", PSE.pos, totale: totDirette) { direttaTable(dirette, totale: totDirette, titoloTot: "SUBTOTALE DIRETTE (contante)") } }
             if !bonifici.isEmpty { blocco("ENTRATE GENERATE — BONIFICI (banca)", PSE.pos, totale: totBonifici) { direttaTable(bonifici, totale: totBonifici, titoloTot: "SUBTOTALE BONIFICI (banca)") } }
             if !incassato.isEmpty { blocco("OTA — GIÀ INCASSATO (commissioni dedotte)", PSE.pos, totale: totIncassatoNetto) { otaTable(incassato, titoloTot: "SUBTOTALE INCASSATO") } }
