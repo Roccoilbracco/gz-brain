@@ -228,6 +228,10 @@ struct CamerePSEDashboard: View {
     @State private var newMovimento = false
     /// Esito dell'ultima cancellazione: si mostra in chiaro, perché tocca i conti.
     @State private var messaggio: String? = nil
+    // Criteri del motore di ricerca disponibilità.
+    @State private var cercaDa = Calendar.current.startOfDay(for: Date())
+    @State private var cercaA = Calendar.current.date(byAdding: .day, value: 2, to: Calendar.current.startOfDay(for: Date()))!
+    @State private var cercaOspiti = 2
 
     private var attive: [Prenotazione] { items.filter { BookingStatus.from($0.status).active } }
 
@@ -390,6 +394,7 @@ struct CamerePSEDashboard: View {
                         // Il planning per primo: è la vista che si guarda entrando,
                         // e cambia col filtro casa qui sopra.
                         planningSection
+                        disponibilitaSection
                         kpiBar
                         calendarStrip
                         daySection
@@ -957,6 +962,195 @@ struct CamerePSEDashboard: View {
     // Il planning dice giorno per giorno chi c'è; questo dice il contrario, cioè
     // dove si può ancora vendere. Stesse assegnazioni del reticolo, così le due
     // viste non possono discordare. Mese mostrato + il successivo.
+    // ══ DISPONIBILITÀ ════════════════════════════════════════════════════════
+    // «C'è posto?» al telefono era una domanda a cui si rispondeva leggendo il
+    // reticolo e contando le colonne. Qui c'è la risposta diretta: cosa è libero
+    // stanotte, e cosa è libero per le date che chiede il cliente.
+
+    /// Posti letto per camera. Non si possono dedurre dallo storico (le righe
+    /// Educamp hanno un ospite per letto e falsano il massimo), quindi stanno
+    /// scritti qui e si vedono in chiaro nella sezione: se un numero è sbagliato
+    /// si corregge in una riga.
+    private func posti(_ camera: String) -> Int {
+        switch camera {
+        case "Stanza 1 · Camera Queen": return 2
+        case "Stanza 2 · Standard": return 2
+        case "Stanza 3 · Camera King": return 3
+        case "Stanza 4 · Ampia Matrimoniale": return 3
+        case "Doppia senza bagno": return 2
+        case "Balcone senza bagno": return 2
+        case "Stanza Camino": return 2
+        case "Balcone con bagno (ragazzi)": return 2
+        case "Mansarda": return 4
+        default: return 2
+        }
+    }
+    /// Libera tutte le notti da `da` (compresa) fino alla notte prima di `a`.
+    private func liberaTra(_ s: Struttura, _ rm: String, _ da: Date, _ a: Date) -> Bool {
+        let c = Calendar.current
+        var d = c.startOfDay(for: da)
+        let fine = c.startOfDay(for: a)
+        while d < fine {
+            if bookingFor(s, rm, d) != nil || educampOccupies(s, rm, d) { return false }
+            guard let n = c.date(byAdding: .day, value: 1, to: d) else { break }
+            d = n
+        }
+        return true
+    }
+    /// Prima notte occupata a partire da `da`: dice fino a quando si può tenere
+    /// libera la camera, che è la seconda domanda dopo «è libera?».
+    private func liberaFinoA(_ s: Struttura, _ rm: String, da: Date) -> Date? {
+        let c = Calendar.current
+        var d = c.startOfDay(for: da)
+        for _ in 0..<400 {
+            guard let n = c.date(byAdding: .day, value: 1, to: d) else { return nil }
+            if bookingFor(s, rm, n) != nil || educampOccupies(s, rm, n) { return n }
+            d = n
+        }
+        return nil
+    }
+    private struct CameraLibera: Identifiable {
+        let id: String
+        let struttura: Struttura, camera: String
+        let posti: Int
+        let fino: Date?          // prima notte occupata (nil = nessun limite in vista)
+    }
+    private func libereOggi() -> [CameraLibera] {
+        let oggi = Calendar.current.startOfDay(for: Date())
+        return strutture.flatMap { s in
+            roomsFor(s).compactMap { rm -> CameraLibera? in
+                guard bookingFor(s, rm, oggi) == nil, !educampOccupies(s, rm, oggi) else { return nil }
+                return CameraLibera(id: "\(s.rawValue)|\(rm)", struttura: s, camera: rm,
+                                    posti: posti(rm), fino: liberaFinoA(s, rm, da: oggi))
+            }
+        }
+    }
+    /// La partenza non può essere prima dell'arrivo: se lo diventa si sposta al
+    /// giorno dopo, e si mostra quella — se no la riga in testa dice «28 → 28».
+    private var partenzaEffettiva: Date {
+        let c = Calendar.current
+        let da = c.startOfDay(for: cercaDa)
+        return max(c.startOfDay(for: cercaA), c.date(byAdding: .day, value: 1, to: da) ?? cercaA)
+    }
+    private func cerca() -> [CameraLibera] {
+        let da = Calendar.current.startOfDay(for: cercaDa)
+        let a = partenzaEffettiva
+        return strutture.flatMap { s in
+            roomsFor(s).compactMap { rm -> CameraLibera? in
+                guard posti(rm) >= cercaOspiti, liberaTra(s, rm, da, a) else { return nil }
+                return CameraLibera(id: "\(s.rawValue)|\(rm)", struttura: s, camera: rm,
+                                    posti: posti(rm), fino: liberaFinoA(s, rm, da: da))
+            }
+        }
+    }
+    private var nottiCercate: Int {
+        let c = Calendar.current
+        return max(1, c.dateComponents([.day], from: c.startOfDay(for: cercaDa),
+                                       to: partenzaEffettiva).day ?? 1)
+    }
+    private func plur(_ n: Int, _ uno: String, _ tanti: String) -> String {
+        "\(n) \(n == 1 ? uno : tanti)"
+    }
+
+    private var disponibilitaSection: some View {
+        let oggi = libereOggi()
+        let trovate = cerca()
+        return VStack(alignment: .leading, spacing: 10) {
+            PSEPieghevole("STANZE DISPONIBILI OGGI",
+                          valore: oggi.isEmpty ? "tutto pieno" : "\(oggi.count) libere",
+                          colore: PSE.ink, coloreValore: oggi.isEmpty ? PSE.warn : PSE.pos,
+                          nota: fullFmt.string(from: Date()).capitalized) {
+                if oggi.isEmpty {
+                    Text("Stanotte non c'è nessuna camera libera in \(strutture.count == 1 ? strutture[0].label : "nessuna delle due case").")
+                        .font(.system(size: 11.5)).foregroundStyle(PSE.dim)
+                        .padding(.horizontal, 16).padding(.bottom, 8)
+                } else {
+                    elencoCamere(oggi, da: Calendar.current.startOfDay(for: Date()))
+                }
+            }
+            ricercaBlocco(trovate)
+        }
+    }
+
+    private func ricercaBlocco(_ trovate: [CameraLibera]) -> some View {
+        PSEPieghevole("CERCA DISPONIBILITÀ",
+                      valore: trovate.isEmpty ? "niente per queste date" : plur(trovate.count, "camera", "camere"),
+                      colore: PSE.accent, coloreValore: trovate.isEmpty ? PSE.warn : PSE.pos,
+                      nota: "\(prettyDate(ymdBk.string(from: cercaDa))) → \(prettyDate(ymdBk.string(from: partenzaEffettiva))) · \(plur(nottiCercate, "notte", "notti")) · \(plur(cercaOspiti, "ospite", "ospiti"))") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 16) {
+                    campoData("ARRIVO", $cercaDa)
+                    campoData("PARTENZA", $cercaA)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("OSPITI").font(.system(size: 8.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
+                        Stepper(value: $cercaOspiti, in: 1...6) {
+                            Text("\(cercaOspiti)").font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(PSE.ink).monospacedDigit()
+                        }.frame(width: 110)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("NOTTI").font(.system(size: 8.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
+                        Text("\(nottiCercate)").font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(PSE.ink).monospacedDigit()
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                if trovate.isEmpty {
+                    Text("Per queste date e \(plur(cercaOspiti, "ospite", "ospiti")) non c'è nessuna camera libera per tutto il soggiorno. Prova a spostare le date, o a ridurre le notti.")
+                        .font(.system(size: 11.5)).foregroundStyle(PSE.warn)
+                        .padding(.horizontal, 16).padding(.bottom, 4)
+                } else {
+                    elencoCamere(trovate, da: Calendar.current.startOfDay(for: cercaDa))
+                }
+            }
+        }
+    }
+    private func campoData(_ t: String, _ v: Binding<Date>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(t).font(.system(size: 8.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
+            DatePicker("", selection: v, displayedComponents: .date)
+                .labelsHidden().datePickerStyle(.field).frame(width: 120)
+        }
+    }
+    /// Elenco camere libere: casa, camera, posti e fin quando resta libera.
+    /// Cliccando si apre la nuova prenotazione, che è quello che si fa dopo.
+    private func elencoCamere(_ righe: [CameraLibera], da: Date) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(righe.enumerated()), id: \.element.id) { i, r in
+                Button {
+                    editing = nil; showForm = true
+                } label: {
+                    HStack(spacing: 12) {
+                        RoundedRectangle(cornerRadius: 1.5).fill(strutturaColor(r.struttura))
+                            .frame(width: 3, height: 14)
+                        Text(r.struttura.label).font(.system(size: 10.5)).foregroundStyle(PSE.dim)
+                            .frame(width: 96, alignment: .leading)
+                        Text(r.camera).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(PSE.ink)
+                            .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
+                        Text("fino a \(r.posti) ospiti").font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+                            .frame(width: 110, alignment: .leading)
+                        Group {
+                            if let f = r.fino {
+                                let n = Calendar.current.dateComponents([.day], from: da, to: f).day ?? 0
+                                Text("libera \(plur(n, "notte", "notti")) · poi occupata dal \(prettyDate(ymdBk.string(from: f)))")
+                                    .foregroundStyle(PSE.dim)
+                            } else {
+                                Text("libera senza limiti in vista").foregroundStyle(PSE.pos.opacity(0.85))
+                            }
+                        }
+                        .font(.system(size: 10.5)).frame(width: 300, alignment: .leading).lineLimit(1)
+                        Image(systemName: "plus.circle").font(.system(size: 12)).foregroundStyle(PSE.warn)
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 9).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Clicca per aprire una nuova prenotazione")
+                if i < righe.count - 1 { Divider().overlay(PSE.line).padding(.leading, 16) }
+            }
+        }
+    }
+
     private func giorniLiberi(_ s: Struttura, _ room: String, mese: Date) -> [Int] {
         let c = Calendar.current
         guard let r = c.range(of: .day, in: .month, for: mese) else { return [] }
