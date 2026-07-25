@@ -267,18 +267,6 @@ struct CamerePSEDashboard: View {
     private var capacity: Int {
         switch strutturaFilter { case .viaPo: return 4; case .viaRomagna: return 5; case nil: return 9 }
     }
-    // prenotazioni rilevanti per il giorno (arrivo, in casa, partenza)
-    private func bookingsOn(_ d: Date) -> [Prenotazione] {
-        dayCache.filter { matchesStruttura($0.b) && $0.ci <= d && d <= $0.co }
-            .sorted { ($0.b.checkin ?? "") < ($1.b.checkin ?? "") }
-            .map { $0.b }
-    }
-    private func role(_ b: Prenotazione, _ d: Date) -> (String, Double) {
-        if day(b.checkin) == d { return ("Arrivo", 150) }
-        if day(b.checkout) == d { return ("Partenza", 30) }
-        return ("In casa", 210)
-    }
-
     // ── planning mensile ──
     private var strutture: [Struttura] { strutturaFilter.map { [$0] } ?? Struttura.allCases }
     private var monthDays: [Date] {
@@ -401,8 +389,10 @@ struct CamerePSEDashboard: View {
                         planningSection
                         kpiBar
                         calendarStrip
-                        daySection
-                        PrenotazioniTabella(items: items, struttura: strutturaFilter) { b in
+                        // Un elenco solo: la tabella col filtro «giorno» dice le
+                        // stesse righe che diceva la lista qui sopra, con dentro
+                        // anche ricerca, ordinamento e totali.
+                        PrenotazioniTabella(items: items, struttura: strutturaFilter, giorno: selectedDay) { b in
                             withAnimation(.easeInOut(duration: 0.2)) { selected = b }
                         }
                         giorniLiberiSection
@@ -546,64 +536,6 @@ struct CamerePSEDashboard: View {
         .id(d)
     }
 
-    // ── prenotazioni del giorno selezionato ──
-    private var daySection: some View {
-        let list = bookingsOn(selectedDay)
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Text(fullFmt.string(from: selectedDay).capitalized).font(.system(size: 13.5, weight: .bold)).foregroundStyle(PSE.ink)
-                Text("· \(list.count) prenotazioni").font(.system(size: 11)).foregroundStyle(PSE.faint)
-                Spacer()
-                if Calendar.current.isDateInToday(selectedDay) == false {
-                    Button("Oggi") { withAnimation { selectedDay = Calendar.current.startOfDay(for: Date()) } }
-                        .buttonStyle(.plain).font(.system(size: 11, weight: .semibold)).foregroundStyle(PSE.accent)
-                }
-            }
-            if list.isEmpty {
-                EmptyStateCard(icon: "moon.zzz", text: "Nessuna prenotazione per questo giorno.")
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(list.enumerated()), id: \.element.id) { i, b in
-                        dayRow(b, selectedDay)
-                        if i < list.count - 1 { Divider().overlay(PSE.line).padding(.leading, 16) }
-                    }
-                }
-                .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
-                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-            }
-        }
-    }
-    private func dayRow(_ b: Prenotazione, _ d: Date) -> some View {
-        let st = BookingStatus.from(b.status)
-        let toConfirm = st == .in_attesa
-        let str = Struttura.from(b.struttura)
-        let pay = payState(amount: b.amount_cents, paid: b.paid_cents)
-        let (roleLabel, _) = role(b, d)
-        return Button { withAnimation(.easeInOut(duration: 0.2)) { selected = b } } label: {
-            HStack(spacing: 14) {
-                // ruolo del giorno (arrivo/in casa/partenza)
-                Text(roleLabel.uppercased()).font(.system(size: 8, weight: .heavy)).tracking(0.5)
-                    .foregroundStyle(PSE.dim).frame(width: 62, alignment: .leading)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(b.guest_name).font(.system(size: 13, weight: .semibold)).foregroundStyle(PSE.ink).lineLimit(1)
-                    Text([str.label, b.camera].compactMap { $0 }.joined(separator: " · "))
-                        .font(.system(size: 10.5)).foregroundStyle(PSE.dim).lineLimit(1)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                Text("\(prettyDate(b.checkin)) → \(prettyDate(b.checkout))")
-                    .font(.system(size: 10.5)).foregroundStyle(PSE.faint).frame(width: 170, alignment: .leading)
-                Text(eur(b.amount_cents)).font(.system(size: 13, weight: .bold)).foregroundStyle(PSE.text)
-                    .monospacedDigit().frame(width: 70, alignment: .trailing)
-                dot(pay.label, PSE.payment(pay))
-                statusBadge(st).frame(width: 132, alignment: .leading)
-            }
-            .padding(.horizontal, 16).padding(.vertical, 11)
-            .background(toConfirm ? PSE.warn.opacity(0.09) : Color.clear)
-            .overlay(alignment: .leading) { Rectangle().fill(toConfirm ? PSE.warn : Color.clear).frame(width: 3) }
-            .contentShape(Rectangle())
-        }.buttonStyle(.plain)
-    }
     // badge sobrio: pallino tinta desaturata + testo neutro
     private func dot(_ t: String, _ c: Color) -> some View {
         HStack(spacing: 6) {

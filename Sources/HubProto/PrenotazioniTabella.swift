@@ -12,6 +12,7 @@ import SwiftUI
 
 private let tabYmd: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f }()
 private let tabGiorno: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "it_IT"); f.dateFormat = "dd/MM/yy"; return f }()
+private let tabGiornoBreve: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "it_IT"); f.dateFormat = "EEE d MMM"; return f }()
 
 /// Testo confrontabile: senza accenti e in minuscolo, così «Lucía» si trova
 /// scrivendo «lucia» e «Işık» scrivendo «isik».
@@ -26,6 +27,10 @@ struct PrenotazioniTabella: View {
     let items: [Prenotazione]
     /// Filtro casa già scelto in cima alla pagina: la tabella lo rispetta.
     let struttura: Struttura?
+    /// Giorno scelto sulla striscia del calendario (o cliccando il planning):
+    /// il filtro «giorno» lo segue, così questa tabella ha preso il posto
+    /// dell'elenco del giorno che stava qui sopra e diceva le stesse righe.
+    let giorno: Date
     let onSelect: (Prenotazione) -> Void
 
     /// Un filtro solo, non due incrociati: «attive» mescolava chi è in casa
@@ -33,10 +38,11 @@ struct PrenotazioniTabella: View {
     /// rendeva la lista illeggibile. Queste sei voci si escludono a vicenda e
     /// rispondono ognuna a una domanda precisa.
     enum Filtro: String, CaseIterable, Identifiable {
-        case inCasa, inArrivo, daConfermare, cancellate, passate, tutto
+        case giorno, inCasa, inArrivo, daConfermare, cancellate, passate, tutto
         var id: String { rawValue }
         var label: String {
             switch self {
+            case .giorno: return "Giorno scelto"
             case .inCasa: return "In casa"
             case .inArrivo: return "In arrivo"
             case .daConfermare: return "Da confermare"
@@ -47,6 +53,7 @@ struct PrenotazioniTabella: View {
         }
         var spiega: String {
             switch self {
+            case .giorno: return "Arrivi, partenze e chi è in casa nel giorno scelto sulla striscia del calendario."
             case .inCasa: return "Chi sta soggiornando oggi: arrivato e non ancora ripartito."
             case .inArrivo: return "Deve ancora arrivare."
             case .daConfermare: return "In attesa di conferma, a qualsiasi data."
@@ -60,7 +67,7 @@ struct PrenotazioniTabella: View {
         var ordineIniziale: (Colonna, Bool) {
             switch self {
             case .inCasa: return (.checkout, true)
-            case .inArrivo, .daConfermare, .tutto: return (.checkin, true)
+            case .giorno, .inArrivo, .daConfermare, .tutto: return (.checkin, true)
             case .cancellate, .passate: return (.checkin, false)
             }
         }
@@ -68,8 +75,8 @@ struct PrenotazioniTabella: View {
     enum Colonna: String { case ospite, casa, checkin, checkout, notti, importo, saldo, stato }
 
     @State private var q = ""
-    @State private var filtro: Filtro = .inCasa
-    @State private var ordine: Colonna = .checkout
+    @State private var filtro: Filtro = .giorno
+    @State private var ordine: Colonna = .checkin
     @State private var crescente = true
     @FocusState private var cercaAttivo: Bool
 
@@ -98,10 +105,20 @@ struct PrenotazioniTabella: View {
             return termini.allSatisfy { fieno.contains($0) }
         }
     }
+    /// Ruolo della prenotazione nel giorno scelto: arriva, è già dentro, o parte.
+    /// Vuoto se quel giorno non la riguarda.
+    private func ruolo(_ b: Prenotazione, _ d: Date) -> String? {
+        guard b.status != "cancellata", let ci = data(b.checkin), let co = data(b.checkout) else { return nil }
+        let g = Calendar.current.startOfDay(for: d)
+        if ci == g { return "arrivo" }
+        if co == g { return "partenza" }
+        return (ci < g && g < co) ? "in casa" : nil
+    }
     private func passa(_ b: Prenotazione, _ f: Filtro) -> Bool {
         let annullata = b.status == "cancellata"
         let ci = data(b.checkin), co = data(b.checkout)
         switch f {
+        case .giorno:       return ruolo(b, giorno) != nil
         // «In casa» si legge dalle date, non dallo stato: è chi dorme qui
         // stanotte, che lo stato sia stato aggiornato a mano o no.
         case .inCasa:       guard !annullata, let ci, let co else { return false }
@@ -224,6 +241,12 @@ struct PrenotazioniTabella: View {
             Text(filtro.spiega).font(.system(size: 10.5)).foregroundStyle(PSE.faint).lineLimit(1)
         }
     }
+    /// Il filtro «giorno» porta scritta la data che sta guardando: se sposti la
+    /// striscia del calendario devi vederlo dal bottone, non indovinarlo.
+    private func etichetta(_ f: Filtro) -> String {
+        guard f == .giorno else { return f.label }
+        return Calendar.current.isDateInToday(giorno) ? "Oggi" : tabGiornoBreve.string(from: giorno).capitalized
+    }
     private func chip(_ f: Filtro) -> some View {
         let attivo = filtro == f
         let n = conta(f)
@@ -234,7 +257,7 @@ struct PrenotazioniTabella: View {
             }
         } label: {
             HStack(spacing: 6) {
-                Text(f.label).font(.system(size: 11, weight: attivo ? .bold : .medium))
+                Text(etichetta(f)).font(.system(size: 11, weight: attivo ? .bold : .medium))
                     .foregroundStyle(attivo ? PSE.ink : (n == 0 ? PSE.faint : PSE.dim))
                 Text("\(n)").font(.system(size: 10, weight: .bold)).monospacedDigit()
                     .foregroundStyle(attivo ? PSE.ink.opacity(0.85) : PSE.faint)
@@ -249,6 +272,7 @@ struct PrenotazioniTabella: View {
 
     private var testata: some View {
         HStack(spacing: 10) {
+            if filtro == .giorno { thFisso("").frame(width: 62) }
             th("OSPITE", .ospite).frame(maxWidth: .infinity, alignment: .leading)
             th("CASA · CAMERA", .casa).frame(width: wCasa, alignment: .leading)
             th("ARRIVO", .checkin).frame(width: wData, alignment: .leading)
@@ -293,6 +317,14 @@ struct PrenotazioniTabella: View {
         let annullata = st == .cancellata
         return Button { onSelect(b) } label: {
             HStack(spacing: 10) {
+                // Col filtro «giorno» serve sapere se arriva, se è già dentro o
+                // se parte: era l'unica cosa che l'elenco del giorno diceva in
+                // più, e resta qui.
+                if filtro == .giorno, let r = ruolo(b, giorno) {
+                    Text(r.uppercased()).font(.system(size: 8, weight: .heavy)).tracking(0.5)
+                        .foregroundStyle(r == "arrivo" ? PSE.pos : r == "partenza" ? PSE.warn : PSE.dim)
+                        .frame(width: 62, alignment: .leading)
+                }
                 Text(b.guest_name).font(.system(size: 12.5, weight: .semibold))
                     .foregroundStyle(annullata ? PSE.faint : PSE.ink)
                     .strikethrough(annullata, color: PSE.faint)
