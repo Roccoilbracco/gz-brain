@@ -126,6 +126,10 @@ struct PrenotazioniTabella: View {
         return p.joined(separator: " ")
     }
     private func prima(_ a: Prenotazione, _ b: Prenotazione) -> Bool {
+        // Le case restano separate: prima tutta Via Po, poi tutta Via Romagna.
+        // Sono due gestioni diverse e leggerle mescolate non serve a niente;
+        // l'ordinamento scelto vale dentro ciascuna casa.
+        if a.struttura != b.struttura { return pesoCasa(a.struttura) < pesoCasa(b.struttura) }
         // A parità di valore vince sempre l'arrivo più vicino: senza questo le
         // righe uguali (tutte le «Diretto» da 70 €) si scambiavano di posto a
         // ogni ridisegno.
@@ -144,6 +148,7 @@ struct PrenotazioniTabella: View {
         case .stato:    return ordina(pesoStato(a.status), pesoStato(b.status))
         }
     }
+    private func pesoCasa(_ s: String) -> Int { s == Struttura.viaPo.rawValue ? 0 : 1 }
     /// Ordine di lettura degli stati: prima quelli che chiedono un'azione.
     private func pesoStato(_ s: String?) -> Int {
         switch BookingStatus.from(s) {

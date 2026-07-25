@@ -380,16 +380,18 @@ struct CamerePSEDashboard: View {
                     TesoreriaView(prenotazioni: items, newTrigger: $newMovimento)
                 } else {
                     strutturaChips
-                    kpiBar
                     if loading {
                         HStack { Spacer(); ProgressView().controlSize(.large); Spacer() }.padding(.top, 40)
                     } else {
+                        // Il planning per primo: è la vista che si guarda entrando,
+                        // e cambia col filtro casa qui sopra.
+                        planningSection
+                        kpiBar
                         calendarStrip
                         daySection
                         PrenotazioniTabella(items: items, struttura: strutturaFilter) { b in
                             withAnimation(.easeInOut(duration: 0.2)) { selected = b }
                         }
-                        planningSection
                         giorniLiberiSection
                     }
                 }
@@ -413,6 +415,17 @@ struct CamerePSEDashboard: View {
             }
         }
         .task { await load() }
+        // La pagina caricava una volta sola all'apertura: le prenotazioni che
+        // arrivavano intanto dalle OTA o dal sito non si vedevano finché non si
+        // riavviava l'app, e i «giorni liberi per camera» restavano fermi.
+        // Adesso si ricarica quando si torna sulla finestra e ogni cinque minuti,
+        // in silenzio.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await load(primoAvvio: false) }
+        }
+        .onReceive(Timer.publish(every: 300, on: .main, in: .common).autoconnect()) { _ in
+            Task { await load(primoAvvio: false) }
+        }
         // Il grafico guarda il mese mostrato e la struttura filtrata: se cambiano,
         // i suoi dati vanno rifatti (le celle invece si ricalcolano da sole).
         .onChange(of: monthAnchor) { _, _ in rebuildStats() }
@@ -1223,9 +1236,14 @@ struct CamerePSEDashboard: View {
     }
 
     // azioni
-    private func load() async {
-        loading = true; defer { loading = false }
-        do { items = try await HubAPI.listPrenotazioni() } catch { items = [] }
+    /// - Parameter primoAvvio: mostra la rotella solo all'apertura. I ricarichi
+    ///   automatici (finestra riportata davanti, timer) devono passare
+    ///   inosservati: far sparire la pagina ogni cinque minuti sarebbe peggio
+    ///   del problema che risolvono.
+    private func load(primoAvvio: Bool = true) async {
+        if primoAvvio { loading = true }
+        defer { if primoAvvio { loading = false } }
+        do { items = try await HubAPI.listPrenotazioni() } catch { if primoAvvio { items = [] } }
         educampOspiti = (try? await HubAPI.listEducampOspiti()) ?? []
         // Date convertite e assegnazione camere: calcolate una volta qui, non a
         // ogni cella. Idem la mappa di occupazione per la striscia calendario.
