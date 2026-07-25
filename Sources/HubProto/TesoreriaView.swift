@@ -1045,6 +1045,9 @@ struct TesoreriaView: View {
                 }
             }
 
+            cascata(entrate: totEntrate, costi: totCostiOperativi, debiti: totDebiti)
+            raccontoConto(utileOp: utileOp, utileNetto: utileNetto, margine: margineOp)
+
             Text("ANDAMENTO MENSILE").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint).padding(.top, 6)
             if mensili.isEmpty {
                 EmptyStateCard(icon: "chart.bar", text: "Nessun movimento registrato.")
@@ -1784,10 +1787,110 @@ struct TesoreriaView: View {
         .padding(.horizontal, 16).padding(.vertical, 9)
         .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
     }
+    // ══ COME L'INCASSO DIVENTA UTILE ═════════════════════════════════════════
+    // Otto numeri in fila non raccontano niente: si legge il primo, si legge
+    // l'ultimo e in mezzo si tira a indovinare. Qui la stessa cifra si vede
+    // scendere — entrate, meno i costi, meno i debiti — e sotto c'è scritto a
+    // parole cosa vuol dire, con i soldi veri dentro la frase.
+    private func cascata(entrate: Int, costi: Int, debiti: Int) -> some View {
+        let base = max(1, entrate)
+        let utileOp = entrate - costi
+        let netto = utileOp - debiti
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("DOVE FINISCONO I SOLDI CHE ENTRANO")
+                .font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.faint)
+            VStack(spacing: 7) {
+                barraCascata("Entrano", entrate, base, PSE.pos, "Affitti, OTA ed Educamp — cauzioni e apporti esclusi", nil)
+                barraCascata("Costi di gestione", -costi, base, PSE.neg,
+                             "Pulizie, colazioni, commissioni, utenze, manutenzione", .costiOperativi)
+                barraCascata("Restano dalla gestione", utileOp, base, PSE.ink,
+                             "Quello che l'attività produce, prima dei debiti", nil)
+                if debiti > 0 {
+                    barraCascata("Rimborsi di debiti", -debiti, base, PSE.warn,
+                                 "Marroni, muratore, mutuo, rata: restituzioni, non costi", .debiti)
+                }
+                barraCascata("Restano a noi", netto, base, netto >= 0 ? PSE.pos : PSE.neg,
+                             "Il denaro che l'attività ha lasciato in cassa nel periodo", nil)
+            }
+        }
+        .padding(16)
+        .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
+    }
+    @ViewBuilder
+    private func barraCascata(_ t: String, _ v: Int, _ base: Int, _ c: Color, _ spiega: String, _ voce: RiepVoce?) -> some View {
+        let frac = min(1, Double(abs(v)) / Double(base))
+        let riga = HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(t).font(.system(size: 12, weight: .semibold)).foregroundStyle(PSE.ink).lineLimit(1)
+                Text(spiega).font(.system(size: 10)).foregroundStyle(PSE.faint).lineLimit(1).minimumScaleFactor(0.85)
+            }
+            .frame(width: 250, alignment: .leading)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 4).fill(PSE.surface).frame(height: 14)
+                    RoundedRectangle(cornerRadius: 4).fill(c.opacity(v < 0 ? 0.55 : 0.8))
+                        .frame(width: max(3, geo.size.width * frac), height: 14)
+                }
+                .frame(maxHeight: .infinity, alignment: .center)
+            }
+            .frame(height: 20)
+            Text((v < 0 ? "−" : "") + eurc(abs(v)))
+                .font(.system(size: 13, weight: .bold)).foregroundStyle(c).monospacedDigit()
+                .frame(width: 100, alignment: .trailing)
+            Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold))
+                .foregroundStyle(PSE.faint.opacity(voce == nil ? 0 : 1)).frame(width: 10)
+        }
+        if let voce {
+            Button { voceSheet = voce } label: { riga.contentShape(Rectangle()) }
+                .buttonStyle(.plain).help("Clicca per vedere le righe")
+        } else {
+            riga
+        }
+    }
+    /// La stessa cosa detta a parole, con dentro i numeri del periodo scelto.
+    private func raccontoConto(utileOp: Int, utileNetto: Int, margine: Int) -> some View {
+        let periodoTxt = periodo == "tutto" ? "da quando è aperto" : "in \(periodoLabel.lowercased())"
+        var t = "\(periodoTxt.capitalized) sono entrati \(eurc(totEntrate)) di ricavi veri. "
+        t += "Farli girare è costato \(eurc(totCostiOperativi)): resta \(eurc(utileOp)), cioè \(margine) centesimi ogni euro incassato. "
+        if totDebiti > 0 {
+            t += "Poi \(eurc(totDebiti)) se ne sono andati a rimborsare debiti — che non sono costi dell'attività, sono soldi restituiti — quindi in cassa restano \(eurc(utileNetto)). "
+        }
+        if totCauzioni > 0 || totApporti > 0 {
+            t += "Sui conti ci sono anche \(eurc(totCauzioni)) di cauzioni degli inquilini (da rendere) e \(eurc(totApporti)) messi dai soci: entrano, ma non sono guadagno."
+        }
+        return HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "text.book.closed.fill").font(.system(size: 13)).foregroundStyle(PSE.accent)
+                .padding(.top, 1)
+            Text(t).font(.system(size: 12)).foregroundStyle(PSE.text)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 12).fill(PSE.accent.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(PSE.accent.opacity(0.25), lineWidth: 1))
+    }
+
+    /// I movimenti di una categoria, nel periodo e nella casa già filtrati:
+    /// sono gli stessi che compongono la barra su cui si è cliccato.
+    private func movimentiCategoria(_ cat: String) -> [TesMovimento] {
+        movStrutFiltrati.filter { ($0.categoria?.isEmpty == false ? $0.categoria! : "altro") == cat }
+            .sorted { $0.data > $1.data }
+    }
     private func mensileRow(_ r: (key: String, entrate: Int, uscite: Int), maxAbs: Int) -> some View {
         let utile = r.entrate - r.uscite
         let frac = min(1, Double(abs(utile)) / Double(maxAbs))
-        return HStack(spacing: 12) {
+        let delMese = movStrutFiltrati.filter { $0.data.hasPrefix(r.key) }.sorted { $0.data > $1.data }
+        return Button {
+            voceSheet = .movimenti(meseNome(r.key), delMese, r.entrate - r.uscite)
+        } label: {
+            mensileRiga(r, utile: utile, frac: frac).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("\(meseNome(r.key)): \(delMese.count) movimenti — clicca per vederli")
+    }
+    private func mensileRiga(_ r: (key: String, entrate: Int, uscite: Int), utile: Int, frac: Double) -> some View {
+        HStack(spacing: 12) {
             Text(meseNome(r.key)).font(.system(size: 12, weight: .semibold)).foregroundStyle(PSE.ink)
                 .frame(width: 130, alignment: .leading).lineLimit(1)
             Text("+" + eurc(r.entrate)).font(.system(size: 11.5, weight: .medium)).foregroundStyle(PSE.pos).monospacedDigit().frame(width: 90, alignment: .trailing)
@@ -1813,21 +1916,29 @@ struct TesoreriaView: View {
             } else {
                 ForEach(rows, id: \.cat) { r in
                     let pct = tot > 0 ? Int((Double(r.tot) / Double(tot) * 100).rounded()) : 0
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 8) {
-                            Text(r.cat.capitalized).font(.system(size: 12, weight: .medium)).foregroundStyle(PSE.ink).lineLimit(1)
-                            Spacer(minLength: 6)
-                            Text(eurc(r.tot)).font(.system(size: 12, weight: .bold)).foregroundStyle(PSE.ink).monospacedDigit()
-                            Text("\(pct)%").font(.system(size: 10, weight: .semibold)).foregroundStyle(PSE.faint).frame(width: 34, alignment: .trailing)
-                        }
-                        GeometryReader { geo in
-                            ZStack(alignment: .leading) {
-                                RoundedRectangle(cornerRadius: 3).fill(PSE.surface).frame(height: 6)
-                                RoundedRectangle(cornerRadius: 3).fill(c.opacity(0.7))
-                                    .frame(width: max(2, geo.size.width * Double(r.tot) / Double(maxTot)), height: 6)
+                    // Ogni categoria si apre: «Pulizia 400 €» è una domanda finché
+                    // non si vedono le righe che ci stanno sotto.
+                    Button { voceSheet = .movimenti(r.cat.capitalized, movimentiCategoria(r.cat), r.tot) } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 8) {
+                                Text(r.cat.capitalized).font(.system(size: 12, weight: .medium)).foregroundStyle(PSE.ink).lineLimit(1)
+                                Spacer(minLength: 6)
+                                Text(eurc(r.tot)).font(.system(size: 12, weight: .bold)).foregroundStyle(PSE.ink).monospacedDigit()
+                                Text("\(pct)%").font(.system(size: 10, weight: .semibold)).foregroundStyle(PSE.faint).frame(width: 34, alignment: .trailing)
+                                Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold)).foregroundStyle(PSE.faint)
                             }
-                        }.frame(height: 6)
+                            GeometryReader { geo in
+                                ZStack(alignment: .leading) {
+                                    RoundedRectangle(cornerRadius: 3).fill(PSE.surface).frame(height: 6)
+                                    RoundedRectangle(cornerRadius: 3).fill(c.opacity(0.7))
+                                        .frame(width: max(2, geo.size.width * Double(r.tot) / Double(maxTot)), height: 6)
+                                }
+                            }.frame(height: 6)
+                        }
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .help("\(r.cat.capitalized): \(eurc(r.tot)) — clicca per vedere i movimenti")
                 }
             }
         }
