@@ -394,10 +394,11 @@ struct CamerePSEDashboard: View {
                     if loading {
                         HStack { Spacer(); ProgressView().controlSize(.large); Spacer() }.padding(.top, 40)
                     } else {
-                        // Il planning per primo: è la vista che si guarda entrando,
-                        // e cambia col filtro casa qui sopra.
-                        planningSection
+                        // Prima la disponibilità: entrando nella pagina la domanda
+                        // è quasi sempre «c'è posto?». Il planning viene dopo, che
+                        // è il quadro d'insieme e non una risposta.
                         disponibilitaSection
+                        planningSection
                         kpiBar
                         calendarStrip
                         daySection
@@ -1060,9 +1061,9 @@ struct CamerePSEDashboard: View {
         let trovate = cerca()
         return VStack(alignment: .leading, spacing: 10) {
             PSEPieghevole("STANZE DISPONIBILI OGGI",
-                          valore: oggi.isEmpty ? "tutto pieno" : "\(oggi.count) libere",
+                          valore: oggi.isEmpty ? "tutto pieno" : plur(oggi.count, "camera libera", "camere libere"),
                           colore: PSE.ink, coloreValore: oggi.isEmpty ? PSE.warn : PSE.pos,
-                          nota: fullFmt.string(from: Date()).capitalized) {
+                          nota: fullFmt.string(from: Date()).capitalized, grande: true) {
                 if oggi.isEmpty {
                     Text("Stanotte non c'è nessuna camera libera in \(strutture.count == 1 ? strutture[0].label : "nessuna delle due case").")
                         .font(.system(size: 11.5)).foregroundStyle(PSE.dim)
@@ -1079,7 +1080,8 @@ struct CamerePSEDashboard: View {
         PSEPieghevole("CERCA DISPONIBILITÀ",
                       valore: trovate.isEmpty ? "niente per queste date" : plur(trovate.count, "camera", "camere"),
                       colore: PSE.accent, coloreValore: trovate.isEmpty ? PSE.warn : PSE.pos,
-                      nota: "\(prettyDate(ymdBk.string(from: cercaDa))) → \(prettyDate(ymdBk.string(from: partenzaEffettiva))) · \(plur(nottiCercate, "notte", "notti")) · \(plur(cercaOspiti, "ospite", "ospiti"))") {
+                      nota: "\(prettyDate(ymdBk.string(from: cercaDa))) → \(prettyDate(ymdBk.string(from: partenzaEffettiva))) · \(plur(nottiCercate, "notte", "notti")) · \(plur(cercaOspiti, "ospite", "ospiti"))",
+                      grande: true) {
             // Calendario a sinistra, risultati a destra: si sceglie e si vede
             // l'effetto senza spostare gli occhi.
             HStack(alignment: .top, spacing: 18) {
