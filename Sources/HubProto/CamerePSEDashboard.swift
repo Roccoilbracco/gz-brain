@@ -461,6 +461,14 @@ struct CamerePSEDashboard: View {
     }
 
     private var kpiBar: some View {
+        PSEPieghevole("RIEPILOGO DI OGGI",
+                      valore: "\(eur(incassato)) incassati · \(eur(daIncassare)) da incassare",
+                      colore: PSE.ink, coloreValore: PSE.accent,
+                      nota: fullFmt.string(from: Date()).capitalized, grande: true, aperta: true) {
+            kpiRighe.padding(.horizontal, 12).padding(.bottom, 12)
+        }
+    }
+    private var kpiRighe: some View {
         HStack(spacing: 12) {
             kpi("IN CASA", "\(items.filter { $0.status == "in_casa" }.count)")
             kpi("CHECK-IN OGGI", "\(attive.filter { isToday($0.checkin) }.count)")
@@ -493,6 +501,14 @@ struct CamerePSEDashboard: View {
 
     // ── barra calendario scorrevole ──
     private var calendarStrip: some View {
+        PSEPieghevole("SCEGLI IL GIORNO",
+                      valore: fullFmt.string(from: selectedDay).capitalized,
+                      colore: PSE.ink, coloreValore: PSE.accent,
+                      nota: "muove l'elenco qui sotto", grande: true, aperta: true) {
+            strisciaGiorni.padding(.horizontal, 12).padding(.bottom, 12)
+        }
+    }
+    private var strisciaGiorni: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
@@ -697,7 +713,7 @@ struct CamerePSEDashboard: View {
     private var planningSection: some View {
         PSEPieghevole("PLANNING",
                       valore: occupazioneRiassunto, colore: PSE.ink, coloreValore: PSE.accent,
-                      nota: fmt("MMMM yyyy").string(from: monthAnchor).capitalized) {
+                      nota: fmt("MMMM yyyy").string(from: monthAnchor).capitalized, grande: true) {
             planningContenuto.padding(.horizontal, 12).padding(.bottom, 10)
         }
     }
@@ -1357,7 +1373,7 @@ struct CamerePSEDashboard: View {
         return PSEPieghevole("GIORNI LIBERI PER CAMERA",
                              valore: "\(tot1 + tot2) notti libere",
                              colore: PSE.ink, coloreValore: PSE.pos,
-                             nota: "\(m1) e \(m2)") {
+                             nota: "\(m1) e \(m2)", grande: true) {
             VStack(spacing: 0) {
                 HStack(spacing: 10) {
                     Text("CASA").frame(width: 96, alignment: .leading)

@@ -180,9 +180,21 @@ struct PrenotazioniTabella: View {
     // ── vista ────────────────────────────────────────────────────────────────
     var body: some View {
         let list = filtrate
-        return VStack(alignment: .leading, spacing: 10) {
-            intestazione(list)
-            filtri
+        // Stessa scatola pieghevole di tutte le altre sezioni della pagina:
+        // aperta di partenza, perché è l'elenco su cui si lavora.
+        return PSEPieghevole("TUTTE LE PRENOTAZIONI",
+                             valore: "\(list.count) di \(items.count)",
+                             colore: PSE.ink, coloreValore: PSE.accent,
+                             nota: etichetta(filtro), grande: true, aperta: true) {
+            contenuto(list).padding(.horizontal, 12).padding(.bottom, 10)
+        }
+    }
+    private func contenuto(_ list: [Prenotazione]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                filtri
+                campoRicerca
+            }
             if list.isEmpty {
                 EmptyStateCard(icon: "magnifyingglass",
                                text: q.isEmpty ? "Nessuna prenotazione in «\(filtro.label.lowercased())»."
@@ -208,14 +220,6 @@ struct PrenotazioniTabella: View {
         }
     }
 
-    private func intestazione(_ list: [Prenotazione]) -> some View {
-        HStack(spacing: 10) {
-            Text("TUTTE LE PRENOTAZIONI").font(.system(size: 13.5, weight: .bold)).foregroundStyle(PSE.ink)
-            Text("· \(list.count) di \(items.count)").font(.system(size: 11)).foregroundStyle(PSE.faint)
-            Spacer()
-            campoRicerca
-        }
-    }
     private var campoRicerca: some View {
         HStack(spacing: 7) {
             Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold)).foregroundStyle(PSE.faint)
@@ -237,8 +241,7 @@ struct PrenotazioniTabella: View {
     private var filtri: some View {
         HStack(spacing: 8) {
             ForEach(Filtro.allCases) { f in chip(f) }
-            Spacer()
-            Text(filtro.spiega).font(.system(size: 10.5)).foregroundStyle(PSE.faint).lineLimit(1)
+            Spacer(minLength: 8)
         }
     }
     /// Il filtro «giorno» porta scritta la data che sta guardando: se sposti la
