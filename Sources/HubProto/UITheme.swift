@@ -216,3 +216,27 @@ struct Avatar: View {
             .overlay(Circle().strokeBorder(UI.line, lineWidth: 1))
     }
 }
+
+// ── Zona in cui trascinare non sposta la finestra ────────────────────────────
+//
+// La finestra è `isMovableByWindowBackground` (HubProtoApp.setup): senza barra
+// del titolo la si prende da qualsiasi punto vuoto. Il rovescio è che AppKit
+// si mangia i trascinamenti che partono da un'immagine o da un testo — le foto
+// della scheda immobile si "riordinavano" muovendo tutta GZ Brain. Un NSView
+// che dichiara `mouseDownCanMoveWindow = false` sotto il contenuto disinnesca
+// il trascinamento solo lì: il clic prosegue lungo la catena dei responder e
+// SwiftUI riceve gesti e drag-and-drop come sempre.
+private struct BloccoTrascinamentoFinestra: NSViewRepresentable {
+    final class Vista: NSView {
+        override var mouseDownCanMoveWindow: Bool { false }
+    }
+    func makeNSView(context: Context) -> NSView { Vista() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+extension View {
+    /// Da usare sulle aree trascinabili: griglie riordinabili, kanban, liste.
+    func nonTrascinaLaFinestra() -> some View {
+        background(BloccoTrascinamentoFinestra())
+    }
+}

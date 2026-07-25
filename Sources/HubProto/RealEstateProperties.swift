@@ -900,6 +900,51 @@ private struct ThumbBox<Content: View>: View {
     }
 }
 
+// ── Foto scaricate una volta sola ───────────────────────────────────────────
+//
+// La stessa immagine compare nella galleria grande, nella striscia sotto e
+// nella griglia di gestione: senza cache erano tre scaricamenti a foto, e ogni
+// riordino o eliminazione li rifaceva tutti, con la pagina che si impastava.
+// Qui si scarica una volta per sessione e chi arriva mentre il download è in
+// corso aspetta lo stesso task invece di aprirne un altro.
+@MainActor
+final class FotoCache {
+    static let shared = FotoCache()
+    // Si tengono i byte scaricati, non gli NSImage: il costo vero è la rete, e
+    // il JPEG compresso in memoria pesa una frazione della bitmap decodificata.
+    private let memoria = NSCache<NSString, NSData>()
+    private var inCorso: [String: Task<Data?, Never>] = [:]
+
+    private init() { memoria.totalCostLimit = 300 * 1024 * 1024 }
+
+    func dati(_ path: String) async -> Data? {
+        if let d = memoria.object(forKey: path as NSString) { return d as Data }
+        let t: Task<Data?, Never>
+        if let esistente = inCorso[path] {
+            t = esistente
+        } else {
+            t = Task.detached { try? await HubAPI.downloadProprietaPhoto(path: path) }
+            inCorso[path] = t
+        }
+        let data = await t.value
+        inCorso[path] = nil
+        if let data { memoria.setObject(data as NSData, forKey: path as NSString, cost: data.count) }
+        return data
+    }
+
+    func immagine(_ path: String) async -> NSImage? {
+        guard let d = await dati(path) else { return nil }
+        return NSImage(data: d)
+    }
+
+    /// Dopo un'eliminazione: il path non esiste più, tenerlo in cache
+    /// significherebbe mostrare una foto cancellata se ne rientra uno uguale.
+    func dimentica(_ path: String) {
+        memoria.removeObject(forKey: path as NSString)
+        inCorso[path] = nil
+    }
+}
+
 struct RemotePhotoThumb: View {
     let path: String
     var altezza: CGFloat = 92
@@ -914,8 +959,8 @@ struct RemotePhotoThumb: View {
             else if !loaded { ProgressView().controlSize(.small) }
             else { Image(systemName: "photo").font(.system(size: 20)).foregroundStyle(Csb.secFg.opacity(0.5)) }
         }
-        .task {
-            if let d = try? await HubAPI.downloadProprietaPhoto(path: path) { img = NSImage(data: d) }
+        .task(id: path) {
+            if let d = await FotoCache.shared.dati(path) { img = NSImage(data: d) }
             loaded = true
         }
     }

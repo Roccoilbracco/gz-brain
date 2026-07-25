@@ -59,6 +59,8 @@ struct ProprietaDetailView: View {
     @State private var fotoBusy = false
     @State private var fotoMsg: String?
     @State private var gestisciAperto = false
+    @State private var selezioneFoto: Set<String> = []
+    @State private var confermaEliminaFoto = false
     @State private var projects: [Project] = []
     @State private var proprietari: [Proprietario] = []
     @State private var pdfStato: PDFStato = .fermo
@@ -144,6 +146,15 @@ struct ProprietaDetailView: View {
         .confirmationDialog("Eliminare la proprietà e tutto il suo storico?",
                             isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Elimina", role: .destructive) { delete() }
+            Button("Annulla", role: .cancel) {}
+        }
+        // Più foto in un colpo solo si cancellano per sbaglio molto più
+        // facilmente di una: qui si chiede conferma, sulla singola X no.
+        .confirmationDialog(selezioneFoto.count == 1
+                              ? "Eliminare la foto selezionata?"
+                              : "Eliminare le \(selezioneFoto.count) foto selezionate?",
+                            isPresented: $confermaEliminaFoto, titleVisibility: .visible) {
+            Button("Elimina", role: .destructive) { Task { await eliminaSelezionate() } }
             Button("Annulla", role: .cancel) {}
         }
     }
@@ -640,14 +651,17 @@ struct ProprietaDetailView: View {
 
                 // "Gestisci" si apre e si chiude: chi guarda la scheda vede solo
                 // la galleria, chi deve mettere ordine entra qui e trascina.
-                Button { withAnimation(.easeInOut(duration: 0.18)) { gestisciAperto.toggle() } } label: {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) { gestisciAperto.toggle() }
+                    if !gestisciAperto { selezioneFoto = [] }
+                } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "chevron.right")
                             .font(.system(size: 8, weight: .black))
                             .rotationEffect(.degrees(gestisciAperto ? 90 : 0))
                         Text("GESTISCI").font(.system(size: 9, weight: .heavy)).tracking(1.4)
                         if gestisciAperto {
-                            Text("trascina le foto per riordinarle")
+                            Text("trascina per riordinare · clic per selezionare")
                                 .font(.system(size: 10)).tracking(0)
                                 .foregroundStyle(Holo.subDim)
                         }
@@ -660,20 +674,156 @@ struct ProprietaDetailView: View {
 
                 if gestisciAperto {
                     GlassCard {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
-                            ForEach(salvate, id: \.self) { path in
-                                FotoRiordinabile(
-                                    path: path,
-                                    copertina: path == salvate.first,
-                                    onDelete: { Task { await eliminaFoto(path) } },
-                                    onDropSopra: { src in Task { await spostaFoto(src, su: path) } })
+                        VStack(alignment: .leading, spacing: 12) {
+                            barraSelezioneFoto(salvate)
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
+                                ForEach(salvate, id: \.self) { path in
+                                    FotoRiordinabile(
+                                        path: path,
+                                        copertina: path == salvate.first,
+                                        selezionata: selezioneFoto.contains(path),
+                                        selezioneAttiva: !selezioneFoto.isEmpty,
+                                        onToggle: { toggleSelezione(path) },
+                                        onDelete: { Task { await eliminaFoto(path) } },
+                                        onDropSopra: { src in Task { await spostaFoto(src, su: path) } })
+                                }
                             }
                         }
                         .padding(14)
                     }
+                    // Senza questo il trascinamento di una foto lo intercetta
+                    // AppKit e si porta dietro tutta la finestra.
+                    .nonTrascinaLaFinestra()
                     .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
+        }
+    }
+
+    // ── Selezione multipla ───────────────────────────────────────────────────
+    //
+    // Le foto arrivano a decine per immobile e finora ogni operazione era una
+    // alla volta: dieci scatti sbagliati erano dieci X e dieci salvataggi.
+    // Selezionandole si spostano, si scaricano o si buttano tutte insieme.
+    private func barraSelezioneFoto(_ salvate: [String]) -> some View {
+        let n = selezioneFoto.count
+        return HStack(spacing: 8) {
+            if n == 0 {
+                Text("Clic su una foto per selezionarla.")
+                    .font(.system(size: 11)).foregroundStyle(Holo.subDim)
+                Spacer(minLength: 0)
+                Button("Seleziona tutte") { selezioneFoto = Set(salvate) }
+                    .buttonStyle(.plain).font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Holo.hsl(210, 70, 70))
+            } else {
+                Text(n == 1 ? "1 foto selezionata" : "\(n) foto selezionate")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(Holo.hsl(210, 75, 74))
+                Spacer(minLength: 0)
+                pillFoto("Porta all'inizio", "arrow.up.to.line", 210) {
+                    Task { await portaSelezione(inCima: true) }
+                }
+                pillFoto("Porta alla fine", "arrow.down.to.line", 210) {
+                    Task { await portaSelezione(inCima: false) }
+                }
+                pillFoto("Scarica", "arrow.down.circle", 145) {
+                    Task { await scaricaSelezionate() }
+                }
+                pillFoto("Elimina", "trash", 5) { confermaEliminaFoto = true }
+                pillFoto("Annulla", "xmark", 220) { selezioneFoto = [] }
+            }
+        }
+        .animation(.easeInOut(duration: 0.15), value: n)
+    }
+
+    private func pillFoto(_ label: String, _ icon: String, _ hue: Double,
+                          _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: icon).font(.system(size: 9.5, weight: .bold))
+                Text(label).font(.system(size: 11, weight: .semibold))
+            }
+            .foregroundStyle(Holo.hsl(hue, 80, 74))
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(Capsule().fill(Holo.hsl(hue, 60, 45).opacity(0.16)))
+            .overlay(Capsule().strokeBorder(Holo.hsl(hue, 60, 55).opacity(0.4), lineWidth: 1))
+        }
+        .buttonStyle(.plain).disabled(fotoBusy).opacity(fotoBusy ? 0.5 : 1)
+    }
+
+    private func toggleSelezione(_ path: String) {
+        if selezioneFoto.contains(path) { selezioneFoto.remove(path) }
+        else { selezioneFoto.insert(path) }
+    }
+
+    /// Le selezionate in blocco, in testa (la prima diventa copertina) o in coda.
+    private func portaSelezione(inCima: Bool) async {
+        guard let id = proprietaId, !selezioneFoto.isEmpty else { return }
+        let arr = p?.photos ?? []
+        let gruppo = arr.filter { selezioneFoto.contains($0) }   // ordine attuale
+        let resto = arr.filter { !selezioneFoto.contains($0) }
+        await salvaOrdine(inCima ? gruppo + resto : resto + gruppo, id: id)
+    }
+
+    /// Salva le foto scelte in una cartella, con il nome che hanno nel bucket.
+    private func scaricaSelezionate() async {
+        guard !selezioneFoto.isEmpty, !fotoBusy else { return }
+        let cartella: URL? = await MainActor.run {
+            let panel = NSOpenPanel()
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = false
+            panel.prompt = "Salva qui"
+            return panel.runModal() == .OK ? panel.url : nil
+        }
+        guard let cartella else { return }
+
+        fotoBusy = true; fotoMsg = nil
+        defer { fotoBusy = false }
+        let scelte = (p?.photos ?? []).filter { selezioneFoto.contains($0) }
+        var falliti = 0
+        for path in scelte {
+            do {
+                let data = try await HubAPI.downloadProprietaPhoto(path: path)
+                let nome = (path as NSString).lastPathComponent
+                try data.write(to: cartella.appendingPathComponent(nome))
+            } catch { falliti += 1 }
+        }
+        fotoMsg = falliti > 0
+            ? "\(scelte.count - falliti) di \(scelte.count) foto salvate in \(cartella.lastPathComponent)"
+            : "\(scelte.count) foto salvate in \(cartella.lastPathComponent)"
+    }
+
+    /// Un solo salvataggio per tutte: l'elenco resta coerente anche se poi
+    /// qualche file del bucket non si cancella.
+    private func eliminaSelezionate() async {
+        guard let id = proprietaId, !selezioneFoto.isEmpty, !fotoBusy else { return }
+        fotoBusy = true; fotoMsg = nil
+        defer { fotoBusy = false }
+        let daTogliere = selezioneFoto
+        do {
+            let restanti = (p?.photos ?? []).filter { !daTogliere.contains($0) }
+            try await HubAPI.updateProprieta(id: id, fields: ["photos": restanti])
+            for path in daTogliere {
+                try? await HubAPI.deleteProprietaPhotoFile(path: path)
+                await FotoCache.shared.dimentica(path)
+            }
+            selezioneFoto = []
+            await load()
+        } catch let e {
+            fotoMsg = "Eliminazione non riuscita: \(e.localizedDescription)"
+        }
+    }
+
+    /// Scrive l'ordine e lo mostra subito, tornando indietro se la rete rifiuta.
+    private func salvaOrdine(_ arr: [String], id: String) async {
+        let precedente = p?.photos
+        withAnimation(.easeInOut(duration: 0.16)) { p?.photos = arr }
+        fotoMsg = nil
+        do {
+            try await HubAPI.updateProprieta(id: id, fields: ["photos": arr])
+        } catch let e {
+            p?.photos = precedente
+            fotoMsg = "Ordine non salvato: \(e.localizedDescription)"
         }
     }
 
@@ -720,22 +870,20 @@ struct ProprietaDetailView: View {
     private func spostaFoto(_ src: String, su dst: String) async {
         guard let id = proprietaId, src != dst else { return }
         var arr = p?.photos ?? []
-        guard let from = arr.firstIndex(of: src), let to = arr.firstIndex(of: dst) else { return }
-        arr.remove(at: from)
+        guard let to = arr.firstIndex(of: dst) else { return }
+        // Trascinando una foto già selezionata si porta dietro tutte le altre
+        // selezionate: averle scelte e poi doverle spostare a una a una
+        // sarebbe il lavoro che la selezione doveva togliere.
+        let gruppo = selezioneFoto.contains(src)
+            ? arr.filter { selezioneFoto.contains($0) }
+            : [src]
+        guard !gruppo.contains(dst), let from = arr.firstIndex(of: gruppo[0]) else { return }
+        arr.removeAll { gruppo.contains($0) }
         // Trascinando in avanti si finisce dopo la foto di arrivo, indietro
         // prima: è il verso che ci si aspetta guardando dove si lascia.
         let dest = arr.firstIndex(of: dst).map { from < to ? $0 + 1 : $0 } ?? arr.count
-        arr.insert(src, at: dest)
-
-        let precedente = p?.photos
-        withAnimation(.easeInOut(duration: 0.16)) { p?.photos = arr }
-        fotoMsg = nil
-        do {
-            try await HubAPI.updateProprieta(id: id, fields: ["photos": arr])
-        } catch let e {
-            p?.photos = precedente
-            fotoMsg = "Ordine non salvato: \(e.localizedDescription)"
-        }
+        arr.insert(contentsOf: gruppo, at: dest)
+        await salvaOrdine(arr, id: id)
     }
 
     private func eliminaFoto(_ path: String) async {
@@ -748,6 +896,8 @@ struct ProprietaDetailView: View {
             // Il file si cancella dopo: se fallisce resta un orfano nel bucket,
             // molto meno grave di una scheda che punta a una foto sparita.
             try? await HubAPI.deleteProprietaPhotoFile(path: path)
+            await FotoCache.shared.dimentica(path)
+            selezioneFoto.remove(path)
             await load()
         } catch let e {
             fotoMsg = "Eliminazione non riuscita: \(e.localizedDescription)"
@@ -947,9 +1097,15 @@ struct ProprietaDetailView: View {
 private struct FotoRiordinabile: View {
     let path: String
     let copertina: Bool
+    let selezionata: Bool
+    /// Con almeno una foto scelta il pallino resta visibile su tutte: si vede
+    /// dove cliccare per aggiungerne altre senza andare a caccia col mouse.
+    let selezioneAttiva: Bool
+    let onToggle: () -> Void
     let onDelete: () -> Void
     let onDropSopra: (String) -> Void
     @State private var targeted = false
+    @State private var hover = false
 
     var body: some View {
         RemotePhotoThumb(path: path, altezza: 100, onDelete: onDelete)
@@ -963,20 +1119,33 @@ private struct FotoRiordinabile: View {
                         .padding(6)
                 }
             }
-            .overlay {
-                if targeted {
-                    RoundedRectangle(cornerRadius: 10)
-                        .strokeBorder(Holo.hsl(210, 90, 65), lineWidth: 2.5)
-                        .shadow(color: Holo.hsl(210, 90, 60).opacity(0.8), radius: 5)
+            .overlay(alignment: .topLeading) {
+                if selezionata || selezioneAttiva || hover {
+                    Image(systemName: selezionata ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(selezionata ? Holo.hsl(210, 90, 68) : .white.opacity(0.85))
+                        .background(Circle().fill(.black.opacity(0.55)).padding(1))
+                        .padding(6)
+                        .allowsHitTesting(false)
                 }
             }
+            .overlay {
+                let bordo = targeted ? Holo.hsl(210, 90, 65)
+                          : (selezionata ? Holo.hsl(210, 85, 60) : Color.clear)
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(bordo, lineWidth: targeted ? 2.5 : 2)
+                    .shadow(color: targeted ? Holo.hsl(210, 90, 60).opacity(0.8) : .clear, radius: 5)
+            }
             .opacity(targeted ? 0.75 : 1)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onToggle)
+            .onHover { h in withAnimation(.easeOut(duration: 0.12)) { hover = h } }
             .draggable(path)
             .dropDestination(for: String.self) { items, _ in
                 guard let s = items.first, s != path else { return false }
                 onDropSopra(s); return true
             } isTargeted: { targeted = $0 }
-            .help("Trascina per cambiare l'ordine")
+            .help("Clic per selezionare · trascina per cambiare l'ordine")
     }
 }
 
@@ -989,6 +1158,9 @@ struct GalleriaFoto: View {
     let paths: [String]
     @State private var images: [String: NSImage] = [:]
     @State private var index = 0
+    /// Quale foto si sta guardando, per nome e non per posizione: le posizioni
+    /// cambiano a ogni riordino.
+    @State private var mostrata: String?
 
     private var corrente: String? { paths.indices.contains(index) ? paths[index] : nil }
 
@@ -1017,6 +1189,9 @@ struct GalleriaFoto: View {
             if paths.count > 1 { striscia }
         }
         .task(id: paths) { await carica() }
+        .onChange(of: index) { _, i in
+            mostrata = paths.indices.contains(i) ? paths[i] : nil
+        }
     }
 
     private var contatore: some View {
@@ -1078,14 +1253,15 @@ struct GalleriaFoto: View {
     }
 
     private func carica() async {
-        index = 0
+        // Riordinando cambia `paths` e la galleria ripartiva dalla prima foto:
+        // si spostava una miniatura e la grande saltava altrove. Si segue la
+        // foto che si stava guardando, ovunque sia finita.
+        if let mostrata, let i = paths.firstIndex(of: mostrata) { index = i }
+        else if index >= paths.count { index = 0 }
         // In ordine, quindi la prima foto — quella mostrata all'apertura —
         // arriva subito e il resto si riempie mentre guardi.
         for path in paths where images[path] == nil {
-            if let d = try? await HubAPI.downloadProprietaPhoto(path: path),
-               let img = NSImage(data: d) {
-                images[path] = img
-            }
+            if let d = await FotoCache.shared.dati(path) { images[path] = NSImage(data: d) }
         }
     }
 }
@@ -1106,8 +1282,10 @@ private struct FotoCopertina: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
-        .task(id: path) {
-            if let d = try? await HubAPI.downloadProprietaPhoto(path: path) { img = NSImage(data: d) }
-        }
+        .task(id: path) { await carica() }
+    }
+
+    private func carica() async {
+        if let d = await FotoCache.shared.dati(path) { img = NSImage(data: d) }
     }
 }

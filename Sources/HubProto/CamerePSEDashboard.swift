@@ -232,6 +232,9 @@ struct CamerePSEDashboard: View {
     @State private var cercaDa = Calendar.current.startOfDay(for: Date())
     @State private var cercaA = Calendar.current.date(byAdding: .day, value: 2, to: Calendar.current.startOfDay(for: Date()))!
     @State private var cercaOspiti = 2
+    @State private var meseRicerca = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: Date()))!
+    /// Il prossimo click sul calendario è la partenza (dopo aver scelto l'arrivo).
+    @State private var scegliePartenza = false
 
     private var attive: [Prenotazione] { items.filter { BookingStatus.from($0.status).active } }
 
@@ -1077,41 +1080,252 @@ struct CamerePSEDashboard: View {
                       valore: trovate.isEmpty ? "niente per queste date" : plur(trovate.count, "camera", "camere"),
                       colore: PSE.accent, coloreValore: trovate.isEmpty ? PSE.warn : PSE.pos,
                       nota: "\(prettyDate(ymdBk.string(from: cercaDa))) → \(prettyDate(ymdBk.string(from: partenzaEffettiva))) · \(plur(nottiCercate, "notte", "notti")) · \(plur(cercaOspiti, "ospite", "ospiti"))") {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 16) {
-                    campoData("ARRIVO", $cercaDa)
-                    campoData("PARTENZA", $cercaA)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("OSPITI").font(.system(size: 8.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
-                        Stepper(value: $cercaOspiti, in: 1...6) {
-                            Text("\(cercaOspiti)").font(.system(size: 13, weight: .bold))
-                                .foregroundStyle(PSE.ink).monospacedDigit()
-                        }.frame(width: 110)
+            // Calendario a sinistra, risultati a destra: si sceglie e si vede
+            // l'effetto senza spostare gli occhi.
+            HStack(alignment: .top, spacing: 18) {
+                calendarioRicerca.frame(width: 292)
+                VStack(alignment: .leading, spacing: 10) {
+                    criteriRicerca
+                    if trovate.isEmpty {
+                        Text("Per queste date e \(plur(cercaOspiti, "ospite", "ospiti")) non c'è nessuna camera libera per tutto il soggiorno. Nel calendario i giorni in arancio sono pieni: sposta l'arrivo su un giorno verde.")
+                            .font(.system(size: 11.5)).foregroundStyle(PSE.warn)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        elencoCamereCompatto(trovate)
                     }
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("NOTTI").font(.system(size: 8.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
-                        Text("\(nottiCercate)").font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(PSE.ink).monospacedDigit()
-                    }
-                    Spacer()
+                    Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 16)
-                if trovate.isEmpty {
-                    Text("Per queste date e \(plur(cercaOspiti, "ospite", "ospiti")) non c'è nessuna camera libera per tutto il soggiorno. Prova a spostare le date, o a ridurre le notti.")
-                        .font(.system(size: 11.5)).foregroundStyle(PSE.warn)
-                        .padding(.horizontal, 16).padding(.bottom, 4)
-                } else {
-                    elencoCamere(trovate, da: Calendar.current.startOfDay(for: cercaDa))
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .padding(.horizontal, 16).padding(.bottom, 6)
         }
     }
-    private func campoData(_ t: String, _ v: Binding<Date>) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(t).font(.system(size: 8.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
-            DatePicker("", selection: v, displayedComponents: .date)
-                .labelsHidden().datePickerStyle(.field).frame(width: 120)
+
+    // ── Criteri: ospiti, notti e scorciatoie ─────────────────────────────────
+    private var criteriRicerca: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("OSPITI").font(.system(size: 8.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
+                HStack(spacing: 0) {
+                    passo("minus") { if cercaOspiti > 1 { cercaOspiti -= 1 } }
+                    Text("\(cercaOspiti)").font(.system(size: 14, weight: .bold)).foregroundStyle(PSE.ink)
+                        .monospacedDigit().frame(width: 30)
+                    passo("plus") { if cercaOspiti < 6 { cercaOspiti += 1 } }
+                }
+                .background(Capsule().fill(PSE.surface))
+                .overlay(Capsule().strokeBorder(PSE.line, lineWidth: 1))
+            }
+            VStack(alignment: .leading, spacing: 5) {
+                Text("NOTTI").font(.system(size: 8.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
+                HStack(spacing: 0) {
+                    passo("minus") { if nottiCercate > 1 { cercaA = Calendar.current.date(byAdding: .day, value: -1, to: partenzaEffettiva) ?? cercaA } }
+                    Text("\(nottiCercate)").font(.system(size: 14, weight: .bold)).foregroundStyle(PSE.ink)
+                        .monospacedDigit().frame(width: 30)
+                    passo("plus") { cercaA = Calendar.current.date(byAdding: .day, value: 1, to: partenzaEffettiva) ?? cercaA }
+                }
+                .background(Capsule().fill(PSE.surface))
+                .overlay(Capsule().strokeBorder(PSE.line, lineWidth: 1))
+            }
+            VStack(alignment: .leading, spacing: 5) {
+                Text("SCORCIATOIE").font(.system(size: 8.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
+                HStack(spacing: 6) {
+                    scorciatoia("Stanotte") { imposta(giorniDaOggi: 0, notti: 1) }
+                    scorciatoia("Domani") { imposta(giorniDaOggi: 1, notti: 1) }
+                    scorciatoia("Weekend") { prossimoWeekend() }
+                }
+            }
+            Spacer(minLength: 0)
         }
+    }
+    private func passo(_ icona: String, _ azione: @escaping () -> Void) -> some View {
+        Button(action: azione) {
+            Image(systemName: icona).font(.system(size: 9, weight: .black)).foregroundStyle(PSE.dim)
+                .frame(width: 26, height: 26).contentShape(Rectangle())
+        }.buttonStyle(.plain)
+    }
+    private func scorciatoia(_ t: String, _ azione: @escaping () -> Void) -> some View {
+        Button(action: { withAnimation(.easeOut(duration: 0.12)) { azione() } }) {
+            Text(t).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(PSE.dim)
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(Capsule().fill(PSE.surface))
+                .overlay(Capsule().strokeBorder(PSE.line, lineWidth: 1))
+        }.buttonStyle(.plain)
+    }
+    private func imposta(giorniDaOggi: Int, notti: Int) {
+        let c = Calendar.current
+        let da = c.date(byAdding: .day, value: giorniDaOggi, to: c.startOfDay(for: Date())) ?? Date()
+        cercaDa = da
+        cercaA = c.date(byAdding: .day, value: notti, to: da) ?? da
+        meseRicerca = primoDelMese(da)
+        scegliePartenza = false
+    }
+    /// Venerdì → domenica della settimana in corso, o della prossima se è passato.
+    private func prossimoWeekend() {
+        let c = Calendar.current
+        var d = c.startOfDay(for: Date())
+        for _ in 0..<8 {
+            if c.component(.weekday, from: d) == 6 { break }      // 6 = venerdì
+            d = c.date(byAdding: .day, value: 1, to: d) ?? d
+        }
+        cercaDa = d
+        cercaA = c.date(byAdding: .day, value: 2, to: d) ?? d
+        meseRicerca = primoDelMese(d)
+        scegliePartenza = false
+    }
+
+    // ── Calendario della ricerca ─────────────────────────────────────────────
+    // Non è un date picker: ogni giorno dice quante camere restano libere quella
+    // notte (per il numero di ospiti chiesto). Così le date non si scelgono alla
+    // cieca — si vede subito dov'è il buco.
+    private func primoDelMese(_ d: Date) -> Date {
+        let c = Calendar.current
+        return c.date(from: c.dateComponents([.year, .month], from: d)) ?? d
+    }
+    private func libereNotte(_ d: Date) -> Int {
+        strutture.reduce(0) { tot, s in
+            tot + roomsFor(s).filter {
+                posti($0) >= cercaOspiti && bookingFor(s, $0, d) == nil && !educampOccupies(s, $0, d)
+            }.count
+        }
+    }
+    private var giorniDelMese: [Date?] {
+        let c = Calendar.current
+        guard let range = c.range(of: .day, in: .month, for: meseRicerca) else { return [] }
+        // Lunedì primo: weekday 1 = domenica, quindi si sposta di due.
+        let primo = primoDelMese(meseRicerca)
+        let vuoti = (c.component(.weekday, from: primo) + 5) % 7
+        return Array(repeating: nil, count: vuoti)
+            + range.map { c.date(byAdding: .day, value: $0 - 1, to: primo) }
+    }
+    private func tocca(_ d: Date) {
+        let c = Calendar.current
+        if !scegliePartenza || d <= c.startOfDay(for: cercaDa) {
+            cercaDa = d
+            cercaA = c.date(byAdding: .day, value: 1, to: d) ?? d
+            scegliePartenza = true
+        } else {
+            cercaA = d
+            scegliePartenza = false
+        }
+    }
+    private var calendarioRicerca: some View {
+        let c = Calendar.current
+        let da = c.startOfDay(for: cercaDa), a = partenzaEffettiva
+        return VStack(spacing: 8) {
+            HStack {
+                Button { meseRicerca = c.date(byAdding: .month, value: -1, to: meseRicerca) ?? meseRicerca } label: {
+                    Image(systemName: "chevron.left").font(.system(size: 10, weight: .bold)).foregroundStyle(PSE.dim)
+                        .frame(width: 24, height: 22).contentShape(Rectangle())
+                }.buttonStyle(.plain)
+                Spacer()
+                Text(fmt("MMMM yyyy").string(from: meseRicerca).capitalized)
+                    .font(.system(size: 12, weight: .bold)).foregroundStyle(PSE.ink)
+                Spacer()
+                Button { meseRicerca = c.date(byAdding: .month, value: 1, to: meseRicerca) ?? meseRicerca } label: {
+                    Image(systemName: "chevron.right").font(.system(size: 10, weight: .bold)).foregroundStyle(PSE.dim)
+                        .frame(width: 24, height: 22).contentShape(Rectangle())
+                }.buttonStyle(.plain)
+            }
+            HStack(spacing: 2) {
+                ForEach(["L", "M", "M", "G", "V", "S", "D"], id: \.self) { g in
+                    Text(g).font(.system(size: 8.5, weight: .heavy)).foregroundStyle(PSE.faint)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 7), spacing: 2) {
+                ForEach(Array(giorniDelMese.enumerated()), id: \.offset) { _, giorno in
+                    if let d = giorno { cellaCalendario(d, da: da, a: a) } else { Color.clear.frame(height: 32) }
+                }
+            }
+            Text(scegliePartenza ? "Ora clicca la partenza" : "Clicca l'arrivo, poi la partenza")
+                .font(.system(size: 10)).foregroundStyle(scegliePartenza ? PSE.accent : PSE.faint)
+            HStack(spacing: 10) {
+                legendaCal(PSE.pos, "libere")
+                legendaCal(PSE.warn, "pieno")
+                legendaCal(PSE.accent, "soggiorno")
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12).fill(PSE.surface))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(PSE.line, lineWidth: 1))
+    }
+    private func legendaCal(_ c: Color, _ t: String) -> some View {
+        HStack(spacing: 4) {
+            Circle().fill(c).frame(width: 5, height: 5)
+            Text(t).font(.system(size: 9)).foregroundStyle(PSE.faint)
+        }
+    }
+    private func cellaCalendario(_ d: Date, da: Date, a: Date) -> some View {
+        let c = Calendar.current
+        let libere = libereNotte(d)
+        let passato = d < c.startOfDay(for: Date())
+        let arrivo = c.isDate(d, inSameDayAs: da)
+        let partenza = c.isDate(d, inSameDayAs: a)
+        let dentro = d > da && d < a
+        let oggi = c.isDateInToday(d)
+        return Button { tocca(d) } label: {
+            VStack(spacing: 1) {
+                Text("\(c.component(.day, from: d))")
+                    .font(.system(size: 11.5, weight: arrivo || partenza ? .bold : .medium))
+                    .foregroundStyle(arrivo || partenza ? PSE.ink : (passato ? PSE.faint.opacity(0.6) : PSE.text))
+                    .monospacedDigit()
+                // Il numerino sotto è la sostanza: quante camere restano quella
+                // notte per il numero di ospiti chiesto.
+                Text(passato ? " " : "\(libere)")
+                    .font(.system(size: 8, weight: .heavy)).monospacedDigit()
+                    .foregroundStyle(libere == 0 ? PSE.warn : PSE.pos.opacity(0.9))
+            }
+            .frame(maxWidth: .infinity).frame(height: 32)
+            .background(
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(arrivo || partenza ? PSE.accent.opacity(0.85)
+                          : dentro ? PSE.accent.opacity(0.20)
+                          : (libere == 0 && !passato ? PSE.warn.opacity(0.12) : Color.clear))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7)
+                    .strokeBorder(oggi ? PSE.accent.opacity(0.7) : Color.clear, lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(passato ? "Giorno passato"
+              : libere == 0 ? "Nessuna camera libera per \(plur(cercaOspiti, "ospite", "ospiti"))"
+              : "\(plur(libere, "camera libera", "camere libere")) per \(plur(cercaOspiti, "ospite", "ospiti"))")
+    }
+    /// Risultati in colonna stretta: casa, camera, posti e fin quando è libera.
+    private func elencoCamereCompatto(_ righe: [CameraLibera]) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(righe.enumerated()), id: \.element.id) { i, r in
+                Button { editing = nil; showForm = true } label: {
+                    HStack(spacing: 10) {
+                        RoundedRectangle(cornerRadius: 1.5).fill(strutturaColor(r.struttura))
+                            .frame(width: 3, height: 14)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(r.camera).font(.system(size: 12.5, weight: .semibold))
+                                .foregroundStyle(PSE.ink).lineLimit(1)
+                            Text("\(r.struttura.label) · fino a \(plur(r.posti, "ospite", "ospiti"))")
+                                .font(.system(size: 10)).foregroundStyle(PSE.faint)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        if let f = r.fino {
+                            let n = Calendar.current.dateComponents([.day], from: partenzaEffettiva, to: f).day ?? 0
+                            Text(n > 0 ? "si può allungare di \(plur(n, "notte", "notti"))" : "poi occupata")
+                                .font(.system(size: 10)).foregroundStyle(PSE.dim).lineLimit(1)
+                        } else {
+                            Text("nessun limite in vista").font(.system(size: 10)).foregroundStyle(PSE.pos.opacity(0.85))
+                        }
+                        Image(systemName: "plus.circle").font(.system(size: 12)).foregroundStyle(PSE.warn)
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 8).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Clicca per aprire una nuova prenotazione")
+                if i < righe.count - 1 { Divider().overlay(PSE.line) }
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 10).fill(PSE.panel))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(PSE.line, lineWidth: 1))
     }
     /// Elenco camere libere: casa, camera, posti e fin quando resta libera.
     /// Cliccando si apre la nuova prenotazione, che è quello che si fa dopo.
