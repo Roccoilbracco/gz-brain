@@ -545,6 +545,20 @@ private struct GZLeadDrawerView: View {
                     }
                 }
                 Spacer()
+                // Modifica ed elimina stanno anche in fondo al pannello, ma il
+                // fondo con una finestra più alta dello schermo non si
+                // raggiunge: qui in testata ci sono sempre.
+                Menu {
+                    Button { onEdit() } label: { Label("Modifica scheda", systemImage: "pencil") }
+                    Divider()
+                    Button(role: .destructive) { confermaElimina = true } label: {
+                        Label("Elimina tutta la scheda", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis").font(.system(size: 13, weight: .bold)).foregroundStyle(UI.dim)
+                        .frame(width: 28, height: 28).background(Circle().fill(Color.white.opacity(0.05)))
+                }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                 Button(action: onClose) {
                     Image(systemName: "xmark").font(.system(size: 13, weight: .semibold)).foregroundStyle(UI.dim)
                         .frame(width: 28, height: 28).background(Circle().fill(Color.white.opacity(0.05)))
@@ -673,12 +687,6 @@ private struct GZLeadDrawerView: View {
                         .background(RoundedRectangle(cornerRadius: 9).fill(UI.tint(.stop).opacity(0.12)))
                         .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(UI.tint(.stop).opacity(0.4), lineWidth: 1))
                 }.buttonStyle(.plain)
-                .confirmationDialog("Eliminare questa scheda?", isPresented: $confermaElimina) {
-                    Button("Elimina", role: .destructive, action: onDelete)
-                    Button("Annulla", role: .cancel) {}
-                } message: {
-                    Text("\(lead.name.isEmpty ? "Scheda senza nome" : lead.name) — con note, contatti e storico. L'operazione non si può annullare.")
-                }
             }
             .padding(EdgeInsets(top: 12, leading: 22, bottom: 18, trailing: 22))
         }
@@ -687,6 +695,16 @@ private struct GZLeadDrawerView: View {
         .overlay(Rectangle().frame(width: 1).foregroundStyle(UI.line), alignment: .leading)
         .ignoresSafeArea()
         .onAppear { note = lead.notes ?? "" }
+        // Sul pannello e non sul bottone: si chiede da due punti diversi, e
+        // agganciata al bottone in fondo la conferma seguirebbe lui fuori
+        // dallo schermo su finestre alte.
+        .confirmationDialog("Eliminare tutta la scheda di \(lead.name.isEmpty ? "questo contatto" : lead.name)?",
+                            isPresented: $confermaElimina, titleVisibility: .visible) {
+            Button("Elimina tutto", role: .destructive, action: onDelete)
+            Button("Annulla", role: .cancel) {}
+        } message: {
+            Text("Spariscono anagrafica, richiesta, note e storico della pipeline, e non si possono recuperare. Documenti e immobili collegati restano in archivio, solo senza più il legame con questa scheda.")
+        }
     }
 
     /// Righe della sezione RICERCA, solo quelle valorizzate; nil se non c'è nulla da mostrare.
