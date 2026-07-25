@@ -251,8 +251,12 @@ struct DocRow: View {
                         .background(RoundedRectangle(cornerRadius: 6).fill(UI.surface))
                         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(UI.accent.opacity(0.6), lineWidth: 1))
                 } else {
+                    // Il nome va a capo invece di finire in «…»: le tre colonne
+                    // sono strette e un «ENCARGO ALQUI…» non dice quale sia il
+                    // documento, che è l'unica cosa che quella riga deve dire.
                     Text(doc.titolo).font(.system(size: 12.5, weight: .medium)).foregroundStyle(UI.ink)
-                        .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.leading)
                         // Il nome è la cosa che si sbaglia più spesso caricando:
                         // due clic sopra e si corregge, senza cercare la matita.
                         .onTapGesture(count: 2) { if onRinomina != nil { iniziaRinomina() } }
