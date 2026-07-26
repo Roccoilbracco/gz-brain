@@ -169,6 +169,12 @@ Deno.serve(async () => {
       } else {
         // aggiorna solo i campi di competenza Beds24; propaga solo le cancellazioni
         const patch: Record<string, unknown> = { ...base };
+        // La camera NO: quella la decidiamo qui. Beds24 manda il tipo di stanza
+        // del canale ("Camera King"), non la stanza in cui l'ospite dorme
+        // davvero, e riscrivendola a ogni giro cancellava le assegnazioni fatte
+        // a mano nel planning — si correggeva la camera e venti minuti dopo era
+        // tornata com'era. Sull'inserimento resta, come primo valore.
+        delete patch.camera;
         if (st === "cancellata") patch.status = "cancellata";
         const pr = await fetch(`${SUPABASE_URL}/rest/v1/prenotazioni?id=eq.${existingId}`, {
           method: "PATCH",
