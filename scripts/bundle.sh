@@ -48,6 +48,13 @@ cat > "$BUNDLE/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <!-- Senza queste righe macOS non chiede il permesso e nei pannelli «apri file»
+       Scrivania, Documenti e Download compaiono vuoti: le foto da caricare
+       sembrano sparite. Il testo è quello che si legge nella richiesta. -->
+  <key>NSDesktopFolderUsageDescription</key><string>Per scegliere le foto e i documenti degli immobili salvati sulla Scrivania.</string>
+  <key>NSDocumentsFolderUsageDescription</key><string>Per scegliere le foto e i documenti degli immobili salvati in Documenti.</string>
+  <key>NSDownloadsFolderUsageDescription</key><string>Per scegliere le foto e i documenti degli immobili appena scaricati.</string>
+  <key>NSRemovableVolumesUsageDescription</key><string>Per caricare foto e documenti da chiavette e dischi esterni.</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict>
 </plist>

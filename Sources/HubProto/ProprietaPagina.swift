@@ -1,4 +1,6 @@
 import AppKit
+import CoreImage
+import ImageIO
 import SwiftUI
 
 // ── Pagina di dettaglio di un immobile ────────────────────────────────────────
@@ -104,39 +106,44 @@ struct ProprietaDetailView: View {
     }
 
     var body: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 16) {
-                barraAzioni
+        VStack(alignment: .leading, spacing: 14) {
+            // La barra sta FUORI dalla ScrollView, e resta ferma in alto.
+            // Dentro, scorrendo, finiva sotto la fascia della titlebar (la
+            // finestra non ha barra del titolo ma quella zona resta area di
+            // trascinamento) e i suoi bottoni smettevano di rispondere: si
+            // vedevano, ma il clic diventava una presa della finestra.
+            barraAzioni
+                .padding(EdgeInsets(top: 54, leading: 30, bottom: 0, trailing: 30))
+                .nonTrascinaLaFinestra()
 
-                if let errorMsg {
-                    GlassCard {
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 16) {
+                    if let errorMsg {
+                        GlassCard {
+                            HStack(spacing: 10) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(Color(hex: 0xffb3ad))
+                                Text(errorMsg).font(.system(size: 12.5)).foregroundStyle(Color(hex: 0xffb3ad))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }.padding(16)
+                        }
+                    }
+
+                    if loading {
                         HStack(spacing: 10) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(Color(hex: 0xffb3ad))
-                            Text(errorMsg).font(.system(size: 12.5)).foregroundStyle(Color(hex: 0xffb3ad))
-                                .fixedSize(horizontal: false, vertical: true)
-                        }.padding(16)
+                            ProgressView().controlSize(.small)
+                            Text("Caricamento…").font(.system(size: 13)).foregroundStyle(Holo.subDim)
+                        }.padding(.top, 40)
+                    } else if isNew || p != nil {
+                        testata
+                        numeriChiave
+                        barraSezioni
+                        contenuto
                     }
                 }
-
-                if loading {
-                    HStack(spacing: 10) {
-                        ProgressView().controlSize(.small)
-                        Text("Caricamento…").font(.system(size: 13)).foregroundStyle(Holo.subDim)
-                    }.padding(.top, 40)
-                } else if isNew || p != nil {
-                    testata
-                    numeriChiave
-                    barraSezioni
-                    contenuto
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(EdgeInsets(top: 0, leading: 30, bottom: 40, trailing: 30))
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            // 54 in alto e non meno: la finestra non ha barra del titolo e il
-            // contenuto le passa sotto, ma quella fascia resta zona di
-            // trascinamento e si mangia i clic. Con 34 i bottoni di questa
-            // barra finivano dentro la fascia e non rispondevano.
-            .padding(EdgeInsets(top: 54, leading: 30, bottom: 40, trailing: 30))
         }
         .task(id: proprietaId ?? "nuova") { await load() }
         .sheet(isPresented: $showAddEvent) {
@@ -943,9 +950,13 @@ struct ProprietaDetailView: View {
         // asincrono va aperto lì e basta aspettarne la scelta.
         let scelte: [URL] = await MainActor.run {
             let panel = NSOpenPanel()
-            panel.allowedContentTypes = [.jpeg, .png, .image]
+            // Le foto che arrivano dall'iPhone sono HEIC: elencati uno per uno
+            // perché con il solo `.image` bastava un tipo non registrato sul Mac
+            // per farle sparire dal pannello, e la cartella sembrava vuota.
+            panel.allowedContentTypes = [.jpeg, .png, .heic, .heif, .tiff, .gif, .bmp, .webP, .image]
             panel.allowsMultipleSelection = true
             panel.canChooseDirectories = false
+            panel.message = "Foto dell'immobile — JPG, PNG o HEIC dell'iPhone"
             return panel.runModal() == .OK ? panel.urls : []
         }
         guard !scelte.isEmpty else { return }
@@ -956,9 +967,9 @@ struct ProprietaDetailView: View {
         var falliti = 0
         for url in scelte {
             do {
-                let data = try Data(contentsOf: url)
+                let (data, ext) = try datiPerIlWeb(url)
                 paths.append(try await HubAPI.uploadProprietaPhoto(
-                    propId: id, data: data, ext: url.pathExtension.lowercased()))
+                    propId: id, data: data, ext: ext))
             } catch { falliti += 1 }
         }
         do {
@@ -969,6 +980,62 @@ struct ProprietaDetailView: View {
             fotoMsg = falliti > 0 ? "\(falliti) file non caricati (formato non supportato?)" : nil
         } catch let e {
             fotoMsg = "Caricamento non riuscito: \(e.localizedDescription)"
+        }
+    }
+
+    /// Lato lungo oltre il quale una foto non si carica com'è. Uno schermo non
+    /// mostra più dettaglio di così, mentre i 12 megapixel dell'iPhone pesano
+    /// quanto dieci foto: con trenta immagini per immobile è la differenza fra
+    /// una scheda che si apre e una che fa aspettare.
+    private static let latoMassimoFoto: CGFloat = 2560
+
+    /// Prepara il file scelto per il bucket: rotazione EXIF applicata ai pixel
+    /// (altrimenti i verticali dell'iPhone finiscono coricati sul sito), lato
+    /// lungo riportato nei limiti e formato pubblicabile. Quello che non è già
+    /// JPG o PNG — l'HEIC dell'iPhone in testa — diventa JPEG: in HEIC la foto
+    /// risulterebbe caricata, ma sul sito e nel PDF resterebbe un buco.
+    private func datiPerIlWeb(_ url: URL) throws -> (Data, String) {
+        let ext = url.pathExtension.lowercased()
+        let uscitaPNG = (ext == "png")
+        let giaPubblicabile = uscitaPNG || ext == "jpg" || ext == "jpeg"
+        let comEra = { (try Data(contentsOf: url), uscitaPNG ? "png" : "jpg") }
+
+        guard var img = CIImage(contentsOf: url, options: [.applyOrientationProperty: true]) else {
+            // Core Image non l'ha aperta: se il formato è già buono per il web
+            // la carico com'è — meglio una foto pesante che una foto persa.
+            if giaPubblicabile { return try comEra() }
+            throw FotoErrore.nonConvertibile(url.lastPathComponent)
+        }
+
+        let lato = max(img.extent.width, img.extent.height)
+        let scala = Self.latoMassimoFoto / lato
+        if scala < 1 {
+            img = img.applyingFilter("CILanczosScaleTransform", parameters: [kCIInputScaleKey: scala])
+        } else if giaPubblicabile {
+            // Niente da correggere: ricomprimerla la peggiorerebbe e basta.
+            return try comEra()
+        }
+
+        let ctx = CIContext()
+        let spazio = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        if uscitaPNG {
+            guard let d = ctx.pngRepresentation(of: img, format: .RGBA8, colorSpace: spazio)
+            else { throw FotoErrore.nonConvertibile(url.lastPathComponent) }
+            return (d, "png")
+        }
+        guard let d = ctx.jpegRepresentation(
+            of: img, colorSpace: spazio,
+            options: [CIImageRepresentationOption(
+                rawValue: kCGImageDestinationLossyCompressionQuality as String): 0.9])
+        else { throw FotoErrore.nonConvertibile(url.lastPathComponent) }
+        return (d, "jpg")
+    }
+
+    private enum FotoErrore: LocalizedError {
+        case nonConvertibile(String)
+        var errorDescription: String? {
+            if case let .nonConvertibile(nome) = self { return "\(nome): formato non leggibile" }
+            return nil
         }
     }
 
