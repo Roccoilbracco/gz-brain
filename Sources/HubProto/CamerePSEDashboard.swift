@@ -144,8 +144,16 @@ extension HubAPI {
     static func createPrenotazione(_ f: [String: Any?]) async throws -> Prenotazione {
         try await sb.insertReturning("prenotazioni", body: f)
     }
-    static func updatePrenotazione(id: String, fields: [String: Any?]) async throws {
-        var b = fields; b["updated_at"] = isoNowString()
+    /// - Parameter aMano: true quando la modifica la fa una persona. Segna la
+    ///   riga come «toccata a mano» e da lì in poi la sincronizzazione Beds24 la
+    ///   lascia stare: prima riscriveva tutto a ogni giro e le correzioni
+    ///   sparivano da sole dopo venti minuti. Le scritture automatiche dell'app
+    ///   (l'allineamento del pagato Educamp) passano `false`, se no basterebbe
+    ///   aprire l'app per bloccare mezzo archivio.
+    static func updatePrenotazione(id: String, fields: [String: Any?], aMano: Bool = true) async throws {
+        var b = fields
+        b["updated_at"] = isoNowString()
+        if aMano { b["modificata_a_mano"] = isoNowString() }
         try await sb.mutate("prenotazioni?id=eq.\(id)", method: "PATCH", body: b)
     }
     static func deletePrenotazione(id: String) async throws {
@@ -1737,7 +1745,7 @@ struct CamerePSEDashboard: View {
             guard let atteso = await EducampPagamenti.pagato(perNome: b.guest_name, mese: String(ci.prefix(7)),
                                                              righe: educampRighe, saldi: saldi),
                   atteso != b.paid_cents else { continue }
-            try? await HubAPI.updatePrenotazione(id: b.id, fields: ["paid_cents": atteso])
+            try? await HubAPI.updatePrenotazione(id: b.id, fields: ["paid_cents": atteso], aMano: false)
             if let i = items.firstIndex(where: { $0.id == b.id }) { items[i].paid_cents = atteso }
             if var sel = selected, sel.id == b.id { sel.paid_cents = atteso; selected = sel }
         }

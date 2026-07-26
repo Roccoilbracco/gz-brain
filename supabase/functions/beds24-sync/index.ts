@@ -3,9 +3,12 @@
 // - refresh token Beds24 letto da public.integrations (solo service_role)
 // - mapping struttura dal nome proprietà, camera dal nome stanza Beds24
 // - dedup su ext_id ("beds24:<id>"): nuove → INSERT; esistenti → PATCH dei soli
-//   campi "di competenza" Beds24 (date, ospite, importo, camera). NON tocca
-//   status/paid_cents delle righe già presenti (li gestisci tu in app), tranne
-//   propagare le CANCELLAZIONI. Così i check-in/out e i pagamenti locali restano.
+//   campi "di competenza" Beds24 (date, ospite, importo). NON tocca camera,
+//   status e paid_cents delle righe già presenti.
+// - una riga con `modificata_a_mano` valorizzato, o con il soggiorno già finito,
+//   non si tocca più: comanda il gestionale. Unica eccezione, e sta lì apposta:
+//   la CANCELLAZIONE arriva sempre, se no la camera resta occupata nel planning
+//   e si rischia di rivenderla.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -130,13 +133,15 @@ Deno.serve(async () => {
     const visti = new Set(bookings.map((b) => b.id));
     for (const c of cancellate) if (!visti.has(c.id)) bookings.push(c);
 
-    // righe già presenti (per ext_id)
-    const exRes = await fetch(`${SUPABASE_URL}/rest/v1/prenotazioni?select=id,ext_id&ext_id=not.is.null`, { headers: dbHeaders });
-    const existing: { id: string; ext_id: string }[] = await exRes.json();
-    const byExt = new Map(existing.map((e) => [e.ext_id, e.id]));
+    // righe già presenti (per ext_id), con quello che serve a decidere se
+    // toccarle: chi l'ha modificata a mano e quando finisce il soggiorno.
+    const exRes = await fetch(`${SUPABASE_URL}/rest/v1/prenotazioni?select=id,ext_id,modificata_a_mano,checkout&ext_id=not.is.null`, { headers: dbHeaders });
+    const existing: { id: string; ext_id: string; modificata_a_mano: string | null; checkout: string | null }[] = await exRes.json();
+    const byExt = new Map(existing.map((e) => [e.ext_id, e]));
+    const oggi = new Date().toISOString().slice(0, 10);
 
     const toInsert: any[] = [];
-    let inserted = 0, updated = 0, skipped = 0;
+    let inserted = 0, updated = 0, skipped = 0, protette = 0;
 
     for (const b of bookings) {
       const st = statusFor(b.status);
@@ -160,23 +165,30 @@ Deno.serve(async () => {
         ext_id: extId,
       };
 
-      const existingId = byExt.get(extId);
-      if (!existingId) {
+      const riga = byExt.get(extId);
+      if (!riga) {
         // Cancellata che non abbiamo mai importato: non c'è niente da annullare,
         // inserirla creerebbe solo rumore nel planning.
         if (st === "cancellata") { skipped++; continue; }
         toInsert.push({ ...base, status: st });
       } else {
-        // aggiorna solo i campi di competenza Beds24; propaga solo le cancellazioni
-        const patch: Record<string, unknown> = { ...base };
-        // La camera NO: quella la decidiamo qui. Beds24 manda il tipo di stanza
-        // del canale ("Camera King"), non la stanza in cui l'ospite dorme
-        // davvero, e riscrivendola a ogni giro cancellava le assegnazioni fatte
-        // a mano nel planning — si correggeva la camera e venti minuti dopo era
-        // tornata com'era. Sull'inserimento resta, come primo valore.
+        // Una riga toccata a mano, o un soggiorno già finito, non si riscrive:
+        // il gestionale è la fonte, non il canale. Vale per tutto tranne la
+        // cancellazione — se il cliente disdice e noi non lo vediamo, la camera
+        // resta occupata nel planning e si rischia di rivenderla.
+        const bloccata = riga.modificata_a_mano !== null ||
+                         (riga.checkout !== null && riga.checkout < oggi);
+        if (bloccata && st !== "cancellata") { protette++; continue; }
+
+        const patch: Record<string, unknown> = bloccata ? {} : { ...base };
+        // La camera NO nemmeno sulle righe libere: quella la decidiamo qui.
+        // Beds24 manda il tipo di stanza venduto ("Camera King"), non la stanza
+        // in cui l'ospite dorme davvero. Sull'inserimento resta, come primo
+        // valore, e da lì in poi comanda il planning.
         delete patch.camera;
         if (st === "cancellata") patch.status = "cancellata";
-        const pr = await fetch(`${SUPABASE_URL}/rest/v1/prenotazioni?id=eq.${existingId}`, {
+        if (Object.keys(patch).length === 0) { protette++; continue; }
+        const pr = await fetch(`${SUPABASE_URL}/rest/v1/prenotazioni?id=eq.${riga.id}`, {
           method: "PATCH",
           headers: { ...dbHeaders, Prefer: "return=minimal" },
           body: JSON.stringify(patch),
@@ -195,7 +207,7 @@ Deno.serve(async () => {
       else return new Response(JSON.stringify({ error: "insert_failed", detail: (await ir.text()).slice(0, 300) }), { status: 502, headers: { "content-type": "application/json" } });
     }
 
-    return new Response(JSON.stringify({ ok: true, fetched: bookings.length, cancellate: cancellate.length, inserted, updated, skipped }), { headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ ok: true, fetched: bookings.length, cancellate: cancellate.length, inserted, updated, skipped, protette }), { headers: { "content-type": "application/json" } });
   } catch (e) {
     return new Response(JSON.stringify({ error: String(e) }), { status: 500, headers: { "content-type": "application/json" } });
   }
