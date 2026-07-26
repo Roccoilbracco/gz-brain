@@ -865,12 +865,20 @@ struct InlinePicker: View {
     let sel: String
     let set: (String) -> Void
 
+    /// Un valore scritto sul DB ma assente dall'elenco — «Local», «Piso»,
+    /// «Ático»: il vocabolario spagnolo del mercato di Ibiza, che la lista
+    /// italiana non prevede — si aggiunge in coda al menu. Senza, il campo
+    /// appariva vuoto e l'immobile sembrava senza tipologia, pur avendola.
+    private var voci: [(String, String)] {
+        sel.isEmpty || opts.contains { $0.0 == sel } ? opts : opts + [(sel, sel)]
+    }
+
     var body: some View {
         Menu {
-            ForEach(opts, id: \.0) { o in Button(o.1) { set(o.0) } }
+            ForEach(voci, id: \.0) { o in Button(o.1) { set(o.0) } }
         } label: {
             HStack(spacing: 8) {
-                Text(opts.first { $0.0 == sel }?.1 ?? "—").font(.system(size: 13))
+                Text(voci.first { $0.0 == sel }?.1 ?? "—").font(.system(size: 13))
                     .foregroundStyle(sel.isEmpty ? Holo.labelDim : Color(hex: 0xe8f2ff)).lineLimit(1)
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(Holo.labelDim)
