@@ -112,6 +112,12 @@ enum ServizioTab: String, CaseIterable, Identifiable {
 /// Le due strutture, nell'ordine in cui vanno mostrate come sotto-finestre.
 let CASE_PSE: [(String, String)] = [("via-po", "Via Po"), ("via-romagna", "Via Romagna")]
 
+/// Da quando contano i conti dell'affittacamere. Le bollette di prima ci sono
+/// (sono arretrati di casa, si vogliono ritrovare) ma restano in archivio,
+/// fuori da ogni totale: se no il primo mese di attività risulta partito con
+/// quattromila euro di utenze già addosso.
+let INIZIO_CONTEGGIO_PSE = "2026-07-01"
+
 @MainActor final class ServiziModel: ObservableObject {
     @Published var pulizie: [Pulizia] = []
     @Published var colazioni: [Colazione] = []
@@ -460,7 +466,7 @@ struct ServiziView: View {
     // si nettano, perché confonderebbero due conti diversi.
     /// Il conteggio parte da luglio 2026: le bollette precedenti restano
     /// archiviate ma vanno sistemate a parte.
-    private static let INIZIO_CONTEGGIO = "2026-07-01"
+    static let INIZIO_CONTEGGIO = INIZIO_CONTEGGIO_PSE
     private var bolletteCorrenti: [Bolletta] {
         model.bollette.filter { ($0.scadenza ?? "") >= Self.INIZIO_CONTEGGIO }
     }

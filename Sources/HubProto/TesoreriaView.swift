@@ -322,9 +322,17 @@ struct TesoreriaView: View {
     private var puliziaFatte: Int { model.pulizie.filter { $0.stato == "fatta" }.reduce(0) { $0 + $1.costo_cents } }
     private var puliziePreviste: Int { model.pulizie.filter { $0.stato != "fatta" }.reduce(0) { $0 + $1.costo_cents } }
     // Utenze: le bollette registrate, divise fra quelle già pagate e quelle che
-    // scadranno. Erano solo nella scheda Servizi, e nel riepilogo mancavano.
-    private var utenzePagate: Int { model.bollette.filter { $0.pagata }.reduce(0) { $0 + $1.importo_cents } }
-    private var utenzeDaPagare: Int { model.bollette.filter { !$0.pagata }.reduce(0) { $0 + $1.importo_cents } }
+    // scadranno. Contano solo dal primo luglio, come nella scheda Servizi: le
+    // bollette di prima sono arretrati di casa, restano in archivio e fuori dai
+    // totali — se no il riepilogo diceva €4.636 di utenze in un mese di attività.
+    private var bolletteContate: [Bolletta] {
+        model.bollette.filter { ($0.scadenza ?? "") >= INIZIO_CONTEGGIO_PSE }
+    }
+    private var utenzePagate: Int { bolletteContate.filter { $0.pagata }.reduce(0) { $0 + $1.importo_cents } }
+    private var utenzeDaPagare: Int { bolletteContate.filter { !$0.pagata }.reduce(0) { $0 + $1.importo_cents } }
+    private var utenzeArchivio: Int {
+        model.bollette.filter { ($0.scadenza ?? "") < INIZIO_CONTEGGIO_PSE }.reduce(0) { $0 + $1.importo_cents }
+    }
     /// Manutenzione e spese varie: non hanno una tabella, sono uscite di cassa
     /// lette per categoria — la stessa regola della scheda Servizi.
     private func speseServizio(_ t: ServizioTab) -> Int {
@@ -667,10 +675,13 @@ struct TesoreriaView: View {
                 // Le altre voci di costo che vivono nella scheda Servizi: qui
                 // mancavano, e il riepilogo diceva che i servizi erano solo
                 // pulizie e colazioni.
-                servCard("UTENZE — BOLLETTE PAGATE", utenzePagate, "bolt.fill", PSE.neg) { servizioSheet = .utenze }
+                servCard("UTENZE — PAGATE DA LUGLIO", utenzePagate, "bolt.fill", PSE.neg) { servizioSheet = .utenze }
                 servCard("UTENZE — DA PAGARE", utenzeDaPagare, "bolt.badge.clock", PSE.warn) { servizioSheet = .utenze }
                 servCard("MANUTENZIONE", speseServizio(.manutenzione), "wrench.and.screwdriver.fill", PSE.neg) { servizioSheet = .manutenzione }
                 servCard("SPESE VARIE", speseServizio(.speseVarie), "cart.fill", PSE.neg) { servizioSheet = .speseVarie }
+            }
+            if utenzeArchivio > 0 {
+                nota("I conti dell'affittacamere partono dal 1° luglio 2026. Le bollette arrivate prima — \(eurc(utenzeArchivio)) fra luce, gas e internet da settembre 2025 — sono arretrati di casa: restano registrate e si ritrovano in Servizi → Utenze, in fondo, ma non entrano in nessun totale.")
             }
 
             // ── note ───────────────────────────────────────────────────────
