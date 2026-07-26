@@ -950,9 +950,10 @@ struct ProprietaDetailView: View {
         // asincrono va aperto lì e basta aspettarne la scelta.
         let scelte: [URL] = await MainActor.run {
             let panel = NSOpenPanel()
-            // Le foto che arrivano dall'iPhone sono HEIC: elencati uno per uno
-            // perché con il solo `.image` bastava un tipo non registrato sul Mac
-            // per farle sparire dal pannello, e la cartella sembrava vuota.
+            // Solo immagini: fuori dall'elenco PDF, fogli e documenti, che in
+            // una Scrivania da cento file sono la metà del rumore da scartare.
+            // I tipi sono elencati uno per uno oltre a `.image` perché è quello
+            // che il pannello mostra: l'HEIC dell'iPhone deve esserci.
             panel.allowedContentTypes = [.jpeg, .png, .heic, .heif, .tiff, .gif, .bmp, .webP, .image]
             panel.allowsMultipleSelection = true
             panel.canChooseDirectories = false
