@@ -41,15 +41,6 @@ struct GraficiTesoreria: View {
     enum Grana: String, CaseIterable, Identifiable {
         case giorno = "Giorno", settimana = "Settimana", mese = "Mese", anno = "Anno"
         var id: String { rawValue }
-        /// Quanti periodi mostrare: sempre lo stesso arco di tempo, più o meno.
-        var quanti: Int {
-            switch self {
-            case .giorno: return 45
-            case .settimana: return 20
-            case .mese: return 18
-            case .anno: return 5
-            }
-        }
         var etichetta: String {
             switch self {
             case .giorno: return "al giorno"
@@ -173,6 +164,10 @@ struct GraficiTesoreria: View {
         let giorni: Int
         let ricavo: Int
         let nottiVendute: Int
+        /// Periodo non ancora finito: il suo ricavo è quello già prenotato, non
+        /// quello che sarà. Sta fuori dalle medie, se no un mese di ottobre con
+        /// due camere vendute farebbe sembrare che si guadagna la metà.
+        let futuro: Bool
     }
     private func chiave(_ d: Date, _ g: Grana) -> (String, String, Date, Int) {
         let cal = Calendar.current
@@ -202,9 +197,17 @@ struct GraficiTesoreria: View {
             r.tot += v.cents; r.notti += v.camere
             ric[k] = r
         }
-        return ric.keys.sorted().suffix(grana.quanti).map { k in
+        // Dal primo giorno con un ricavo fino all'ultimo prenotato: si parte
+        // dall'inizio dell'attività, non dagli ultimi N periodi — che con le
+        // prenotazioni di ottobre già in calendario voleva dire aprire il
+        // grafico a settembre.
+        let cal = Calendar.current
+        let oggi = cal.startOfDay(for: Date())
+        return ric.keys.sorted().map { k in
             let r = ric[k]!
-            return Periodo(id: k, etichetta: r.et, inizio: r.ini, giorni: r.gg, ricavo: r.tot, nottiVendute: r.notti)
+            let fine = cal.date(byAdding: .day, value: r.gg, to: r.ini) ?? r.ini
+            return Periodo(id: k, etichetta: r.et, inizio: r.ini, giorni: r.gg,
+                           ricavo: r.tot, nottiVendute: r.notti, futuro: fine > oggi)
         }
     }
 
@@ -281,76 +284,94 @@ struct GraficiTesoreria: View {
     // ── 0. Ricavi e medie ────────────────────────────────────────────────────
     private var medieView: some View {
         let dati = periodi
-        let conRicavo = dati.filter { $0.ricavo > 0 }
+        // Le medie si fanno sui periodi chiusi: quelli ancora aperti hanno
+        // dentro solo quello che è già prenotato e tirerebbero giù il conto.
+        let chiusi = dati.filter { !$0.futuro && $0.ricavo > 0 }
+        let totChiusi = chiusi.reduce(0) { $0 + $1.ricavo }
         let tot = dati.reduce(0) { $0 + $1.ricavo }
-        let media = conRicavo.isEmpty ? 0 : tot / conRicavo.count
-        let migliore = dati.max { $0.ricavo < $1.ricavo }
-        let notti = dati.reduce(0) { $0 + $1.nottiVendute }
-        let giorni = dati.reduce(0) { $0 + $1.giorni }
-        let perNotte = notti > 0 ? tot / notti : 0                     // quanto rende una camera venduta
-        let perCamera = giorni > 0 ? tot / (giorni * camereTotali) : 0  // quanto rende una camera, piena o vuota
+        let media = chiusi.isEmpty ? 0 : totChiusi / chiusi.count
+        let migliore = chiusi.max { $0.ricavo < $1.ricavo }
+        let notti = chiusi.reduce(0) { $0 + $1.nottiVendute }
+        let giorni = chiusi.reduce(0) { $0 + $1.giorni }
+        let perNotte = notti > 0 ? totChiusi / notti : 0                     // quanto rende una camera venduta
+        let perCamera = giorni > 0 ? totChiusi / (giorni * camereTotali) : 0  // quanto rende una camera, piena o vuota
         let maxV = max(1, dati.map { $0.ricavo }.max() ?? 1)
+        let daFare = tot - totChiusi
         return VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
                 PSESegmented(items: Grana.allCases.map { ($0, $0.rawValue) }, selection: $grana)
                 Spacer(minLength: 0)
-                Text("Ultimi \(dati.count) \(grana.rawValue.lowercased())\(dati.count == 1 ? "" : "i") con movimento")
-                    .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+                legenda([("Passato", PSE.pos), ("Ancora da fare", PSE.pos.opacity(0.35))])
             }
             HStack(spacing: 10) {
                 statoCard("MEDIA \(grana.etichetta.uppercased())", eurc(media), PSE.accent,
-                          "Calcolata sui \(conRicavo.count) periodi che hanno prodotto qualcosa")
+                          "Media sui \(chiusi.count) periodi già chiusi: quelli ancora aperti hanno dentro solo il prenotato e falserebbero il conto")
                 statoCard("MIGLIORE", migliore.map { eurc($0.ricavo) } ?? "—", PSE.pos,
                           migliore.map { "\($0.etichetta): \(eurc($0.ricavo))" } ?? "")
                 statoCard("PER NOTTE VENDUTA", eurc(perNotte), PSE.ink,
-                          "\(notti) notti vendute in tutto: è il prezzo medio incassato per camera occupata")
+                          "\(notti) notti vendute nei periodi chiusi: è il prezzo medio incassato per camera occupata")
                 statoCard("PER CAMERA AL GIORNO", eurc(perCamera), PSE.warn,
-                          "Ricavo diviso per tutte le \(camereTotali) camere e tutti i giorni, vuote comprese")
-                statoCard("TOTALE", eurc(tot), PSE.pos, "Somma del periodo mostrato")
+                          "Ricavo diviso per tutte le \(camereTotali) camere e tutti i giorni passati, vuote comprese")
+                statoCard("GIÀ IN CALENDARIO", eurc(daFare), PSE.accent,
+                          "Quello che i soggiorni futuri porteranno, per le prenotazioni che ci sono adesso")
             }
             if dati.isEmpty {
                 EmptyStateCard(icon: "chart.bar", text: "Nessun soggiorno da cui calcolare i ricavi.")
             } else {
-                HStack(alignment: .bottom, spacing: grana == .giorno ? 3 : 8) {
-                    ForEach(dati) { p in colonnaPeriodo(p, maxV: maxV, media: media) }
-                    Spacer(minLength: 0)
+                // Le barre si stringono per starci tutte: si parte dal primo
+                // giorno con un ricavo e si arriva all'ultimo prenotato, senza
+                // tagliare né l'inizio né la fine.
+                GeometryReader { g in
+                    let spazio: CGFloat = dati.count > 60 ? 1.5 : 4
+                    let w = max(2.5, (g.size.width - spazio * CGFloat(dati.count - 1)) / CGFloat(dati.count))
+                    let ogniQuante = max(1, Int((CGFloat(dati.count) / (g.size.width / 46)).rounded(.up)))
+                    HStack(alignment: .bottom, spacing: spazio) {
+                        ForEach(Array(dati.enumerated()), id: \.element.id) { i, p in
+                            colonnaPeriodo(p, maxV: maxV, media: media, larghezza: w,
+                                           mostraEtichetta: i % ogniQuante == 0 || dati.count <= 14)
+                        }
+                    }
+                    .frame(width: g.size.width, height: 190, alignment: .bottom)
                 }
-                .frame(height: 190, alignment: .bottom)
+                .frame(height: 190)
                 if let k = periodoSotto, let p = dati.first(where: { $0.id == k }) {
                     dettaglioPeriodo(p)
                 } else {
-                    Text("La riga tratteggiata è la media. Passa sopra una colonna per i numeri di quel \(grana.rawValue.lowercased()).")
+                    Text("Dal primo giorno con un ricavo all'ultimo già prenotato. La riga è la media dei periodi chiusi; le colonne chiare sono soggiorni che devono ancora arrivare. Passa sopra una colonna per i numeri di quel \(grana.rawValue.lowercased()).")
                         .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
     }
-    private func colonnaPeriodo(_ p: Periodo, maxV: Int, media: Int) -> some View {
+    private func colonnaPeriodo(_ p: Periodo, maxV: Int, media: Int,
+                                larghezza: CGFloat, mostraEtichetta: Bool) -> some View {
         let h: CGFloat = 140
         let sotto = periodoSotto == p.id
-        let larghezza: CGFloat = grana == .giorno ? 16 : (grana == .anno ? 70 : 40)
+        let opacita: Double = sotto ? 1 : (p.futuro ? 0.35 : (p.ricavo >= media ? 0.8 : 0.5))
         return VStack(spacing: 5) {
             Text(sotto ? eurc(p.ricavo) : " ")
                 .font(.system(size: 9, weight: .bold)).monospacedDigit().foregroundStyle(PSE.ink)
-                .lineLimit(1).minimumScaleFactor(0.6).frame(height: 11)
+                .lineLimit(1).fixedSize().frame(height: 11)
             ZStack(alignment: .bottom) {
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(PSE.pos.opacity(sotto ? 1 : (p.ricavo >= media ? 0.78 : 0.45)))
+                RoundedRectangle(cornerRadius: min(4, larghezza / 3))
+                    .fill(PSE.pos.opacity(opacita))
                     .frame(width: larghezza, height: max(2, CGFloat(p.ricavo) / CGFloat(maxV) * h))
             }
-            .frame(height: h, alignment: .bottom)
+            .frame(width: larghezza, height: h, alignment: .bottom)
             .overlay(alignment: .bottom) {
                 // la media, come riferimento: si vede subito chi sta sopra e chi sotto
-                Rectangle().fill(PSE.accent.opacity(0.65)).frame(height: 1)
+                Rectangle().fill(PSE.accent.opacity(0.55)).frame(height: 1)
                     .offset(y: -(CGFloat(media) / CGFloat(maxV) * h))
             }
-            Text(p.etichetta).font(.system(size: 8.5, weight: sotto ? .bold : .medium))
-                .foregroundStyle(sotto ? PSE.ink : PSE.dim).lineLimit(1).minimumScaleFactor(0.7)
-                .frame(width: larghezza + 8)
+            Text(mostraEtichetta ? p.etichetta : " ")
+                .font(.system(size: 8, weight: sotto ? .bold : .medium))
+                .foregroundStyle(sotto ? PSE.ink : PSE.dim).lineLimit(1).fixedSize()
+                .frame(width: larghezza, alignment: .center)
         }
         .contentShape(Rectangle())
         .onHover { d in periodoSotto = d ? p.id : (periodoSotto == p.id ? nil : periodoSotto) }
-        .help("\(p.etichetta): \(eurc(p.ricavo)) · \(p.nottiVendute) notti vendute su \(p.giorni * camereTotali) disponibili")
+        .help("\(p.etichetta): \(eurc(p.ricavo)) · \(p.nottiVendute) notti vendute su \(p.giorni * camereTotali) disponibili\(p.futuro ? " · deve ancora arrivare" : "")")
     }
     private func dettaglioPeriodo(_ p: Periodo) -> some View {
         let occ = p.giorni * camereTotali
