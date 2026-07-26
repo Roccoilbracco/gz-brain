@@ -292,9 +292,18 @@ struct CamerePSEDashboard: View {
     @State private var assignCache: [String: [Int: [Assegnata]]] = [:]
 
     // Assegna ogni prenotazione attiva a una camera del reticolo, per struttura:
-    //  • camera che coincide con una camera specifica → quella camera
+    //  • camera scritta sulla prenotazione → QUELLA camera, sempre
     //  • camera "intera/intero" → tutte le camere
-    //  • camera generica o mancante (es. richiesta dal sito) → prima camera libera per quelle date (greedy)
+    //  • camera generica o mancante (es. richiesta dal sito) → prima camera
+    //    libera per quelle date, tra quelle rimaste
+    //
+    // La camera scritta comanda anche quando è già occupata. Prima no: chi
+    // arrivava dopo veniva spostato nella prima stanza libera, e correggere la
+    // camera di una prenotazione non cambiava niente sul planning — la riga
+    // restava dov'era stata parcheggiata. Se due prenotazioni dichiarano la
+    // stessa camera negli stessi giorni adesso si vedono tutte e due, in due
+    // corsie col bordo rosso: è un dato da sistemare, non una cosa da nascondere
+    // spostando qualcuno in una stanza in cui non ha mai dormito.
     private func rebuildAssignment() {
         var result: [String: [Int: [Assegnata]]] = [:]
         for s in Struttura.allCases {
@@ -322,17 +331,25 @@ struct CamerePSEDashboard: View {
                     if $0.co != $1.co { return $0.co > $1.co }
                     return $0.b.id < $1.b.id
                 }
+            // Prima le camere dichiarate: comandano loro, e occupano il posto.
+            var senzaCamera: [Assegnata] = []
             for a in bs {
                 let cam = (a.b.camera ?? "")
-                let exact = rooms.firstIndex(of: cam)
                 if cam.lowercased().contains("inter") {                       // intera struttura
                     for i in rooms.indices { occupied[i].append((a.ci, a.co)); byRoom[i, default: []].append(a) }
-                } else if let e = exact, !occupied[e].contains(where: { overlaps($0, a.ci, a.co) }) {
-                    occupied[e].append((a.ci, a.co)); byRoom[e, default: []].append(a)          // camera esatta se libera
-                } else if let free = rooms.indices.first(where: { i in !occupied[i].contains { overlaps($0, a.ci, a.co) } }) {
-                    occupied[free].append((a.ci, a.co)); byRoom[free, default: []].append(a)     // altrimenti prima libera
+                } else if let e = rooms.firstIndex(of: cam) {
+                    occupied[e].append((a.ci, a.co)); byRoom[e, default: []].append(a)
                 } else {
-                    byRoom[0, default: []].append(a)                          // tutte occupate: overbooking
+                    senzaCamera.append(a)                                     // camera generica o non riconosciuta
+                }
+            }
+            // Poi chi non ha una camera scritta: nella prima rimasta libera, e
+            // se non ce n'è nessuna resta in vista sulla prima, in conflitto.
+            for a in senzaCamera {
+                if let free = rooms.indices.first(where: { i in !occupied[i].contains { overlaps($0, a.ci, a.co) } }) {
+                    occupied[free].append((a.ci, a.co)); byRoom[free, default: []].append(a)
+                } else {
+                    byRoom[0, default: []].append(a)
                 }
             }
             result[s.rawValue] = byRoom
@@ -1514,7 +1531,7 @@ struct CamerePSEDashboard: View {
                     if c > 1 {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 9)).foregroundStyle(PSE.neg)
-                            .help("Questa camera ha \(c) soggiorni sovrapposti negli stessi giorni: uno dei due va spostato o è arrivato con la camera sbagliata.")
+                            .help("\(c) prenotazioni dichiarano questa camera negli stessi giorni. Il planning le mostra dove sono scritte: se una ha la camera sbagliata, correggila e sparisce da qui.")
                     }
                 }
             }
@@ -1599,7 +1616,7 @@ struct CamerePSEDashboard: View {
         .offset(x: CGFloat(seg.start) * dayW + 2, y: 3.5 + CGFloat(seg.corsia) * rowH)
         .help(seg.booking.map {
             "\($0.guest_name) · \(prettyDate($0.checkin)) → \(prettyDate($0.checkout)) · \(eur($0.amount_cents))"
-                + (seg.conflitto ? "\n⚠︎ Sovrapposta a un altro soggiorno nella stessa camera." : "")
+                + (seg.conflitto ? "\n⚠︎ Un'altra prenotazione dichiara questa stessa camera negli stessi giorni." : "")
         } ?? (seg.nota ?? seg.label))
     }
 
