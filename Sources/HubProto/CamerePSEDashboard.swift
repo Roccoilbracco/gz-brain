@@ -432,6 +432,10 @@ struct CamerePSEDashboard: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await load(primoAvvio: false) }
         }
+        // Una scrittura qualsiasi, da questa pagina o da un'altra: si ricarica.
+        .onReceive(NotificationCenter.default.publisher(for: .datiCambiati)) { _ in
+            Task { await load(primoAvvio: false) }
+        }
         .onReceive(Timer.publish(every: 300, on: .main, in: .common).autoconnect()) { _ in
             Task { await load(primoAvvio: false) }
         }

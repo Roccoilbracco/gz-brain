@@ -124,15 +124,16 @@ let CASE_PSE: [(String, String)] = [("via-po", "Via Po"), ("via-romagna", "Via R
     /// tabella, così la graffetta non costa una chiamata per riga.
     @Published var allegatiPerBolletta: [String: Int] = [:]
     @Published var loading = true
-    func load() async {
-        loading = true
+    /// - Parameter silenzioso: ricarico dopo una modifica fatta altrove.
+    func load(silenzioso: Bool = false) async {
+        if !silenzioso { loading = true }
         pulizie = (try? await HubAPI.listPulizie()) ?? []
         colazioni = (try? await HubAPI.listColazioni()) ?? []
         utenze = (try? await HubAPI.listEducampRighe()) ?? []
         bollette = (try? await HubAPI.listBollette()) ?? []
         movimenti = (try? await HubAPI.listMovimenti()) ?? []
         allegatiPerBolletta = (try? await HubAPI.contaAllegati(.bolletta)) ?? [:]
-        loading = false
+        if !silenzioso { loading = false }
     }
     func ricontaAllegati() async {
         allegatiPerBolletta = (try? await HubAPI.contaAllegati(.bolletta)) ?? [:]
@@ -196,6 +197,9 @@ struct ServiziView: View {
             }
         }
         .task { await model.load() }
+        .onReceive(NotificationCenter.default.publisher(for: .datiCambiati)) { _ in
+            Task { await model.load(silenzioso: true) }
+        }
         // Stessa scheda per la bolletta esistente e per quella nuova: cambia
         // solo se parte da una riga o da zero.
         // Alla chiusura si ricontano gli allegati: chi apre la scheda solo per

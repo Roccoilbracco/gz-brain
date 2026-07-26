@@ -1,6 +1,14 @@
 import Foundation
 import UniformTypeIdentifiers
 
+extension Notification.Name {
+    /// Qualcosa è stato scritto sul database. Ogni pagina che tiene dei dati in
+    /// memoria si rimette in pari da sola: prima ciascuna caricava una volta
+    /// all'apertura, così segnare un pagamento nelle prenotazioni lasciava la
+    /// Tesoreria coi numeri di prima finché non si riavviava l'app.
+    static let datiCambiati = Notification.Name("gz.brain.datiCambiati")
+}
+
 /// Mini client PostgREST — legge la config.json di GZ Brain.
 /// Contesto nativo (no browser/webview): ok usare la secret key.
 struct SupabaseClient {
@@ -46,6 +54,12 @@ struct SupabaseClient {
             let msg = String(data: data, encoding: .utf8) ?? ""
             throw NSError(domain: "HubProto", code: http.statusCode,
                           userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode): \(msg.prefix(300))"])
+        }
+        // Ogni scrittura andata a buon fine avvisa tutta l'app. Sta qui e non
+        // nei singoli salvataggi perché così non se ne può dimenticare uno:
+        // qualunque strada passi da qui.
+        if (req.httpMethod ?? "GET") != "GET" {
+            Task { @MainActor in NotificationCenter.default.post(name: .datiCambiati, object: nil) }
         }
         return (data, http)
     }

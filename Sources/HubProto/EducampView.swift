@@ -66,13 +66,13 @@ private func eduDayStr(_ s: String?) -> String {
     // inquilini contro quanto esce davvero di utenze.
     @Published var bollette: [Bolletta] = []
     @Published var loading = true
-    func load(caricaMovimenti: Bool) async {
-        loading = true
+    func load(caricaMovimenti: Bool, silenzioso: Bool = false) async {
+        if !silenzioso { loading = true }
         ospiti = (try? await HubAPI.listEducampOspiti()) ?? []
         righe = (try? await HubAPI.listEducampRighe()) ?? []
         bollette = (try? await HubAPI.listBollette()) ?? []
         if caricaMovimenti { movimentiLocali = (try? await HubAPI.listMovimenti()) ?? [] }
-        loading = false
+        if !silenzioso { loading = false }
     }
     var mesi: [String] { Array(Set(righe.map { $0.mese })).sorted() }
     func righe(_ mese: String) -> [EducampRiga] {
@@ -147,6 +147,9 @@ struct EducampView: View {
             }
         }
         .task { await model.load(caricaMovimenti: movimenti == nil) }
+        .onReceive(NotificationCenter.default.publisher(for: .datiCambiati)) { _ in
+            Task { await model.load(caricaMovimenti: movimenti == nil, silenzioso: true) }
+        }
         .sheet(item: $movimentiAperti) { m in
             EducampMovimentiSheet(titolo: m.titolo, sottotitolo: m.sottotitolo, righe: m.righe) {
                 movimentiAperti = nil

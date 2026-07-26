@@ -77,8 +77,11 @@ let BREAKFAST_COST = 350   // 3,50 € per persona/notte (solo Booking)
     /// tabella: una sola query per tutti, non una per riga.
     @Published var allegatiPerMov: [String: Int] = [:]
     @Published var loading = true
-    func load() async {
-        loading = true
+    /// - Parameter silenzioso: ricarico automatico dopo una modifica altrove —
+    ///   niente rotella, la pagina non deve sparire mentre la si guarda.
+    func load(silenzioso: Bool = false) async {
+        if !silenzioso { loading = true }
+        defer { if !silenzioso { loading = false } }
         conti = (try? await HubAPI.listConti()) ?? []
         movimenti = (try? await HubAPI.listMovimenti()) ?? []
         pulizie = (try? await HubAPI.listPulizie()) ?? []
@@ -86,7 +89,6 @@ let BREAKFAST_COST = 350   // 3,50 € per persona/notte (solo Booking)
         educampRighe = (try? await HubAPI.listEducampRighe()) ?? []
         bollette = (try? await HubAPI.listBollette()) ?? []
         allegatiPerMov = (try? await HubAPI.contaAllegati(.movimento)) ?? [:]
-        loading = false
     }
     func ricontaAllegati() async {
         allegatiPerMov = (try? await HubAPI.contaAllegati(.movimento)) ?? [:]
@@ -450,6 +452,11 @@ struct TesoreriaView: View {
             }
         }
         .task { await model.load() }
+        // Qualcuno ha scritto qualcosa, in questa pagina o in un'altra: i numeri
+        // qui si rifanno da soli, senza rotella e senza riavviare l'app.
+        .onReceive(NotificationCenter.default.publisher(for: .datiCambiati)) { _ in
+            Task { await model.load(silenzioso: true) }
+        }
         .onChange(of: newTrigger) { _, v in
             if v { editing = nil; sub = .movimenti; showForm = true; newTrigger = false }
         }

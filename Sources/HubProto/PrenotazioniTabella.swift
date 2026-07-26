@@ -397,7 +397,9 @@ struct PrenotazioniTabella<Striscia: View>: View {
                     .frame(width: wSoldi, alignment: .trailing)
                 // Il saldo è la colonna che dice se c'è ancora da chiedere soldi:
                 // zero in verde spento, resto nel colore del pagamento.
-                Text(saldo == 0 ? "saldato" : eur(saldo))
+                // Sotto l'euro si scrivono i centesimi: un residuo di 0,25
+                // arrotondato diventava «€0», che sembra un errore.
+                Text(saldo == 0 ? "saldato" : (saldo < 100 ? eurc(saldo) : eur(saldo)))
                     .font(.system(size: saldo == 0 ? 10 : 12, weight: saldo == 0 ? .medium : .bold)).monospacedDigit()
                     .foregroundStyle(annullata ? PSE.faint : (saldo == 0 ? PSE.pos.opacity(0.8) : PSE.payment(pay)))
                     .frame(width: wSoldi, alignment: .trailing)
@@ -512,7 +514,7 @@ struct ElencoPrenotazioniSheet: View {
                                         Text(eur(b.amount_cents)).font(.system(size: 12.5, weight: .bold))
                                             .foregroundStyle(PSE.text).monospacedDigit()
                                             .frame(width: 80, alignment: .trailing)
-                                        Text(b.amount_cents > b.paid_cents ? eur(b.amount_cents - b.paid_cents) : "saldato")
+                                        Text(b.amount_cents > b.paid_cents ? eurc(b.amount_cents - b.paid_cents) : "saldato")
                                             .font(.system(size: b.amount_cents > b.paid_cents ? 12 : 10, weight: .semibold))
                                             .foregroundStyle(b.amount_cents > b.paid_cents ? PSE.warn : PSE.pos.opacity(0.8))
                                             .monospacedDigit().frame(width: 80, alignment: .trailing)
