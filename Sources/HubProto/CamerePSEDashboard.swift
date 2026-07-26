@@ -371,11 +371,40 @@ struct CamerePSEDashboard: View {
         if c.contains("camino") { return "Stanza Camino" }
         return nil
     }
+    /// Una camera scritta «Camino → Doppia s.b.» non è una camera sola: è un
+    /// trasloco. L'ospite sta nella prima finché la seconda non si libera, poi
+    /// si sposta. Prima vinceva la seconda e il planning li metteva subito nella
+    /// doppia, sopra chi ci stava ancora dormendo.
+    private func educampCamere(_ cam: String?) -> (String?, String?) {
+        let c = cam ?? ""
+        if let r = c.range(of: "→") ?? c.range(of: "->") {
+            return (educampGridRoom(String(c[..<r.lowerBound])), educampGridRoom(String(c[r.upperBound...])))
+        }
+        return (educampGridRoom(c), nil)
+    }
     private func rebuildEducampRooms() {
         var m: [String: [(ci: Date, co: Date, nome: String)]] = [:]
+        var traslochi: [(da: String, a: String, ci: Date, co: Date, nome: String)] = []
         for o in educampOspiti {
-            guard let room = educampGridRoom(o.camera), let ci = day(o.checkin), let co = day(o.checkout) else { continue }
-            m[room, default: []].append((ci, co, firstName(o.ospite)))
+            guard let ci = day(o.checkin), let co = day(o.checkout) else { continue }
+            let (r1, r2) = educampCamere(o.camera)
+            if let r1, let r2 {
+                traslochi.append((da: r1, a: r2, ci: ci, co: co, nome: firstName(o.ospite)))
+            } else if let room = r1 {
+                m[room, default: []].append((ci, co, firstName(o.ospite)))
+            }
+        }
+        // I traslochi si risolvono dopo, quando si sa chi occupa la camera di
+        // destinazione: il giorno del cambio è il primo in cui è libera.
+        let c = Calendar.current
+        for t in traslochi {
+            var cambio = t.ci
+            while cambio < t.co,
+                  (m[t.a] ?? []).contains(where: { $0.ci <= cambio && cambio < $0.co }) {
+                cambio = c.date(byAdding: .day, value: 1, to: cambio) ?? t.co
+            }
+            if cambio > t.ci { m[t.da, default: []].append((t.ci, cambio, t.nome)) }
+            if cambio < t.co { m[t.a, default: []].append((cambio, t.co, t.nome)) }
         }
         educampRoomCache = m
     }
