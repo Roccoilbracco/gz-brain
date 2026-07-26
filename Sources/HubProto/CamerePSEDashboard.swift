@@ -745,9 +745,12 @@ struct CamerePSEDashboard: View {
             ultima[c] = out[i].fine
             out[i].corsia = c
         }
-        let n = max(1, ultima.count)
         for i in out.indices {
-            out[i].corsie = n
+            // Una riga sola, sempre: chi si accavalla si disegna SOPRA l'altro,
+            // più piccolo e a tinta piena. Sdoppiare la riga faceva crescere il
+            // reticolo e allontanava le camere; così la sovrapposizione si vede
+            // e si riconosce senza spostare niente.
+            out[i].corsie = 1
             // il bordo rosso va su chi si accavalla, non su tutta la riga
             out[i].conflitto = out.indices.contains { j in
                 j != i && out[j].start < out[i].fine && out[i].start < out[j].fine
@@ -1583,13 +1586,18 @@ struct CamerePSEDashboard: View {
     private func barra(_ seg: Segmento) -> some View {
         let w = CGFloat(seg.len) * dayW - 4
         let largo = w > 82, stretto = w < 62      // una o due notti: tutto lo spazio al nome
+        // Chi arriva su una camera già presa si disegna SOPRA l'altro, sulla
+        // stessa riga: più basso, più stretto e a tinta piena. Così non sposta
+        // niente e si riconosce a colpo d'occhio che è lui quello di troppo.
+        let sopra = seg.corsia > 0
+        let h = sopra ? rowH - 15 : rowH - 7
         return Button {
             if let b = seg.booking { withAnimation(.easeInOut(duration: 0.2)) { selected = b } }
         } label: {
             HStack(spacing: 6) {
-                Text(seg.label).font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(PSE.ink).lineLimit(1).minimumScaleFactor(0.6)
-                if largo, let b = seg.booking {
+                Text(seg.label).font(.system(size: sopra ? 9.5 : 10, weight: sopra ? .bold : .semibold))
+                    .foregroundStyle(sopra ? Color.white : PSE.ink).lineLimit(1).minimumScaleFactor(0.6)
+                if largo, !sopra, let b = seg.booking {
                     Spacer(minLength: 0)
                     Text("\(seg.len)n · \(eur(b.amount_cents))")
                         .font(.system(size: 9, weight: .medium)).foregroundStyle(PSE.ink.opacity(0.55))
@@ -1597,23 +1605,29 @@ struct CamerePSEDashboard: View {
                 }
             }
             .padding(.leading, stretto ? 7 : 10).padding(.trailing, stretto ? 3 : 7)
-            .frame(width: w, height: rowH - 7, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 5).fill(seg.color.opacity(0.28)))
+            .frame(width: w, height: h, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 5)
+                .fill(sopra ? seg.color.opacity(0.95) : seg.color.opacity(0.28)))
             // Bordo rosso se la camera è doppia-prenotata: il colore del canale
             // resta, ma si vede subito quale riga ha un problema.
             .overlay(RoundedRectangle(cornerRadius: 5)
-                .strokeBorder(seg.conflitto ? PSE.neg.opacity(0.85) : seg.color.opacity(0.45), lineWidth: 1))
+                .strokeBorder(sopra ? PSE.neg : (seg.conflitto ? PSE.neg.opacity(0.85) : seg.color.opacity(0.45)),
+                              lineWidth: sopra ? 1.5 : 1))
+            // La barra sopra ha anche la sua ombra: staccata dal fondo, si legge
+            // che sta «addosso» a quella sotto e non accanto.
+            .shadow(color: sopra ? .black.opacity(0.55) : .clear, radius: 3, y: 1)
             // stanghetta piena all'arrivo: dove comincia il soggiorno si vede
             // anche con la coda di occhio.
             .overlay(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 1.5).fill(seg.color)
+                RoundedRectangle(cornerRadius: 1.5).fill(sopra ? Color.white.opacity(0.9) : seg.color)
                     .frame(width: stretto ? 2 : 3).padding(.vertical, 3).padding(.leading, stretto ? 2 : 3)
                     .opacity(seg.apertoPrima ? 0 : 1)
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .offset(x: CGFloat(seg.start) * dayW + 2, y: 3.5 + CGFloat(seg.corsia) * rowH)
+        .offset(x: CGFloat(seg.start) * dayW + 2, y: sopra ? 8 : 3.5)
+        .zIndex(sopra ? 1 : 0)
         .help(seg.booking.map {
             "\($0.guest_name) · \(prettyDate($0.checkin)) → \(prettyDate($0.checkout)) · \(eur($0.amount_cents))"
                 + (seg.conflitto ? "\n⚠︎ Un'altra prenotazione dichiara questa stessa camera negli stessi giorni." : "")
