@@ -24,17 +24,44 @@ struct GraficiTesoreria: View {
     let struttura: Struttura?
 
     enum Vista: String, CaseIterable, Identifiable {
-        case andamento = "Com'è andata", prenotato = "Già prenotato", proiezione = "Proiezione"
+        case medie = "Ricavi e medie", andamento = "Com'è andata", prenotato = "Già prenotato", proiezione = "Proiezione"
         var id: String { rawValue }
         var spiega: String {
             switch self {
+            case .medie: return "Il ricavo spalmato sulle notti del soggiorno, non sul giorno del pagamento: è quanto rende una giornata, una settimana, un mese, un anno."
             case .andamento: return "Entrate e uscite registrate, mese per mese. È il passato: sono soldi che si sono mossi davvero."
             case .prenotato: return "Quanto vale quello che è già in calendario, mese per mese. È l'unico futuro certo che abbiamo."
             case .proiezione: return "Dove si va a finire se il ritmo resta questo. È una stima, e vale quanto i mesi su cui è calcolata."
             }
         }
     }
-    @State private var vista: Vista = .andamento
+    /// Ogni quanto si guarda: la stessa cifra letta per giorno, settimana, mese
+    /// o anno risponde a domande diverse — «ieri quanto ho fatto» non è «questo
+    /// mese come sta andando».
+    enum Grana: String, CaseIterable, Identifiable {
+        case giorno = "Giorno", settimana = "Settimana", mese = "Mese", anno = "Anno"
+        var id: String { rawValue }
+        /// Quanti periodi mostrare: sempre lo stesso arco di tempo, più o meno.
+        var quanti: Int {
+            switch self {
+            case .giorno: return 45
+            case .settimana: return 20
+            case .mese: return 18
+            case .anno: return 5
+            }
+        }
+        var etichetta: String {
+            switch self {
+            case .giorno: return "al giorno"
+            case .settimana: return "a settimana"
+            case .mese: return "al mese"
+            case .anno: return "all'anno"
+            }
+        }
+    }
+    @State private var vista: Vista = .medie
+    @State private var grana: Grana = .mese
+    @State private var periodoSotto: String? = nil
     @State private var meseSotto: String? = nil
     /// Quanto si pensa di crescere ogni anno: la proiezione non è un destino,
     /// è un'ipotesi che si deve poter cambiare.
@@ -103,6 +130,84 @@ struct GraficiTesoreria: View {
         }
     }
 
+    // ── ricavi per notte e medie ─────────────────────────────────────────────
+    // Il pagamento arriva tutto insieme (le OTA pagano a soggiorno finito), ma
+    // il ricavo lo produce ogni notte: qui l'importo si divide per le notti e si
+    // mette dove è stato guadagnato. È l'unico modo perché «media giornaliera»
+    // voglia dire qualcosa.
+    /// Per ogni giorno: quanto ha reso, e quante camere erano vendute. Le due
+    /// cose sono diverse — in un giorno ci sono più camere — e tenerle separate
+    /// serve: il ricavo per notte venduta è ricavo diviso CAMERE, non diviso
+    /// giorni, se no con nove stanze il prezzo medio esce nove volte più alto.
+    private var ricaviPerNotte: [Date: (cents: Int, camere: Int)] {
+        let cal = Calendar.current
+        var out: [Date: (cents: Int, camere: Int)] = [:]
+        for b in prenFiltrate {
+            guard let ci = b.checkin.flatMap({ grYmd.date(from: String($0.prefix(10))) }),
+                  let co = b.checkout.flatMap({ grYmd.date(from: String($0.prefix(10))) }),
+                  ci < co else { continue }
+            let notti = max(1, cal.dateComponents([.day], from: ci, to: co).day ?? 1)
+            let quota = b.amount_cents / notti
+            let resto = b.amount_cents - quota * notti      // i centesimi non si perdono
+            var d = ci, i = 0
+            while d < co {
+                var v = out[d] ?? (0, 0)
+                v.cents += quota + (i == 0 ? resto : 0)
+                v.camere += 1
+                out[d] = v
+                d = cal.date(byAdding: .day, value: 1, to: d) ?? co
+                i += 1
+            }
+        }
+        return out
+    }
+    /// Camere disponibili: serve per il ricavo medio per camera, che è il numero
+    /// con cui si giudica una struttura (quanto rende un letto, pieno o vuoto).
+    private var camereTotali: Int {
+        switch struttura { case .viaPo: return 4; case .viaRomagna: return 5; case nil: return 9 }
+    }
+    private struct Periodo: Identifiable {
+        let id: String            // chiave ordinabile
+        let etichetta: String
+        let inizio: Date
+        let giorni: Int
+        let ricavo: Int
+        let nottiVendute: Int
+    }
+    private func chiave(_ d: Date, _ g: Grana) -> (String, String, Date, Int) {
+        let cal = Calendar.current
+        switch g {
+        case .giorno:
+            let f = DateFormatter(); f.locale = Locale(identifier: "it_IT"); f.dateFormat = "d MMM"
+            return (grYmd.string(from: d), f.string(from: d), d, 1)
+        case .settimana:
+            let ini = cal.dateInterval(of: .weekOfYear, for: d)?.start ?? d
+            let f = DateFormatter(); f.locale = Locale(identifier: "it_IT"); f.dateFormat = "d MMM"
+            return (grYmd.string(from: ini), f.string(from: ini), ini, 7)
+        case .mese:
+            let ini = cal.date(from: cal.dateComponents([.year, .month], from: d)) ?? d
+            return (String(grYmd.string(from: ini).prefix(7)), grNomeMese(String(grYmd.string(from: ini).prefix(7))),
+                    ini, cal.range(of: .day, in: .month, for: ini)?.count ?? 30)
+        case .anno:
+            let ini = cal.date(from: cal.dateComponents([.year], from: d)) ?? d
+            let a = cal.component(.year, from: d)
+            return ("\(a)", "\(a)", ini, cal.range(of: .day, in: .year, for: ini)?.count ?? 365)
+        }
+    }
+    private var periodi: [Periodo] {
+        var ric: [String: (et: String, ini: Date, gg: Int, tot: Int, notti: Int)] = [:]
+        for (d, v) in ricaviPerNotte {
+            let (k, et, ini, gg) = chiave(d, grana)
+            var r = ric[k] ?? (et, ini, gg, 0, 0)
+            r.tot += v.cents; r.notti += v.camere
+            ric[k] = r
+        }
+        return ric.keys.sorted().suffix(grana.quanti).map { k in
+            let r = ric[k]!
+            return Periodo(id: k, etichetta: r.et, inizio: r.ini, giorni: r.gg, ricavo: r.tot, nottiVendute: r.notti)
+        }
+    }
+
     // ── proiezione ───────────────────────────────────────────────────────────
     // Quali mesi fanno media. I mesi futuri no: hanno dentro solo qualche
     // incasso anticipato e sembrerebbero mesi da fame. Il mese in corso conta
@@ -164,12 +269,115 @@ struct GraficiTesoreria: View {
                     .lineLimit(2).multilineTextAlignment(.trailing).frame(maxWidth: 420, alignment: .trailing)
             }
             switch vista {
+            case .medie: medieView
             case .andamento: andamentoView
             case .prenotato: prenotatoView
             case .proiezione: proiezioneView
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 12)
+    }
+
+    // ── 0. Ricavi e medie ────────────────────────────────────────────────────
+    private var medieView: some View {
+        let dati = periodi
+        let conRicavo = dati.filter { $0.ricavo > 0 }
+        let tot = dati.reduce(0) { $0 + $1.ricavo }
+        let media = conRicavo.isEmpty ? 0 : tot / conRicavo.count
+        let migliore = dati.max { $0.ricavo < $1.ricavo }
+        let notti = dati.reduce(0) { $0 + $1.nottiVendute }
+        let giorni = dati.reduce(0) { $0 + $1.giorni }
+        let perNotte = notti > 0 ? tot / notti : 0                     // quanto rende una camera venduta
+        let perCamera = giorni > 0 ? tot / (giorni * camereTotali) : 0  // quanto rende una camera, piena o vuota
+        let maxV = max(1, dati.map { $0.ricavo }.max() ?? 1)
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                PSESegmented(items: Grana.allCases.map { ($0, $0.rawValue) }, selection: $grana)
+                Spacer(minLength: 0)
+                Text("Ultimi \(dati.count) \(grana.rawValue.lowercased())\(dati.count == 1 ? "" : "i") con movimento")
+                    .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+            }
+            HStack(spacing: 10) {
+                statoCard("MEDIA \(grana.etichetta.uppercased())", eurc(media), PSE.accent,
+                          "Calcolata sui \(conRicavo.count) periodi che hanno prodotto qualcosa")
+                statoCard("MIGLIORE", migliore.map { eurc($0.ricavo) } ?? "—", PSE.pos,
+                          migliore.map { "\($0.etichetta): \(eurc($0.ricavo))" } ?? "")
+                statoCard("PER NOTTE VENDUTA", eurc(perNotte), PSE.ink,
+                          "\(notti) notti vendute in tutto: è il prezzo medio incassato per camera occupata")
+                statoCard("PER CAMERA AL GIORNO", eurc(perCamera), PSE.warn,
+                          "Ricavo diviso per tutte le \(camereTotali) camere e tutti i giorni, vuote comprese")
+                statoCard("TOTALE", eurc(tot), PSE.pos, "Somma del periodo mostrato")
+            }
+            if dati.isEmpty {
+                EmptyStateCard(icon: "chart.bar", text: "Nessun soggiorno da cui calcolare i ricavi.")
+            } else {
+                HStack(alignment: .bottom, spacing: grana == .giorno ? 3 : 8) {
+                    ForEach(dati) { p in colonnaPeriodo(p, maxV: maxV, media: media) }
+                    Spacer(minLength: 0)
+                }
+                .frame(height: 190, alignment: .bottom)
+                if let k = periodoSotto, let p = dati.first(where: { $0.id == k }) {
+                    dettaglioPeriodo(p)
+                } else {
+                    Text("La riga tratteggiata è la media. Passa sopra una colonna per i numeri di quel \(grana.rawValue.lowercased()).")
+                        .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+                }
+            }
+        }
+    }
+    private func colonnaPeriodo(_ p: Periodo, maxV: Int, media: Int) -> some View {
+        let h: CGFloat = 140
+        let sotto = periodoSotto == p.id
+        let larghezza: CGFloat = grana == .giorno ? 16 : (grana == .anno ? 70 : 40)
+        return VStack(spacing: 5) {
+            Text(sotto ? eurc(p.ricavo) : " ")
+                .font(.system(size: 9, weight: .bold)).monospacedDigit().foregroundStyle(PSE.ink)
+                .lineLimit(1).minimumScaleFactor(0.6).frame(height: 11)
+            ZStack(alignment: .bottom) {
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(PSE.pos.opacity(sotto ? 1 : (p.ricavo >= media ? 0.78 : 0.45)))
+                    .frame(width: larghezza, height: max(2, CGFloat(p.ricavo) / CGFloat(maxV) * h))
+            }
+            .frame(height: h, alignment: .bottom)
+            .overlay(alignment: .bottom) {
+                // la media, come riferimento: si vede subito chi sta sopra e chi sotto
+                Rectangle().fill(PSE.accent.opacity(0.65)).frame(height: 1)
+                    .offset(y: -(CGFloat(media) / CGFloat(maxV) * h))
+            }
+            Text(p.etichetta).font(.system(size: 8.5, weight: sotto ? .bold : .medium))
+                .foregroundStyle(sotto ? PSE.ink : PSE.dim).lineLimit(1).minimumScaleFactor(0.7)
+                .frame(width: larghezza + 8)
+        }
+        .contentShape(Rectangle())
+        .onHover { d in periodoSotto = d ? p.id : (periodoSotto == p.id ? nil : periodoSotto) }
+        .help("\(p.etichetta): \(eurc(p.ricavo)) · \(p.nottiVendute) notti vendute su \(p.giorni * camereTotali) disponibili")
+    }
+    private func dettaglioPeriodo(_ p: Periodo) -> some View {
+        let occ = p.giorni * camereTotali
+        let pct = occ > 0 ? Int((Double(p.nottiVendute) / Double(occ) * 100).rounded()) : 0
+        return HStack(spacing: 16) {
+            Text(p.etichetta).font(.system(size: 12, weight: .bold)).foregroundStyle(PSE.ink)
+            valore("ricavo", eurc(p.ricavo), PSE.pos)
+            valore("notti vendute", "\(p.nottiVendute) su \(occ)", PSE.text)
+            valore("occupazione", "\(pct)%", PSE.accent)
+            if p.nottiVendute > 0 { valore("per notte", eurc(p.ricavo / p.nottiVendute), PSE.ink) }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: 10).fill(PSE.surface))
+    }
+    private func statoCard(_ t: String, _ v: String, _ c: Color, _ aiuto: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(t).font(.system(size: 8.5, weight: .heavy)).tracking(0.7).foregroundStyle(PSE.faint)
+                .lineLimit(1).minimumScaleFactor(0.7)
+            Text(v).font(.system(size: 17, weight: .bold)).foregroundStyle(c).monospacedDigit()
+                .lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(PSE.surface))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(PSE.line, lineWidth: 1))
+        .help(aiuto)
     }
 
     // ── 1. Com'è andata ──────────────────────────────────────────────────────
