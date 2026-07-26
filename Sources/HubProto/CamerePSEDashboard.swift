@@ -1131,8 +1131,9 @@ struct CamerePSEDashboard: View {
                       colore: PSE.accent, coloreValore: trovate.isEmpty ? PSE.warn : PSE.pos,
                       nota: "\(prettyDate(ymdBk.string(from: cercaDa))) → \(prettyDate(ymdBk.string(from: partenzaEffettiva))) · \(plur(nottiCercate, "notte", "notti")) · \(plur(cercaOspiti, "ospite", "ospiti"))",
                       grande: true) {
-            // Calendario a sinistra, risultati a destra: si sceglie e si vede
-            // l'effetto senza spostare gli occhi.
+            // Calendario a sinistra, risultati al centro, le prossime due
+            // settimane a destra: si sceglie, si vede l'effetto e si sa già dove
+            // c'è posto, senza spostare gli occhi.
             HStack(alignment: .top, spacing: 18) {
                 calendarioRicerca.frame(width: 292)
                 VStack(alignment: .leading, spacing: 10) {
@@ -1147,9 +1148,82 @@ struct CamerePSEDashboard: View {
                     Spacer(minLength: 0)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                prossimeDueSettimane.frame(width: 330)
             }
             .padding(.horizontal, 16).padding(.bottom, 6)
         }
+    }
+
+    // ── Le prossime due settimane, notte per notte ───────────────────────────
+    // Al telefono la domanda dopo «per stasera?» è sempre «e allora quando avete
+    // posto?». Qui c'è la risposta già pronta: quattordici notti, quante camere
+    // restano e quali, senza dover provare una data alla volta nel calendario.
+    private func nomeBreve(_ camera: String) -> String {
+        guard let r = camera.range(of: "·") else { return camera }
+        return String(camera[r.upperBound...]).trimmingCharacters(in: .whitespaces)
+    }
+    private var prossimeDueSettimane: some View {
+        let c = Calendar.current
+        let oggi = c.startOfDay(for: Date())
+        let giorni = (0..<14).compactMap { c.date(byAdding: .day, value: $0, to: oggi) }
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("PROSSIME DUE SETTIMANE").font(.system(size: 9, weight: .heavy)).tracking(0.8)
+                    .foregroundStyle(PSE.faint)
+                Spacer()
+                Text("per \(plur(cercaOspiti, "ospite", "ospiti"))").font(.system(size: 9.5)).foregroundStyle(PSE.faint)
+            }
+            .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 8)
+            ForEach(Array(giorni.enumerated()), id: \.offset) { _, d in rigaNotte(d) }
+            Text("Clicca una notte per cercare da lì.")
+                .font(.system(size: 9.5)).foregroundStyle(PSE.faint)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+        }
+        .background(RoundedRectangle(cornerRadius: 12).fill(PSE.surface))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(PSE.line, lineWidth: 1))
+    }
+    private func rigaNotte(_ d: Date) -> some View {
+        let c = Calendar.current
+        let libere = strutture.flatMap { s in
+            roomsFor(s).filter { posti($0) >= cercaOspiti && bookingFor(s, $0, d) == nil && !educampOccupies(s, $0, d) }
+                .map { (s, $0) }
+        }
+        let scelto = c.isDate(d, inSameDayAs: cercaDa)
+        let oggi = c.isDateInToday(d)
+        return Button {
+            withAnimation(.easeOut(duration: 0.12)) {
+                cercaDa = d
+                cercaA = c.date(byAdding: .day, value: 1, to: d) ?? d
+                meseRicerca = primoDelMese(d)
+                scegliePartenza = true
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Text(oggi ? "Stanotte" : fmt("EEE d").string(from: d).capitalized)
+                    .font(.system(size: 10.5, weight: scelto ? .bold : .medium))
+                    .foregroundStyle(scelto ? PSE.ink : PSE.text)
+                    .frame(width: 66, alignment: .leading).lineLimit(1)
+                Text("\(libere.count)")
+                    .font(.system(size: 11, weight: .bold)).monospacedDigit()
+                    .foregroundStyle(libere.isEmpty ? PSE.warn : PSE.pos)
+                    .frame(width: 14, alignment: .trailing)
+                // I nomi delle camere libere: è quello che si dice al telefono.
+                Text(libere.isEmpty ? "tutto pieno"
+                     : libere.prefix(2).map { nomeBreve($0.1) }.joined(separator: ", ")
+                       + (libere.count > 2 ? " +\(libere.count - 2)" : ""))
+                    .font(.system(size: 10)).foregroundStyle(libere.isEmpty ? PSE.warn.opacity(0.8) : PSE.dim)
+                    .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1).minimumScaleFactor(0.85)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 5.5)
+            .background(scelto ? PSE.accent.opacity(0.18) : Color.clear)
+            .overlay(alignment: .leading) {
+                Rectangle().fill(scelto ? PSE.accent : Color.clear).frame(width: 2)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(libere.isEmpty ? "Nessuna camera libera per \(plur(cercaOspiti, "ospite", "ospiti"))"
+              : libere.map { "\($0.0.label) · \($0.1)" }.joined(separator: "\n"))
     }
 
     // ── Criteri: ospiti, notti e scorciatoie ─────────────────────────────────
