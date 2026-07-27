@@ -266,10 +266,10 @@ struct PrenotazioniTabella<Striscia: View>: View {
             pastiglia("PARTENZE", "\(partenze.count)", PSE.warn, partenze.isEmpty ? nil : partenze.map { nomeBreve($0.guest_name) }.joined(separator: ", "), partenze)
             pastiglia("RESTANO", "\(restano.count)", PSE.dim, nil, restano)
             if daRiscuotere > 0 {
-                pastiglia("DA RISCUOTERE AL CHECK-IN", eur(daRiscuotere), PSE.warn, "Saldo aperto di chi arriva oggi", daRiscuotereRighe, soldi: true)
+                pastiglia("DA RISCUOTERE AL CHECK-IN", restante(daRiscuotere), PSE.warn, "Saldo aperto di chi arriva oggi", daRiscuotereRighe, soldi: true)
             }
             if daSaldare > 0 {
-                pastiglia("DA SALDARE AL CHECK-OUT", eur(daSaldare), PSE.neg, "Saldo aperto di chi parte oggi", daSaldareRighe, soldi: true)
+                pastiglia("DA SALDARE AL CHECK-OUT", restante(daSaldare), PSE.neg, "Saldo aperto di chi parte oggi", daSaldareRighe, soldi: true)
             }
             if partenze.count > 0 {
                 pastiglia("PULIZIE", "\(partenze.count)", PSE.accent, "Una per ogni camera che si libera", partenze)
@@ -278,6 +278,11 @@ struct PrenotazioniTabella<Striscia: View>: View {
         }
     }
     private func nomeBreve(_ n: String) -> String { n.split(separator: " ").first.map(String.init) ?? n }
+    /// Un saldo aperto sotto l'euro va scritto con i centesimi: la pastiglia
+    /// diceva «€0» quando restavano 25 centesimi da incassare, e uno zero in
+    /// una casella che esiste solo se c'è qualcosa da riscuotere si legge come
+    /// un errore del programma. È la stessa regola della colonna saldo.
+    private func restante(_ cents: Int) -> String { cents < 100 ? eurc(cents) : eur(cents) }
     /// Il numero e, dietro, le righe che lo compongono: si clicca e si vedono le
     /// camere, e da lì si va sulla prenotazione senza passare dalla tabella.
     private func pastiglia(_ t: String, _ v: String, _ c: Color, _ aiuto: String?,
