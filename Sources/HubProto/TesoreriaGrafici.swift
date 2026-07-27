@@ -75,9 +75,21 @@ struct GraficiTesoreria: View {
     /// Cauzioni e apporti entrano in cassa ma non sono ricavi: nel conto
     /// economico stanno fuori, e qui devono starne fuori uguale — se no la
     /// proiezione promette soldi che sono di altri.
+    /// Fuori anche le partite di giro, con lo stesso criterio del conto
+    /// economico: il saldo di apertura di un conto e lo storno delle commissioni
+    /// Booking segnate per competenza. Contati come ricavo, facevano un picco
+    /// nel mese in cui li scrivi e una proiezione più alta del vero.
     private func nonRicavo(_ m: TesMovimento) -> Bool {
         let c = (m.categoria ?? "").lowercased()
-        return c.contains("deposito") || c.contains("apporto")
+        return c.contains("deposito") || c.contains("apporto") || partitaDiGiro(m)
+    }
+    /// Partite di giro: saldo di apertura, storni e pagamenti di roba già
+    /// contata. Da tenere fuori da tutte e due le colonne, non solo dalle
+    /// entrate: se no il mese in cui paghi le commissioni di quello prima
+    /// sembra un mese con un costo in più.
+    private func partitaDiGiro(_ m: TesMovimento) -> Bool {
+        let c = (m.categoria ?? "").lowercased()
+        return c.hasPrefix("giro:") || c.contains("saldo iniziale") || c.contains("storno")
     }
     private var mesi: [MeseDato] {
         var e: [String: Int] = [:], u: [String: Int] = [:]
@@ -87,6 +99,7 @@ struct GraficiTesoreria: View {
                 guard !nonRicavo(m) else { continue }
                 e[k, default: 0] += m.importo_cents
             } else {
+                guard !partitaDiGiro(m) else { continue }
                 u[k, default: 0] += m.importo_cents
             }
         }

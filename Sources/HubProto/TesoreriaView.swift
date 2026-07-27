@@ -570,8 +570,9 @@ struct TesoreriaView: View {
             return ("RICAVI — \(periodoLabel.uppercased())", "Entrate da attività (esclusi cauzioni e apporti soci).",
                     mov.map { rigaDaMov($0) }, "TOTALE RICAVI", totEntrate)
         case .costiOperativi:
-            let mov = movStrutFiltrati.filter { $0.tipo == "uscita" && !isDebito($0.categoria) }.sorted { $0.data > $1.data }
-            return ("COSTI OPERATIVI — \(periodoLabel.uppercased())", "Costi di gestione (senza debiti/finanziamenti).",
+            let mov = movStrutFiltrati.filter { $0.tipo == "uscita" && !isDebito($0.categoria)
+                                                && !isUscitaNonCosto($0.categoria) }.sorted { $0.data > $1.data }
+            return ("COSTI OPERATIVI — \(periodoLabel.uppercased())", "Costi di gestione (senza debiti/finanziamenti né partite di giro).",
                     mov.map { rigaDaMov($0) }, "TOTALE COSTI", totCostiOperativi)
         case .debiti:
             let mov = movStrutFiltrati.filter { $0.tipo == "uscita" && isDebito($0.categoria) }.sorted { $0.data > $1.data }
@@ -579,7 +580,7 @@ struct TesoreriaView: View {
                     mov.map { rigaDaMov($0) }, "TOTALE DEBITI", totDebiti)
         case .cauzioniApporti:
             let mov = movStrutFiltrati.filter { $0.tipo == "entrata" && isEntrataNonRicavo($0.categoria) }.sorted { $0.data > $1.data }
-            return ("CAUZIONI + APPORTI SOCI", "Entrate che non sono ricavi: depositi da restituire e capitale dei soci.",
+            return ("CAUZIONI + APPORTI SOCI", "Entrate che non sono ricavi: depositi da restituire, capitale dei soci, saldi di apertura e storni di commissione.",
                     mov.map { rigaDaMov($0) }, "TOTALE", totEntrateFinanziarie)
         case .movimenti(let titolo, let mov, let tot):
             return (titolo.uppercased(), "", mov.sorted { $0.data > $1.data }.map { rigaDaMov($0) }, "TOTALE", tot)
@@ -587,7 +588,7 @@ struct TesoreriaView: View {
     }
     private func contoNotaFor(_ id: String) -> String {
         switch id {
-        case "massimo": return "Conto delle OTA di Via Po: Booking (lordo entrata / commissione uscita) e Airbnb. Il saldo è il netto."
+        case "massimo": return "Conto delle OTA di Via Po: Booking (lordo entrata / commissione uscita) e Airbnb. Il saldo è il netto e sta sopra a quello che vedi in banca, perché gli incassi sono segnati al check-out mentre Booking paga i suoi payout qualche giorno dopo."
         case "beeper": return "Bonifici (entrambe le case): affitti, depositi da restituire, apporti soci e uscite."
         case "carifermo": return "Mutuo e utenze di Via Po: solo uscite, il saldo negativo è normale."
         default: return "Contante Via Po + Via Romagna."
@@ -739,6 +740,7 @@ struct TesoreriaView: View {
     private func fuoriDalGenerato(_ m: TesMovimento) -> Bool {
         let c = (m.categoria ?? "").lowercased()
         if c.contains("apporto") { return true }
+        if isPartitaDiGiro(m.categoria) { return true }
         return m.tipo == "entrata" ? isDeposito(m) : c.contains("deposito")
     }
     private var depositiMov: [TesMovimento] {
@@ -984,6 +986,10 @@ struct TesoreriaView: View {
     private var mensili: [(key: String, entrate: Int, uscite: Int)] {
         var map: [String: (e: Int, u: Int)] = [:]
         for m in movStrutFiltrati {
+            // Quello che sta fuori dalle card qui sopra sta fuori anche qui: se
+            // no il mese diceva un totale diverso da «Entrate» e da «Costi» a
+            // due centimetri di distanza.
+            if fuoriDalContoEconomico(m) { continue }
             let k = String(m.data.prefix(7)); var v = map[k] ?? (0, 0)
             if m.tipo == "entrata" { v.e += m.importo_cents } else { v.u += m.importo_cents }
             map[k] = v
@@ -994,7 +1000,27 @@ struct TesoreriaView: View {
     // dei soci (capitale). Entrano in cassa ma non fanno margine, come i debiti
     // sul lato uscite.
     private func isEntrataNonRicavo(_ cat: String?) -> Bool {
-        isCauzione(cat) || isApporto(cat)
+        isCauzione(cat) || isApporto(cat) || isPartitaDiGiro(cat)
+    }
+    // Partite di giro: entrate che non sono soldi guadagnati. Il saldo di
+    // apertura del conto (soldi che c'erano già il primo del mese) e lo storno
+    // delle commissioni Booking segnate per competenza — quelle escono davvero
+    // dalla banca con l'addebito SDD del mese dopo, e senza storno il conto non
+    // torna con l'estratto conto. Contarle come ricavo gonfiava l'utile.
+    private func isPartitaDiGiro(_ cat: String?) -> Bool {
+        let c = (cat ?? "").lowercased()
+        return c.hasPrefix("giro:") || c.contains("saldo iniziale") || c.contains("storno")
+    }
+    /// L'altro lato della partita di giro: uscite che non sono costi. Il bonifico
+    /// SDD con cui Booking incassa le commissioni paga righe già contate come
+    /// costo quando è arrivata la prenotazione: contarlo di nuovo faceva pagare
+    /// due volte la stessa commissione.
+    private func isUscitaNonCosto(_ cat: String?) -> Bool { isPartitaDiGiro(cat) }
+    /// Fuori dal conto economico: entrate che non sono ricavi e uscite che non
+    /// sono costi. Restano dentro ai saldi dei conti — i soldi si sono mossi
+    /// davvero — ma non sono né guadagno né spesa.
+    private func fuoriDalContoEconomico(_ m: TesMovimento) -> Bool {
+        m.tipo == "entrata" ? isEntrataNonRicavo(m.categoria) : isUscitaNonCosto(m.categoria)
     }
     // Cauzioni e apporti stavano in una casella sola, ma sono due cose diverse:
     // la cauzione è denaro dell'inquilino da restituire, l'apporto è capitale
@@ -1004,7 +1030,7 @@ struct TesoreriaView: View {
     private func perCategoria(_ tipo: String) -> [(cat: String, tot: Int)] {
         var map: [String: Int] = [:]
         for m in movStrutFiltrati where m.tipo == tipo {
-            if tipo == "entrata" && isEntrataNonRicavo(m.categoria) { continue }   // fuori dai ricavi
+            if fuoriDalContoEconomico(m) { continue }   // fuori dai ricavi e dai costi
             let c = (m.categoria?.isEmpty == false) ? m.categoria! : "altro"
             map[c, default: 0] += m.importo_cents
         }
@@ -1018,7 +1044,8 @@ struct TesoreriaView: View {
     }
     private func perCategoriaUscite(debiti: Bool) -> [(cat: String, tot: Int)] {
         var map: [String: Int] = [:]
-        for m in movStrutFiltrati where m.tipo == "uscita" && isDebito(m.categoria) == debiti {
+        for m in movStrutFiltrati where m.tipo == "uscita" && isDebito(m.categoria) == debiti
+                                        && !isUscitaNonCosto(m.categoria) {
             let c = (m.categoria?.isEmpty == false) ? m.categoria! : "altro"
             map[c, default: 0] += m.importo_cents
         }
@@ -1033,7 +1060,7 @@ struct TesoreriaView: View {
     private var totCauzioni: Int { cauzioniMov.reduce(0) { $0 + $1.importo_cents } }
     private var totApporti: Int { apportiMov.reduce(0) { $0 + $1.importo_cents } }
     private var totUscite: Int { movStrutFiltrati.filter { $0.tipo == "uscita" }.reduce(0) { $0 + $1.importo_cents } }
-    private var totCostiOperativi: Int { movStrutFiltrati.filter { $0.tipo == "uscita" && !isDebito($0.categoria) }.reduce(0) { $0 + $1.importo_cents } }
+    private var totCostiOperativi: Int { movStrutFiltrati.filter { $0.tipo == "uscita" && !isDebito($0.categoria) && !isUscitaNonCosto($0.categoria) }.reduce(0) { $0 + $1.importo_cents } }
     private var totDebiti: Int { movStrutFiltrati.filter { $0.tipo == "uscita" && isDebito($0.categoria) }.reduce(0) { $0 + $1.importo_cents } }
 
     private var contoEconomico: some View {
@@ -1146,7 +1173,8 @@ struct TesoreriaView: View {
     /// Uscite registrate, senza le commissioni OTA: quelle sono già dedotte nel
     /// blocco Booking (che mostra il netto) e conteggiarle qui le raddoppierebbe.
     private func usciteCasa(_ s: Struttura) -> [TesMovimento] {
-        movCasa(s).filter { $0.tipo == "uscita" && !isCommissioneOTA($0) }.sorted { $0.data < $1.data }
+        movCasa(s).filter { $0.tipo == "uscita" && !isCommissioneOTA($0)
+                            && !isUscitaNonCosto($0.categoria) }.sorted { $0.data < $1.data }
     }
     /// Commissione OTA: si riconosce dalla categoria, ma anche dalla descrizione.
     /// Tre commissioni Booking erano state salvate in categoria «airbnb» e così
@@ -1176,7 +1204,11 @@ struct TesoreriaView: View {
     }
     private func bookingIncassato(_ s: Struttura) -> [RigaOTA] {
         let commissioni = movCasa(s).filter { $0.tipo == "uscita" && isCommissioneOTA($0) }
-        return movCasa(s).filter { $0.tipo == "entrata" && $0.conto_id == "massimo" }
+        // Sul conto Massimo non arrivano solo le OTA: c'è il saldo di apertura,
+        // lo storno delle commissioni, il POS e qualche bonifico diretto. Le
+        // partite di giro qui dentro sembravano incassi di ospiti mai esistiti.
+        return movCasa(s).filter { $0.tipo == "entrata" && $0.conto_id == "massimo"
+                                   && !isEntrataNonRicavo($0.categoria) }
             .sorted { $0.data < $1.data }
             .map { m in
                 let rif = rifBooking(m.descrizione)
