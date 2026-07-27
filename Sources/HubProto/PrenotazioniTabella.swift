@@ -80,6 +80,10 @@ struct PrenotazioniTabella<Striscia: View>: View {
 
     @State private var q = ""
     @State private var filtro: Filtro = .giorno
+    /// Quale pastiglia del riepilogo ha l'elenco aperto: i numeri della
+    /// giornata non dicono a che camera si riferiscono, e ricavarlo voleva dire
+    /// rileggersi la tabella riga per riga.
+    @State private var pastigliaAperta: String?
     @State private var ordine: Colonna = .checkin
     @State private var crescente = true
     @FocusState private var cercaAttivo: Bool
@@ -255,33 +259,121 @@ struct PrenotazioniTabella<Striscia: View>: View {
         // Da riscuotere all'arrivo: il saldo aperto di chi entra oggi.
         let daRiscuotere = arrivi.reduce(0) { $0 + max(0, $1.amount_cents - $1.paid_cents) }
         let daSaldare = partenze.reduce(0) { $0 + max(0, $1.amount_cents - $1.paid_cents) }
+        let daRiscuotereRighe = arrivi.filter { $0.amount_cents > $0.paid_cents }
+        let daSaldareRighe = partenze.filter { $0.amount_cents > $0.paid_cents }
         return HStack(spacing: 8) {
-            pastiglia("ARRIVI", "\(arrivi.count)", PSE.pos, arrivi.isEmpty ? nil : arrivi.map { nomeBreve($0.guest_name) }.joined(separator: ", "))
-            pastiglia("PARTENZE", "\(partenze.count)", PSE.warn, partenze.isEmpty ? nil : partenze.map { nomeBreve($0.guest_name) }.joined(separator: ", "))
-            pastiglia("RESTANO", "\(restano.count)", PSE.dim, nil)
+            pastiglia("ARRIVI", "\(arrivi.count)", PSE.pos, arrivi.isEmpty ? nil : arrivi.map { nomeBreve($0.guest_name) }.joined(separator: ", "), arrivi)
+            pastiglia("PARTENZE", "\(partenze.count)", PSE.warn, partenze.isEmpty ? nil : partenze.map { nomeBreve($0.guest_name) }.joined(separator: ", "), partenze)
+            pastiglia("RESTANO", "\(restano.count)", PSE.dim, nil, restano)
             if daRiscuotere > 0 {
-                pastiglia("DA RISCUOTERE AL CHECK-IN", eur(daRiscuotere), PSE.warn, "Saldo aperto di chi arriva oggi")
+                pastiglia("DA RISCUOTERE AL CHECK-IN", eur(daRiscuotere), PSE.warn, "Saldo aperto di chi arriva oggi", daRiscuotereRighe, soldi: true)
             }
             if daSaldare > 0 {
-                pastiglia("DA SALDARE AL CHECK-OUT", eur(daSaldare), PSE.neg, "Saldo aperto di chi parte oggi")
+                pastiglia("DA SALDARE AL CHECK-OUT", eur(daSaldare), PSE.neg, "Saldo aperto di chi parte oggi", daSaldareRighe, soldi: true)
             }
             if partenze.count > 0 {
-                pastiglia("PULIZIE", "\(partenze.count)", PSE.accent, "Una per ogni camera che si libera")
+                pastiglia("PULIZIE", "\(partenze.count)", PSE.accent, "Una per ogni camera che si libera", partenze)
             }
             Spacer(minLength: 0)
         }
     }
     private func nomeBreve(_ n: String) -> String { n.split(separator: " ").first.map(String.init) ?? n }
-    private func pastiglia(_ t: String, _ v: String, _ c: Color, _ aiuto: String?) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(t).font(.system(size: 8, weight: .heavy)).tracking(0.6).foregroundStyle(PSE.faint)
-                .lineLimit(1)
-            Text(v).font(.system(size: 15, weight: .bold)).foregroundStyle(c).monospacedDigit().lineLimit(1)
+    /// Il numero e, dietro, le righe che lo compongono: si clicca e si vedono le
+    /// camere, e da lì si va sulla prenotazione senza passare dalla tabella.
+    private func pastiglia(_ t: String, _ v: String, _ c: Color, _ aiuto: String?,
+                           _ righe: [Prenotazione] = [], soldi: Bool = false) -> some View {
+        let apribile = !righe.isEmpty
+        let aperta = Binding(get: { pastigliaAperta == t },
+                             set: { pastigliaAperta = $0 ? t : nil })
+        // Niente `.disabled` sulla pastiglia vuota: sbiadirebbe il numero, e uno
+        // zero sbiadito si legge come «dato mancante» invece che come «oggi non
+        // arriva nessuno». Resta accesa, semplicemente non si apre.
+        return Button {
+            guard apribile else { return }
+            pastigliaAperta = pastigliaAperta == t ? nil : t
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text(t).font(.system(size: 8, weight: .heavy)).tracking(0.6).foregroundStyle(PSE.faint)
+                        .lineLimit(1)
+                    if apribile {
+                        Image(systemName: "chevron.down").font(.system(size: 6, weight: .black))
+                            .foregroundStyle(c.opacity(0.7))
+                    }
+                }
+                Text(v).font(.system(size: 15, weight: .bold)).foregroundStyle(c).monospacedDigit().lineLimit(1)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 10).fill(pastigliaAperta == t ? c.opacity(0.12) : PSE.surface))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(c.opacity(pastigliaAperta == t ? 0.6 : 0.25), lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: 10))
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 10).fill(PSE.surface))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(c.opacity(0.25), lineWidth: 1))
-        .help(aiuto ?? t.capitalized)
+        .buttonStyle(.plain)
+        .help(apribile ? "\(aiuto ?? t.capitalized) — clicca per vedere le camere" : (aiuto ?? t.capitalized))
+        .popover(isPresented: aperta, arrowEdge: .bottom) {
+            elencoCamere(t, righe, colore: c, soldi: soldi)
+        }
+    }
+
+    /// Le righe si leggono per casa e per camera, non nell'ordine in cui
+    /// tornano dal database: si apre l'elenco per sapere «quale stanza», e senza
+    /// un ordine la stanza va cercata in mezzo alle altre.
+    private func perCamera(_ righe: [Prenotazione]) -> [Prenotazione] {
+        righe.sorted { a, b in
+            let sa = Struttura.from(a.struttura), sb = Struttura.from(b.struttura)
+            if sa != sb { return sa.label < sb.label }
+            let ca = a.camera ?? "", cb = b.camera ?? ""
+            // Chi non ha ancora una camera va in fondo: è una cosa da sistemare,
+            // non una stanza dove andare.
+            if ca.isEmpty != cb.isEmpty { return cb.isEmpty }
+            if ca != cb { return ca < cb }
+            return a.guest_name < b.guest_name
+        }
+    }
+
+    /// L'elenco dietro una pastiglia: prima la camera, perché la domanda è
+    /// «quale stanza», poi chi ci sta e quanto manca.
+    private func elencoCamere(_ titolo: String, _ righe: [Prenotazione], colore: Color, soldi: Bool) -> some View {
+        let ordinate = perCamera(righe)
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(titolo).font(.system(size: 9, weight: .heavy)).tracking(0.8).foregroundStyle(colore)
+                .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 8)
+            ForEach(Array(ordinate.enumerated()), id: \.element.id) { i, b in
+                let str = Struttura.from(b.struttura)
+                let saldo = max(0, b.amount_cents - b.paid_cents)
+                Button {
+                    pastigliaAperta = nil
+                    onSelect(b)
+                } label: {
+                    HStack(spacing: 9) {
+                        RoundedRectangle(cornerRadius: 1.5)
+                            .fill(Color(hue: str.hue/360, saturation: 0.42, brightness: 0.74))
+                            .frame(width: 2.5, height: 24)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(b.camera ?? "Camera da assegnare")
+                                .font(.system(size: 12, weight: .semibold)).foregroundStyle(PSE.ink).lineLimit(1)
+                            Text("\(str.label) · \(b.guest_name)")
+                                .font(.system(size: 10)).foregroundStyle(PSE.faint).lineLimit(1)
+                        }
+                        Spacer(minLength: 10)
+                        if soldi, saldo > 0 {
+                            Text(saldo < 100 ? eurc(saldo) : eur(saldo))
+                                .font(.system(size: 11.5, weight: .bold)).monospacedDigit().foregroundStyle(colore)
+                        }
+                        Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(PSE.faint)
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 7)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Apri la prenotazione di \(b.guest_name)")
+                if i < ordinate.count - 1 { Divider().overlay(PSE.line).padding(.leading, 14) }
+            }
+            Spacer(minLength: 10)
+        }
+        .frame(width: 260)
+        .background(PSE.panel)
     }
 
     private var filtri: some View {
