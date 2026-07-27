@@ -1904,6 +1904,13 @@ private struct BookingDrawer: View {
     private var st: BookingStatus { .from(booking.status) }
     private var str: Struttura { .from(booking.struttura) }
     private var pay: PayState { payState(amount: booking.amount_cents, paid: booking.paid_cents) }
+    /// Totale, incassato e saldo stanno uno sotto l'altro: o i centesimi si
+    /// scrivono su tutte e tre le righe o su nessuna. Su una prenotazione da
+    /// 446,25 incassata per 446,00 si leggeva «€446 − €446 = €0», che sembra un
+    /// errore di conto invece che venticinque centesimi ancora da avere. Sulle
+    /// cifre tonde, che sono la maggioranza, non cambia niente.
+    private var conCentesimi: Bool { booking.amount_cents % 100 != 0 || booking.paid_cents % 100 != 0 }
+    private func soldi(_ cents: Int) -> String { conCentesimi ? eurc(cents) : eur(cents) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1957,17 +1964,17 @@ private struct BookingDrawer: View {
                             HStack {
                                 Text("Totale").font(.system(size: 12)).foregroundStyle(PSE.dim)
                                 Spacer()
-                                Text(eur(booking.amount_cents)).font(.system(size: 14, weight: .bold)).foregroundStyle(PSE.ink)
+                                Text(soldi(booking.amount_cents)).font(.system(size: 14, weight: .bold)).foregroundStyle(PSE.ink)
                             }
                             HStack {
                                 Text("Incassato").font(.system(size: 12)).foregroundStyle(PSE.dim)
                                 Spacer()
-                                Text(eur(booking.paid_cents)).font(.system(size: 14, weight: .bold)).foregroundStyle(PSE.text)
+                                Text(soldi(booking.paid_cents)).font(.system(size: 14, weight: .bold)).foregroundStyle(PSE.text)
                             }
                             HStack {
                                 Text("Saldo").font(.system(size: 12)).foregroundStyle(PSE.dim)
                                 Spacer()
-                                Text(eur(max(0, booking.amount_cents - booking.paid_cents)))
+                                Text(soldi(max(0, booking.amount_cents - booking.paid_cents)))
                                     .font(.system(size: 14, weight: .bold)).foregroundStyle(PSE.payment(pay))
                             }
                             // Sulle righe Educamp il pagato lo decidono i
