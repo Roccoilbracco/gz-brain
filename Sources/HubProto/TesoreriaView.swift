@@ -2001,28 +2001,180 @@ struct TesoreriaView: View {
             .foregroundStyle(PSE.dim).padding(.horizontal, 12).padding(.vertical, 8)
             .background(RoundedRectangle(cornerRadius: 10).fill(PSE.surface))
             .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(PSE.line, lineWidth: 1))
-        }.buttonStyle(.plain).help("Esporta i movimenti visibili in CSV")
+        }.buttonStyle(.plain).help("Scarica tutta la tesoreria in un unico CSV: ogni conto con entrate e uscite divise per casa")
     }
+
+    /// Cosa finisce nell'export: tutti i movimenti del periodo scelto (e della
+    /// casa, se il filtro è attivo). Non dipende dalla scheda aperta né dal
+    /// «solo fino a oggi»: il file è sempre la tesoreria intera, Educamp a parte.
+    private var exportMovimenti: [TesMovimento] {
+        model.movimenti
+            .filter { nelPeriodo($0) && (movStrut == nil || $0.struttura == movStrut!.rawValue) }
+            .sorted { $0.data > $1.data }
+    }
+
     private func exportCSV() {
-        // Movimenti → set filtrato visibile; Conti → estratto del conto; altro → tutti (filtro casa)
-        let rows: [TesMovimento]
-        switch sub {
-        case .movimenti: rows = visibiliMov
-        case .conti: rows = contoMovimenti
-        default: rows = movStrutFiltrati.sorted { $0.data > $1.data }
-        }
         func q(_ s: String?) -> String { "\"" + (s ?? "").replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
-        var csv = "\u{FEFF}Data;Tipo;Struttura;Categoria;Descrizione;Conto;Modalità;Importo\n"
-        for m in rows {
-            let conto = model.conti.first { $0.id == m.conto_id }?.nome ?? (m.conto_id ?? "")
-            let casa = m.struttura == "via-po" ? "Via Po" : m.struttura == "via-romagna" ? "Via Romagna" : ""
-            let imp = String(format: "%.2f", Double(m.importo_cents) / 100).replacingOccurrences(of: ".", with: ",")
-            csv += [m.data, m.tipo, casa, m.categoria ?? "", m.descrizione ?? "", conto, m.modalita ?? "", imp]
-                .map { q($0) }.joined(separator: ";") + "\n"
+        func riga(_ campi: [String]) -> String { campi.map { q($0) }.joined(separator: ";") + "\n" }
+        func num(_ cents: Int) -> String {
+            String(format: "%.2f", Double(cents) / 100).replacingOccurrences(of: ".", with: ",")
         }
-        // nome file parlante: sezione + casa + periodo, così i CSV per il
-        // commercialista non finiscono tutti con lo stesso nome
-        var parti = ["camere-pse", sub == .conti ? "conti-\(contoSel)" : sub == .contoEconomico ? "conto-economico" : "movimenti"]
+        func casaNome(_ s: String?) -> String {
+            s == "via-po" ? "Via Po" : s == "via-romagna" ? "Via Romagna" : "Non attribuito"
+        }
+        func contoNome(_ id: String?) -> String { model.conti.first { $0.id == id }?.nome ?? (id ?? "—") }
+        func tot(_ mov: [TesMovimento]) -> Int { mov.reduce(0) { $0 + $1.importo_cents } }
+        func totTipo(_ mov: [TesMovimento], _ tipo: String) -> Int { tot(mov.filter { $0.tipo == tipo }) }
+        let colonne = ["Data", "Casa", "Categoria", "Descrizione", "Conto", "Modalità", "Importo"]
+        let vuote = [String](repeating: "", count: colonne.count - 2)   // per allineare i totali all'ultima colonna
+
+        let mov = exportMovimenti
+        // Le case in cui si divide ogni blocco: col filtro attivo resta solo
+        // quella, se no Via Po, Via Romagna e i movimenti senza casa.
+        let leCase: [String?] = movStrut != nil ? [movStrut!.rawValue] : ["via-po", "via-romagna", nil]
+        func diCasa(_ righe: [TesMovimento], _ slug: String?) -> [TesMovimento] {
+            righe.filter { slug == nil ? ($0.struttura != "via-po" && $0.struttura != "via-romagna") : $0.struttura == slug }
+        }
+        /// Un conto (o «tutti i conti»): entrate e uscite, ognuna divisa casa per
+        /// casa, e in fondo la differenza — la stessa lettura della scheda Conti.
+        func sezioneConto(_ titolo: String, _ righe: [TesMovimento]) -> String {
+            var s = "\n" + riga([titolo]) + riga(["Movimenti", String(righe.count)]) + "\n"
+            for tipo in ["entrata", "uscita"] {
+                let etichetta = tipo == "entrata" ? "ENTRATE" : "USCITE"
+                let delTipo = righe.filter { $0.tipo == tipo }
+                for slug in leCase {
+                    let g = diCasa(delTipo, slug)
+                    guard !g.isEmpty else { continue }
+                    s += riga(["\(etichetta) — \(casaNome(slug).uppercased()) (\(g.count) moviment\(g.count == 1 ? "o" : "i"))"])
+                    s += riga(colonne)
+                    for m in g {
+                        s += riga([m.data, casaNome(m.struttura), m.categoria ?? "", m.descrizione ?? "",
+                                   contoNome(m.conto_id), m.modalita ?? "", num(m.importo_cents)])
+                    }
+                    s += riga(["Totale \(etichetta.lowercased()) \(casaNome(slug))"] + vuote + [num(tot(g))]) + "\n"
+                }
+                s += riga(["TOTALE \(etichetta) — \(titolo)"] + vuote + [num(tot(delTipo))]) + "\n"
+            }
+            s += riga(["TOTALE DIFFERENZA (ENTRATE − USCITE) — \(titolo)"] + vuote
+                      + [num(totTipo(righe, "entrata") - totTipo(righe, "uscita"))])
+            return s
+        }
+
+        // ── Intestazione ──
+        var csv = "\u{FEFF}"
+        csv += riga(["TESORERIA — CAMERE PSE"])
+        csv += riga(["Periodo", periodoLabel])
+        csv += riga(["Casa", movStrut?.label ?? "Tutte"])
+        csv += riga(["Esportato il", oggiStr])
+        csv += riga(["Movimenti nel file", String(mov.count)])
+
+        // ── Riepiloghi in testa: gli stessi totali delle card ──
+        csv += "\n" + riga(["RIEPILOGO PER CASA"]) + riga(["Casa", "Entrate", "Uscite", "Differenza"])
+        for slug in leCase {
+            let g = diCasa(mov, slug)
+            guard !g.isEmpty else { continue }
+            let e = totTipo(g, "entrata"), u = totTipo(g, "uscita")
+            csv += riga([casaNome(slug), num(e), num(u), num(e - u)])
+        }
+        let totE = totTipo(mov, "entrata"), totU = totTipo(mov, "uscita")
+        csv += riga(["TOTALE", num(totE), num(totU), num(totE - totU)])
+
+        csv += "\n" + riga(["RIEPILOGO PER CONTO"]) + riga(["Conto", "Entrate", "Uscite", "Differenza", "Saldo del conto (tutti i periodi)"])
+        for c in model.conti {
+            let g = mov.filter { $0.conto_id == c.id }
+            let e = totTipo(g, "entrata"), u = totTipo(g, "uscita")
+            csv += riga([c.nome, num(e), num(u), num(e - u), num(model.saldo(c.id))])
+        }
+        csv += riga(["TOTALE", num(totE), num(totU), num(totE - totU), num(model.totaleConti)])
+
+        // ── Un blocco per ogni voce dei conti, come le schede a schermo ──
+        csv += sezioneConto("TUTTI I CONTI", mov)
+        for c in model.conti { csv += sezioneConto(c.nome.uppercased(), mov.filter { $0.conto_id == c.id }) }
+        // Movimenti senza conto: se ci sono devono comparire, o i blocchi dei
+        // singoli conti non sommerebbero al blocco «tutti i conti».
+        let senzaConto = mov.filter { m in !model.conti.contains { $0.id == m.conto_id } }
+        if !senzaConto.isEmpty { csv += sezioneConto("SENZA CONTO", senzaConto) }
+
+        // ── Conto economico (base cassa), stessa classificazione della scheda ──
+        csv += "\n" + riga(["CONTO ECONOMICO — \(periodoLabel.uppercased())"]) + riga(["Voce", "Importo"])
+        csv += riga(["Ricavi da attività", num(totEntrate)])
+        csv += riga(["Costi operativi", num(totCostiOperativi)])
+        csv += riga(["Utile operativo (ricavi − costi)", num(totEntrate - totCostiOperativi)])
+        csv += riga(["Debiti e finanziamenti (rimborsi)", num(totDebiti)])
+        csv += riga(["Cauzioni incassate (da restituire)", num(totCauzioni)])
+        csv += riga(["Apporti soci (capitale)", num(totApporti)])
+        csv += riga(["Totale entrate", num(totE)])
+        csv += riga(["Totale uscite", num(totU)])
+        let ricaviCat = perCategoria("entrata"), costiCat = perCategoriaUscite(debiti: false), debitiCat = perCategoriaUscite(debiti: true)
+        if !ricaviCat.isEmpty {
+            csv += "\n" + riga(["RICAVI PER CATEGORIA"]) + riga(["Categoria", "Importo"])
+            for r in ricaviCat { csv += riga([r.cat, num(r.tot)]) }
+        }
+        if !costiCat.isEmpty {
+            csv += "\n" + riga(["COSTI OPERATIVI PER CATEGORIA"]) + riga(["Categoria", "Importo"])
+            for r in costiCat { csv += riga([r.cat, num(r.tot)]) }
+        }
+        if !debitiCat.isEmpty {
+            csv += "\n" + riga(["DEBITI E FINANZIAMENTI PER CATEGORIA"]) + riga(["Categoria", "Importo"])
+            for r in debitiCat { csv += riga([r.cat, num(r.tot)]) }
+        }
+
+        // ── Depositi cauzionali: entrano ed escono, quindi hanno colonna «movimento» ──
+        let dep = mov.filter { isDeposito($0) }
+        if !dep.isEmpty {
+            csv += "\n" + riga(["DEPOSITI CAUZIONALI"])
+            csv += riga(["Data", "Casa", "Movimento", "Descrizione", "Conto", "Importo"])
+            for m in dep {
+                csv += riga([m.data, casaNome(m.struttura), m.tipo == "entrata" ? "Incassata" : "Restituita",
+                             m.descrizione ?? "", contoNome(m.conto_id), num(m.importo_cents)])
+            }
+            let daRestituire = dep.reduce(0) { $0 + ($1.tipo == "entrata" ? $1.importo_cents : -$1.importo_cents) }
+            csv += riga(["ANCORA DA RESTITUIRE", "", "", "", "", num(daRestituire)])
+        }
+
+        // ── Servizi: pulizie, colazioni e bollette stanno in tabelle loro, non
+        //    nei movimenti, quindi vanno in coda con i propri totali. ──
+        func nelPeriodoData(_ d: String?) -> Bool { periodo == "tutto" || (d ?? "").hasPrefix(periodo) }
+        func casaOk(_ c: String?) -> Bool { movStrut == nil || c == movStrut!.rawValue }
+        let pulizie = model.pulizie.filter { nelPeriodoData($0.data) && casaOk($0.casa) }
+        if !pulizie.isEmpty {
+            csv += "\n" + riga(["SERVIZI — PULIZIE"]) + riga(["Data", "Casa", "Descrizione", "Stato", "Costo"])
+            for p in pulizie.sorted(by: { ($0.data ?? "") > ($1.data ?? "") }) {
+                csv += riga([p.data ?? "", casaNome(p.casa), p.descrizione ?? "", p.stato ?? "", num(p.costo_cents)])
+            }
+            let fatte = pulizie.filter { $0.stato == "fatta" }.reduce(0) { $0 + $1.costo_cents }
+            csv += riga(["TOTALE FATTE", "", "", "", num(fatte)])
+            csv += riga(["TOTALE PREVISTE", "", "", "", num(pulizie.reduce(0) { $0 + $1.costo_cents } - fatte)])
+        }
+        let colazioni = model.colazioni.filter { nelPeriodoData($0.arrivo) && casaOk($0.casa) }
+        if !colazioni.isEmpty {
+            csv += "\n" + riga(["SERVIZI — COLAZIONI"])
+            csv += riga(["Arrivo", "Partenza", "Casa", "Ospite", "Camera", "Notti", "Persone", "Notti servite", "Costo servito", "Costo totale", "Stato"])
+            for c in colazioni.sorted(by: { ($0.arrivo ?? "") > ($1.arrivo ?? "") }) {
+                csv += riga([c.arrivo ?? "", c.partenza ?? "", casaNome(c.casa), c.ospite ?? "", c.camera ?? "",
+                             String(c.notti ?? 0), String(c.persone ?? 0), String(c.notti_servite ?? 0),
+                             num(c.costo_servito_cents), num(c.costo_totale_cents), c.stato ?? ""])
+            }
+            csv += riga(["TOTALE SERVITO", "", "", "", "", "", "", "", num(colazioni.reduce(0) { $0 + $1.costo_servito_cents }),
+                         num(colazioni.reduce(0) { $0 + $1.costo_totale_cents }), ""])
+        }
+        let bollette = model.bollette.filter { nelPeriodoData($0.scadenza) && (movStrut == nil || $0.casa == movStrut!.rawValue || $0.casa == "comune") }
+        if !bollette.isEmpty {
+            csv += "\n" + riga(["SERVIZI — UTENZE (BOLLETTE)"])
+            csv += riga(["Scadenza", "Casa", "Tipo", "Fornitore", "Periodo", "Pagata", "Importo"])
+            for b in bollette.sorted(by: { ($0.scadenza ?? "") > ($1.scadenza ?? "") }) {
+                let casa = b.casa == "comune" ? "Comune" : casaNome(b.casa)
+                csv += riga([b.scadenza ?? "", casa, b.tipo, b.fornitore ?? "", b.periodo ?? "",
+                             b.pagata ? "sì" : "no", num(b.importo_cents)])
+            }
+            let pagate = bollette.filter { $0.pagata }.reduce(0) { $0 + $1.importo_cents }
+            csv += riga(["TOTALE PAGATE", "", "", "", "", "", num(pagate)])
+            csv += riga(["TOTALE DA PAGARE", "", "", "", "", "", num(bollette.reduce(0) { $0 + $1.importo_cents } - pagate)])
+        }
+
+        // nome file parlante: casa + periodo, così i CSV per il commercialista
+        // non finiscono tutti con lo stesso nome
+        var parti = ["camere-pse", "tesoreria"]
         if let s = movStrut { parti.append(s.rawValue) }
         if periodo != "tutto" { parti.append(periodo) }
         let panel = NSSavePanel()
