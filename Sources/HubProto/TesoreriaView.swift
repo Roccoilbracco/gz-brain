@@ -589,6 +589,7 @@ struct TesoreriaView: View {
         switch id {
         case "massimo": return "Conto delle OTA di Via Po: Booking (lordo entrata / commissione uscita) e Airbnb. Il saldo è il netto."
         case "beeper": return "Bonifici (entrambe le case): affitti, depositi da restituire, apporti soci e uscite."
+        case "carifermo": return "Mutuo e utenze di Via Po: solo uscite, il saldo negativo è normale."
         default: return "Contante Via Po + Via Romagna."
         }
     }
@@ -1448,7 +1449,8 @@ struct TesoreriaView: View {
         return t
     }
     private func contoNomeBreve(_ id: String?) -> String {
-        switch id { case "cassa": return "Cassa"; case "massimo": return "Massimo"; case "beeper": return "Beeper"; default: return id ?? "—" }
+        switch id { case "cassa": return "Cassa"; case "massimo": return "Massimo"; case "beeper": return "Beeper"
+        case "carifermo": return "Carifermo"; default: return id ?? "—" }
     }
     private var contiView: some View {
         // Filtrando per casa non si guarda più un saldo ma quanto quella casa ha
@@ -1766,9 +1768,10 @@ struct TesoreriaView: View {
 
     private var contoNota: String {
         switch contoSel {
-        case "tutti": return "Tutti i conti insieme: Cassa (contante, entrambe le case) + Massimo (le OTA di Via Po) + Beeper (bonifici). La colonna «Conto» indica dove è transitato il denaro."
+        case "tutti": return "Tutti i conti insieme: Cassa (contante, entrambe le case) + Massimo (le OTA di Via Po) + Beeper (bonifici) + Carifermo (mutuo e utenze di Via Po). La colonna «Conto» indica dove è transitato il denaro."
         case "massimo": return "Conto delle OTA di Via Po: qui arrivano Booking e Airbnb, e solo di quella casa. Booking entra al lordo con la commissione (16,5%) come uscita, quindi il saldo è il netto; Airbnb non ha commissione. Via Romagna non passa da qui: incassa in contante o per bonifico. Le prenotazioni future sono in «da incassare»."
         case "beeper": return "Estratto conto bonifici, entrambe le case: affitti bonificati, depositi degli inquilini (da restituire) e uscite (rata prestito, muratore, Marroni, spese banca)."
+        case "carifermo": return "Il conto da cui è partito il mutuo di Via Po: da qui escono la rata da 690 € (scritta da sola il primo di ogni mese) e le bollette di Via Po pagate da luglio 2026, che restano allineate alla scheda Servizi. Non incassa nulla: il saldo negativo è normale, i soldi per coprirlo si spostano dagli altri conti."
         default: return "Contante Via Po + Via Romagna: affitti in entrata; pulizia, colazioni, chiavi e idraulico in uscita."
         }
     }

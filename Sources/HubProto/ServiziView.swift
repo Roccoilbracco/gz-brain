@@ -526,7 +526,7 @@ struct ServiziView: View {
                     bolletteTable(g.righe, titolo: "BOLLETTE DA LUGLIO 2026 — \(casaLbl(g.casa).uppercased())")
                 }
             }
-            Text("Si pagano dal conto corrente, non da Cassa/Massimo/Beeper: per questo non compaiono tra i movimenti e non toccano i saldi. Ogni bolletta che arriva si registra con «Nuova bolletta» e ci si attacca il PDF; le vecchie si aprono cliccando sulla riga. Acqua, immondizia e IMU non erano nel foglio del maestro: le voci sono pronte, vanno solo riempite. Le utenze addebitate agli inquilini Educamp sono un'altra cosa e stanno nella scheda Educamp.")
+            Text("Si pagano dal conto Carifermo, quello del mutuo. Le bollette di VIA PO da luglio 2026 in poi escono da lì anche in Tesoreria (conto «Carifermo»): la bolletta resta la fonte, se cambi importo o data il movimento la segue, se la togli da pagata sparisce. Quelle di Via Romagna e l'archivio restano fuori dai movimenti. Ogni bolletta che arriva si registra con «Nuova bolletta» e ci si attacca il PDF; le vecchie si aprono cliccando sulla riga. Acqua, immondizia e IMU non erano nel foglio del maestro: le voci sono pronte, vanno solo riempite. Le utenze addebitate agli inquilini Educamp sono un'altra cosa e stanno nella scheda Educamp.")
                 .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
 
             if !bolletteStorico.isEmpty {
