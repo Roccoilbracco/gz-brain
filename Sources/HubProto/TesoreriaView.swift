@@ -2265,7 +2265,14 @@ private struct TesMovimentoForm: View {
                             Text("\(existing?.descrizione ?? existing?.categoria ?? "Movimento") · \(eurc(existing?.importo_cents ?? 0)). L'operazione non si può annullare.")
                         }
                     }
-                    Spacer()
+                    // Un bottone spento che non dice cosa gli manca lascia a
+                    // indovinare: se l'importo non si legge, lo scrive qui.
+                    if cents == nil, !importo.trimmingCharacters(in: .whitespaces).isEmpty {
+                        Text("Importo non leggibile: scrivi solo la cifra, tipo 700 o 1.200,50")
+                            .font(.system(size: 10.5)).foregroundStyle(Color(hex: 0xffb3ad))
+                            .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
                     Button("Annulla") { dismiss() }.buttonStyle(.plain)
                         .font(.system(size: 13)).foregroundStyle(Holo.subDim).padding(.horizontal, 16).padding(.vertical, 9)
                     Button { Task { await save() } } label: {
@@ -2316,8 +2323,21 @@ private struct TesMovimentoForm: View {
         .frame(maxWidth: .infinity)
     }
 
+    /// L'importo si prende come lo scrivi: «700», «700€», «€ 700», «1.200,50».
+    /// Il campo si chiama «Importo €», quindi scriverci dentro l'euro è la cosa
+    /// naturale da fare, e prima bastava quel simbolo perché il bottone Salva
+    /// restasse spento senza dire perché. Stessa cosa per i punti delle
+    /// migliaia, che erano il modo normale di scrivere milleduecento.
     private var cents: Int? {
-        let s = importo.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespaces)
+        var s = importo.filter { $0.isNumber || $0 == "," || $0 == "." || $0 == "-" }
+        if s.contains(",") {
+            // virgola decimale all'italiana: i punti rimasti sono le migliaia
+            s = s.replacingOccurrences(of: ".", with: "").replacingOccurrences(of: ",", with: ".")
+        } else if s.contains("."), (s.split(separator: ".").last?.count ?? 0) == 3 {
+            // «1.200» sono milleduecento, «700.50» sono settecento e cinquanta
+            // centesimi: a distinguerli è solo quante cifre vengono dopo.
+            s = s.replacingOccurrences(of: ".", with: "")
+        }
         guard let v = Double(s), v > 0 else { return nil }
         return Int((v * 100).rounded())
     }
