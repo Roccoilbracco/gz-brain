@@ -145,11 +145,18 @@ enum TesSub: String, CaseIterable, Identifiable {
 struct DettaglioRiga: Identifiable {
     let id: String
     var data: String = ""
+    /// La stessa data in `yyyy-MM-dd`. `data` è già scritta come si legge
+    /// (`dd/MM/yy`) e ordinarci sopra mette il 1º ottobre 2024 dopo il 1º
+    /// settembre 2025: per mettere in fila le righe si usa questa.
+    var ymd: String = ""
     let descrizione: String
     var extra: String = ""      // casa · conto · canale
     /// Casa da sola, quando la si conosce: serve a spaccare i totali per
     /// struttura senza dover leggere dentro `extra`.
     var casa: String = ""
+    /// Chi ha tirato fuori i soldi: il conto della società, un socio, i
+    /// contanti. Serve a dire, fornitore per fornitore, chi ha pagato cosa.
+    var pagatoDa: String = ""
     let importo: Int
     var positivo: Bool = true
     var mostraSegno: Bool = true

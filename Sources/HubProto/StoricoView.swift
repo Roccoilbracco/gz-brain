@@ -115,6 +115,12 @@ extension HubAPI {
     static func listStoricoApportiTutti() async throws -> [StoricoApporto] {
         try await sb.fetch("storico_apporti_soci?select=*&order=data.asc&limit=2000")
     }
+    /// Tutti i movimenti, senza filtro di stagione: servono per numerare le
+    /// rate dei mutui. La rata 4 è la quarta del mutuo, non la prima della
+    /// stagione in cui si sta guardando.
+    static func listStoricoMovimentiTutti() async throws -> [StoricoMovimento] {
+        try await sb.fetch("storico_movimenti?select=*&order=data.asc&limit=3000")
+    }
     static func listStoricoPendenti(_ p: String) async throws -> [StoricoPendente] {
         try await sb.fetch("storico_pendenti?select=*\(filtroPeriodo(p))&order=data_avviso.asc&limit=500")
     }
@@ -270,7 +276,60 @@ struct FornitoreTotale: Identifiable {
     let viaRomagna: Int
     let comune: Int
     let righe: [DettaglioRiga]
+    /// Chi ha pagato questo fornitore, dal più grosso al più piccolo.
+    var paganti: [(nome: String, importo: Int)] = []
     var id: String { nome }
+}
+
+/// I nomi come stanno scritti nel foglio vecchio sono sigle; qui diventano
+/// leggibili. «Ver nota» vuol dire che chi ha pagato non è mai stato scritto.
+func nomePagante(_ p: String?) -> String {
+    switch (p ?? "").trimmingCharacters(in: .whitespaces) {
+    case "Conto Proprieta":            return "Conto società"
+    case "Conto BPER Giacomo-Giorgio": return "Conto BPER"
+    case "Conto Affittacamere Massimo":return "Conto Massimo"
+    case "Conto Giacomo":              return "Conto Giacomo"
+    case "Cassa contanti":             return "Contanti"
+    case "Affiti":                     return "Incasso affitti"
+    case "Ver nota", "Por identificar", "": return "Da chiarire"
+    case let altro:                    return altro
+    }
+}
+
+/// «Rata mutuo Via Po RATA N. 7» → 7. Zero vuol dire che il numero non c'è:
+/// o non è mai stato scritto, o è scritto «N. 0», che è lo stesso.
+private func numeroScritto(_ d: String?) -> Int {
+    guard let d, let r = d.range(of: #"RATA\s*N\.?\s*\d+"#,
+                                 options: [.regularExpression, .caseInsensitive])
+    else { return 0 }
+    return Int(d[r].filter(\.isNumber)) ?? 0
+}
+
+/// Il numero di ogni rata di mutuo, casa per casa, come lo chiama la banca:
+///   • dove il numero c'è già scritto — Via Po, «RATA N. 4» — si tiene quello;
+///   • le rate della stessa casa rimaste senza numero sono il preammortamento,
+///     pagato mentre la banca erogava a stati d'avanzamento: solo interessi,
+///     non rate di ammortamento, e si contano a parte;
+///   • dove la banca non ha numerato niente — Via Romagna — si numera in
+///     ordine di data, che lì è l'unico ordine che esiste.
+/// Fuori restano spese, commissioni e perizie: non sono rate, non si numerano.
+func numeriRata(_ tutti: [StoricoMovimento]) -> [String: String] {
+    let rate = tutti.filter {
+        $0.tipo == "uscita" && ($0.categoria ?? "").lowercased().contains("rata")
+    }
+    var out: [String: String] = [:]
+    for (_, casa) in Dictionary(grouping: rate, by: { $0.struttura ?? "—" }) {
+        let ord = casa.sorted { $0.data < $1.data }
+        let numerate = ord.filter { numeroScritto($0.descrizione) > 0 }
+        guard !numerate.isEmpty else {
+            for (i, m) in ord.enumerated() { out[m.id] = "Rata \(i + 1)/\(ord.count)" }
+            continue
+        }
+        for m in numerate { out[m.id] = "Rata \(numeroScritto(m.descrizione))/\(numerate.count)" }
+        let pre = ord.filter { numeroScritto($0.descrizione) == 0 }
+        for (i, m) in pre.enumerated() { out[m.id] = "Preammortamento \(i + 1)/\(pre.count)" }
+    }
+    return out
 }
 
 @MainActor final class StoricoModel: ObservableObject {
@@ -282,6 +341,8 @@ struct FornitoreTotale: Identifiable {
     /// Apporti di tutti e due i periodi: servono per il conguaglio, che è
     /// complessivo e non ha senso spezzato per stagione.
     @Published var apportiTutti: [StoricoApporto] = []
+    /// Numero di rata per id, su tutte e due le stagioni (vedi `numeriRata`).
+    @Published var numeroRata: [String: String] = [:]
     @Published var loading = true
     private var caricato: String? = nil
 
@@ -303,6 +364,7 @@ struct FornitoreTotale: Identifiable {
         apporti = (try? await p) ?? []
         pendenti = (try? await d) ?? []
         apportiTutti = (try? await HubAPI.listStoricoApportiTutti()) ?? []
+        numeroRata = numeriRata((try? await HubAPI.listStoricoMovimentiTutti()) ?? [])
         caricato = periodo
         loading = false
     }
@@ -400,24 +462,49 @@ struct FornitoreTotale: Identifiable {
     var apportiDelPeriodo: [StoricoApporto] { apporti.filter { $0.conta } }
 
     // ── Righe per le finestre di dettaglio ──
+    /// La rata come si legge in una finestra di dettaglio: davanti il numero,
+    /// e via il testo che quel numero ha appena reso inutile — «Rata mutuo
+    /// Via Po RATA N. 7» diventa «Rata 7/12». Quello che resta si tiene:
+    /// il numero di finanziamento di Via Romagna sta scritto lì dentro.
+    /// Le righe che non sono rate escono come stanno.
+    func descrizioneMov(_ m: StoricoMovimento) -> String {
+        let testo = m.descrizione ?? "—"
+        guard let numero = numeroRata[m.id] else { return testo }
+        var resto = testo
+            .replacingOccurrences(of: #"RATA\s*N\.?\s*\d+"#, with: "",
+                                  options: [.regularExpression, .caseInsensitive])
+            .replacingOccurrences(of: #"^\s*Rata\s+mutuo\s*"#, with: "",
+                                  options: [.regularExpression, .caseInsensitive])
+        if let casa = m.struttura, resto.hasPrefix(casa) { resto.removeFirst(casa.count) }
+        resto = resto.trimmingCharacters(in: CharacterSet(charactersIn: " —–-·"))
+        return resto.isEmpty ? numero : "\(numero) · \(resto)"
+    }
     func righe(_ r: [StoricoMovimento]) -> [DettaglioRiga] {
         r.sorted { $0.data < $1.data }.map {
-            DettaglioRiga(id: $0.id, data: stoData($0.data), descrizione: $0.descrizione ?? "—",
+            DettaglioRiga(id: $0.id, data: stoData($0.data), ymd: $0.data,
+                          descrizione: descrizioneMov($0),
                           extra: [$0.struttura, $0.categoria].compactMap { $0 }.joined(separator: " · "),
-                          casa: $0.struttura ?? "", importo: $0.importo_cents, positivo: $0.tipo == "entrata")
+                          casa: $0.struttura ?? "", pagatoDa: nomePagante($0.pagato_da),
+                          importo: $0.importo_cents, positivo: $0.tipo == "entrata")
         }
     }
     func righe(_ r: [StoricoSpesaAlloggio]) -> [DettaglioRiga] {
         r.sorted { $0.data < $1.data }.map {
-            DettaglioRiga(id: $0.id, data: stoData($0.data), descrizione: $0.descrizione ?? "—",
+            DettaglioRiga(id: $0.id, data: stoData($0.data), ymd: $0.data,
+                          descrizione: $0.descrizione ?? "—",
                           extra: [$0.struttura, $0.categoria].compactMap { $0 }.joined(separator: " · "),
-                          casa: $0.struttura ?? "", importo: $0.importo_cents, positivo: false)
+                          // Le spese alloggio non hanno mai avuto un «pagato da»:
+                          // nel foglio vecchio erano una colonna di soli importi.
+                          // Vanno con le altre sotto «Da chiarire», se no il conto
+                          // di chi ha pagato non torna col totale del fornitore.
+                          casa: $0.struttura ?? "", pagatoDa: nomePagante(nil),
+                          importo: $0.importo_cents, positivo: false)
         }
     }
     func righe(_ r: [StoricoAffitto], netto: Bool = false) -> [DettaglioRiga] {
         r.sorted { $0.data < $1.data }.map {
             let notti = $0.notti.map { "\($0) notti" } ?? ""
-            return DettaglioRiga(id: $0.id, data: stoData($0.data),
+            return DettaglioRiga(id: $0.id, data: stoData($0.data), ymd: $0.data,
                                  descrizione: [$0.camera, $0.canale].compactMap { $0 }.joined(separator: " · "),
                                  extra: [$0.struttura ?? "", notti].filter { !$0.isEmpty }.joined(separator: " · "),
                                  importo: netto ? $0.netto_cents : $0.lordo_cents, positivo: true)
@@ -425,7 +512,8 @@ struct FornitoreTotale: Identifiable {
     }
     func righe(_ r: [StoricoApporto]) -> [DettaglioRiga] {
         r.sorted { $0.data < $1.data }.map {
-            DettaglioRiga(id: $0.id, data: stoData($0.data), descrizione: $0.descrizione ?? "—",
+            DettaglioRiga(id: $0.id, data: stoData($0.data), ymd: $0.data,
+                          descrizione: $0.descrizione ?? "—",
                           extra: [$0.struttura, $0.conta ? nil : "fuori conguaglio"].compactMap { $0 }.joined(separator: " · "),
                           casa: $0.struttura ?? "", importo: abs($0.importo_cents), positivo: $0.importo_cents >= 0)
         }
@@ -565,14 +653,23 @@ struct StoricoView: View {
             perF = Dictionary(grouping: dentro, by: { storicoFornitore($0.descrizione) })
                 .map { nome, rr in
                     func q(_ c: String) -> Int { rr.filter { $0.casa == c }.reduce(0) { $0 + val($1) } }
+                    let paganti = Dictionary(grouping: rr.filter { !$0.pagatoDa.isEmpty },
+                                             by: { $0.pagatoDa })
+                        .map { (nome: $0.key, importo: $0.value.reduce(0) { $0 + val($1) }) }
+                        .filter { $0.importo != 0 }
+                        .sorted { $0.importo > $1.importo }
                     return FornitoreTotale(nome: nome, totale: rr.reduce(0) { $0 + val($1) },
                                            viaPo: q("Via Po"), viaRomagna: q("Via Romagna"), comune: q("Mixto"),
-                                           righe: rr.sorted { $0.data < $1.data })
+                                           righe: rr.sorted { $0.ymd < $1.ymd }, paganti: paganti)
                 }
                 .filter { $0.totale != 0 }
                 .sorted { $0.totale > $1.totale }
         }
-        dettaglio = StoricoDettaglio(id: titolo, titolo: titolo, nota: nota, righe: righe,
+        // Movimenti e spese di alloggio arrivano qui una lista dietro l'altra:
+        // in ordine di data si leggono come un estratto conto. Se anche una
+        // sola riga non porta la data si lascia l'ordine di chi ha chiamato.
+        let inOrdine = righe.allSatisfy { !$0.ymd.isEmpty } ? righe.sorted { $0.ymd < $1.ymd } : righe
+        dettaglio = StoricoDettaglio(id: titolo, titolo: titolo, nota: nota, righe: inOrdine,
                                      totale: totale, perFornitore: perF)
     }
 
@@ -1594,10 +1691,19 @@ struct StoricoDettaglioSheet: View {
         .preferredColorScheme(.dark)
     }
 
+    /// «Conto società 27.950 · Giorgio 1.415». Se paga uno solo, il nome basta:
+    /// ripetere la cifra accanto al totale della riga non aggiunge niente.
+    private func chiHaPagato(_ p: [(nome: String, importo: Int)]) -> String {
+        if p.count == 1 { return p[0].nome }
+        return p.prefix(3).map { "\($0.nome) \(eurc($0.importo))" }.joined(separator: " · ")
+             + (p.count > 3 ? " · +\(p.count - 3)" : "")
+    }
+
     private var fornitori: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Text("A CHI").font(.system(size: 8.5, weight: .heavy)).tracking(0.6).foregroundStyle(PSE.faint)
+                Text("A CHI  ·  CHI HA PAGATO").font(.system(size: 8.5, weight: .heavy)).tracking(0.6)
+                    .foregroundStyle(PSE.faint)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 ForEach(["VIA PO", "VIA ROMAGNA", "COMUNE", "TOTALE"], id: \.self) { t in
                     Text(t).font(.system(size: 8.5, weight: .heavy)).tracking(0.6).foregroundStyle(PSE.faint)
@@ -1613,8 +1719,15 @@ struct StoricoDettaglioSheet: View {
                     HStack(spacing: 10) {
                         Image(systemName: aperto == f.nome ? "chevron.down" : "chevron.right")
                             .font(.system(size: 9, weight: .bold)).foregroundStyle(PSE.faint).frame(width: 12)
-                        Text(f.nome).font(.system(size: 12.5, weight: .medium)).foregroundStyle(PSE.ink)
-                            .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
+                        VStack(alignment: .leading, spacing: 1.5) {
+                            Text(f.nome).font(.system(size: 12.5, weight: .medium)).foregroundStyle(PSE.ink)
+                                .lineLimit(1)
+                            if !f.paganti.isEmpty {
+                                Text(chiHaPagato(f.paganti))
+                                    .font(.system(size: 9.5)).foregroundStyle(PSE.faint).lineLimit(1)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         soldi(f.viaPo, 100); soldi(f.viaRomagna, 100); soldi(f.comune, 100)
                         Text(eurc(f.totale)).font(.system(size: 13, weight: .bold)).foregroundStyle(PSE.accent)
                             .monospacedDigit().frame(width: 110, alignment: .trailing)
@@ -1632,7 +1745,10 @@ struct StoricoDettaglioSheet: View {
                                 Text(r.descrizione).font(.system(size: 11.5)).foregroundStyle(PSE.text)
                                     .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
                                 Text(r.casa).font(.system(size: 10.5)).foregroundStyle(PSE.faint)
-                                    .frame(width: 90, alignment: .leading)
+                                    .frame(width: 82, alignment: .leading)
+                                Text(r.pagatoDa).font(.system(size: 10.5))
+                                    .foregroundStyle(r.pagatoDa == "Da chiarire" ? PSE.warn.opacity(0.8) : PSE.faint)
+                                    .frame(width: 104, alignment: .leading).lineLimit(1)
                                 Text(eurc(r.importo)).font(.system(size: 11.5, weight: .semibold))
                                     .foregroundStyle(PSE.neg).monospacedDigit().frame(width: 90, alignment: .trailing)
                             }
