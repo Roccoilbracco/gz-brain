@@ -550,7 +550,11 @@ struct TesoreriaView: View {
         case .conto(let id):
             let c = model.conti.first { $0.id == id }
             let mov = model.movimenti.filter { $0.conto_id == id }.sorted { $0.data > $1.data }
-            return ("\(c?.nome.uppercased() ?? "CONTO") — ESTRATTO", contoNotaFor(id),
+            let cauz = depositiConto(id)
+            let nota = contoNotaFor(id) + (cauz > 0
+                ? " Di questo saldo \(eurc(cauz)) sono cauzioni da restituire agli inquilini: disponibile davvero \(eurc(model.saldo(id) - cauz))."
+                : "")
+            return ("\(c?.nome.uppercased() ?? "CONTO") — ESTRATTO", nota,
                     mov.map { rigaDaMov($0) }, "SALDO", model.saldo(id))
         case .totaleConti:
             let mov = model.movimenti.sorted { $0.data > $1.data }
@@ -746,6 +750,9 @@ struct TesoreriaView: View {
     private func contoCard(_ c: Conto) -> some View {
         let s = model.saldo(c.id)
         let inc = daIncassare(c.id)
+        // Il saldo da solo dice quanto c'è, non quanto se ne può usare: le
+        // cauzioni degli inquilini stanno su questo conto ma vanno restituite.
+        let cauz = depositiConto(c.id)
         return VStack(alignment: .leading, spacing: 7) {
             Text(c.nome.uppercased()).font(.system(size: 10, weight: .heavy)).tracking(0.5).foregroundStyle(PSE.faint).lineLimit(1)
             Text(eurc(s)).font(.system(size: 22, weight: .bold)).foregroundStyle(s < 0 ? PSE.neg : PSE.ink).monospacedDigit()
@@ -754,8 +761,16 @@ struct TesoreriaView: View {
             } else {
                 Text(c.tipo == "cassa" ? "Contante" : c.tipo == "ota" ? "Booking + Airbnb" : "Banca").font(.system(size: 10)).foregroundStyle(PSE.dim)
             }
+            if cauz > 0 {
+                Text("\(eurc(cauz)) sono cauzioni · disponibile \(eurc(s - cauz))")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle((s - cauz) < 0 ? PSE.neg : PSE.dim)
+                    .lineLimit(1).minimumScaleFactor(0.75)
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading).padding(16)
+        // Altezza minima: la riga delle cauzioni compare su un conto solo e
+        // senza questo le card della griglia verrebbero di due altezze diverse.
+        .frame(maxWidth: .infinity, minHeight: 88, alignment: .topLeading).padding(16)
         .background(RoundedRectangle(cornerRadius: 14).fill(PSE.panel))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
     }
@@ -799,6 +814,14 @@ struct TesoreriaView: View {
         depositiMov.reduce(0) { $0 + ($1.tipo == "entrata" ? $1.importo_cents : -$1.importo_cents) }
     }
     private var nostroReale: Int { model.totaleConti - depositiDaRestituire }
+    /// Le cauzioni ferme su UN conto. Il saldo del conto le contiene — il denaro
+    /// è davvero lì — ma non è spendibile: sta lì in attesa di tornare indietro.
+    /// Su Beeper è la differenza fra quello che si legge in banca e quello che
+    /// si può usare davvero.
+    private func depositiConto(_ contoId: String) -> Int {
+        depositiMov.filter { $0.conto_id == contoId }
+            .reduce(0) { $0 + ($1.tipo == "entrata" ? $1.importo_cents : -$1.importo_cents) }
+    }
 
     private var depositiView: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1579,6 +1602,17 @@ struct TesoreriaView: View {
             if perCasa {
                 Text("Filtro casa attivo: questi non sono saldi di conto ma quanto \(movStrut!.label) ha generato e speso. Il denaro sui conti è in comune e non si divide per casa — i saldi veri si vedono togliendo il filtro.")
                     .font(.system(size: 10.5)).foregroundStyle(PSE.warn)
+            } else {
+                // Quanto di questo saldo è di qualcun altro. Detto qui e non solo
+                // nella scheda «Depositi», perché è qui che si guarda il conto
+                // prima di pagare qualcosa.
+                let cauz = tuttiIConti ? depositiDaRestituire : depositiConto(contoSel)
+                if cauz > 0 {
+                    let oggi = tuttiIConti ? model.totaleConti : model.saldo(contoSel)
+                    Text("Di quello che c'è oggi \(tuttiIConti ? "sui conti" : "su questo conto") — \(eurc(oggi)) — \(eurc(cauz)) sono cauzioni degli inquilini da restituire: disponibile davvero \(eurc(oggi - cauz)). Il dettaglio è nella scheda «Depositi».")
+                        .font(.system(size: 10.5)).foregroundStyle((oggi - cauz) < 0 ? PSE.neg : PSE.warn)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             // Con «Tutti i conti»: una card di saldo per ciascun conto (saldo pieno,
             // non del periodo: è quello che c'è davvero sul conto oggi)
