@@ -123,7 +123,22 @@ let BREAKFAST_COST = 350   // 3,50 € per persona/notte (solo Booking)
 // L'ordine dei case è quello delle schede a schermo (CaseIterable segue la
 // dichiarazione): prima le viste d'insieme e operative, in fondo le sezioni
 // specialistiche (depositi cauzionali, Educamp).
-enum TesSub: String, CaseIterable, Identifiable { case riepilogo = "Riepilogo", conti = "Conti", contoEconomico = "Conto economico", servizi = "Servizi", movimenti = "Movimenti", depositi = "Depositi", educamp = "Educamp"; var id: String { rawValue } }
+// Le due schede in coda sono lo storico contabile chiuso (vedi StoricoView):
+// stagioni finite, tabelle `storico_*` tutte loro. Non entrano in
+// nessun saldo, in nessun «da incassare» e in nessun conto di questa pagina:
+// stanno qui solo perché è qui che uno le va a cercare. Per questo sono in un
+// gruppo staccato nella barra, sotto l'etichetta ARCHIVIO.
+enum TesSub: String, CaseIterable, Identifiable {
+    case riepilogo = "Riepilogo", conti = "Conti", contoEconomico = "Conto economico", servizi = "Servizi", movimenti = "Movimenti", depositi = "Depositi", educamp = "Educamp"
+    case storico2425 = "Apr 2024 – Set 2025", storico2526 = "Ott 2025 – Giu 2026"
+    case storicoTutto = "Riassunto"
+    var id: String { rawValue }
+    /// La gestione viva: quello che si muove ogni giorno.
+    static let correnti: [TesSub] = [.riepilogo, .conti, .contoEconomico, .servizi, .movimenti, .depositi, .educamp]
+    /// L'archivio: contabilità chiusa, che non si tocca più.
+    static let archivio: [TesSub] = [.storico2425, .storico2526, .storicoTutto]
+    var isArchivio: Bool { TesSub.archivio.contains(self) }
+}
 
 // ── Sotto-finestre di dettaglio del Riepilogo ────────────────────────────────
 // Riga generica: un movimento, una prenotazione o una voce di riepilogo.
@@ -132,6 +147,9 @@ struct DettaglioRiga: Identifiable {
     var data: String = ""
     let descrizione: String
     var extra: String = ""      // casa · conto · canale
+    /// Casa da sola, quando la si conosce: serve a spaccare i totali per
+    /// struttura senza dover leggere dentro `extra`.
+    var casa: String = ""
     let importo: Int
     var positivo: Bool = true
     var mostraSegno: Bool = true
@@ -225,6 +243,9 @@ enum RiepVoce: Identifiable {
     case cauzioniApporti
     // Movimenti / Conti: un elenco di movimenti già filtrato, con titolo
     case movimenti(String, [TesMovimento], Int)
+    // Archivio storico: la scheda per correggere una riga. Passa da qui perché
+    // di tutti i .sheet appesi a questa vista ne funziona uno solo, l'ultimo.
+    case storicoEdit(StoricoEditTarget, String)
     var id: String {
         switch self {
         case .conto(let c): return "conto-\(c)"
@@ -241,6 +262,7 @@ enum RiepVoce: Identifiable {
         case .debiti: return "debiti"
         case .cauzioniApporti: return "cauzapp"
         case .movimenti(let t, _, _): return "mov-\(t)"
+        case .storicoEdit(let t, let p): return "sto-\(p)-\(t.id)"
         }
     }
 }
@@ -417,7 +439,13 @@ struct TesoreriaView: View {
             // schiacciate fino ad andare a capo una lettera per riga.
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 12) {
-                    PSESegmented(items: TesSub.allCases.map { ($0, $0.rawValue) }, selection: $sub)
+                    PSESegmented(items: TesSub.correnti.map { ($0, $0.rawValue) }, selection: $sub)
+                    // Stacco netto: a destra della riga c'è l'archivio, che con
+                    // i conti di sopra non c'entra niente.
+                    Rectangle().fill(PSE.line).frame(width: 1, height: 20)
+                    Text("ARCHIVIO").font(.system(size: 8.5, weight: .heavy)).tracking(0.8)
+                        .foregroundStyle(PSE.faint).fixedSize()
+                    PSESegmented(items: TesSub.archivio.map { ($0, $0.rawValue) }, selection: $sub)
                     Spacer(minLength: 12)
                     if sub == .movimenti {
                         Text("\(visibiliMov.count) movimenti").font(.system(size: 11, weight: .medium))
@@ -453,6 +481,13 @@ struct TesoreriaView: View {
                     // I movimenti arrivano da qui: registrato un incasso, il
                     // modello si ricarica e le spunte «pagato» seguono subito.
                     case .educamp: EducampView(movimenti: model.movimenti)
+                    case .storico2425:
+                        StoricoView(periodo: "2024-2025") { voceSheet = .storicoEdit($0, "2024-2025") }
+                    case .storico2526:
+                        StoricoView(periodo: "2025-2026") { voceSheet = .storicoEdit($0, "2025-2026") }
+                    // Il riassunto legge tutte e due le stagioni insieme.
+                    case .storicoTutto:
+                        StoricoView(periodo: "tutto") { voceSheet = .storicoEdit($0, "tutto") }
                     case .servizi: ServiziView(tab: $servizioSel)
                     case .movimenti: movimentiList
                     }
@@ -477,9 +512,13 @@ struct TesoreriaView: View {
             ServizioDettaglioSheet(tab: tab) { servizioSheet = nil }
         }
         .sheet(item: $voceSheet) { v in
-            let d = dettaglioVoce(v)
-            DettaglioVoceSheet(titolo: d.titolo, nota: d.nota, righe: d.righe,
-                               totaleLabel: d.totaleLabel, totale: d.totale) { voceSheet = nil }
+            if case .storicoEdit(let t, let p) = v {
+                StoricoEditSheet(periodo: p, target: t) { voceSheet = nil }
+            } else {
+                let d = dettaglioVoce(v)
+                DettaglioVoceSheet(titolo: d.titolo, nota: d.nota, righe: d.righe,
+                                   totaleLabel: d.totaleLabel, totale: d.totale) { voceSheet = nil }
+            }
         }
     }
 
@@ -499,6 +538,8 @@ struct TesoreriaView: View {
     }
     private func dettaglioVoce(_ v: RiepVoce) -> (titolo: String, nota: String, righe: [DettaglioRiga], totaleLabel: String, totale: Int?) {
         switch v {
+        // Non passa mai di qui: la modifica dell'archivio apre la sua scheda.
+        case .storicoEdit: return ("", "", [], "", nil)
         case .conto(let id):
             let c = model.conti.first { $0.id == id }
             let mov = model.movimenti.filter { $0.conto_id == id }.sorted { $0.data > $1.data }
