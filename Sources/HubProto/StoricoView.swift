@@ -242,6 +242,7 @@ func storicoFornitore(_ d: String?) -> String {
         ("hfb", "Ancona HFB"), ("energia", "Enel / Energia"), ("enel", "Enel / Energia"),
         ("plenitude", "Plenitude"), ("wind tre", "Wind Tre"), ("nexi", "Nexi"),
         ("unipol", "Unipol"), ("assifirmum", "Assifirmum"), ("bucalossi", "Bucalossi"),
+        ("aon", "AON Assicurazioni"),
         ("commercialista", "Commercialista Fausto"), ("notaio", "Notaio Ciotola"),
         ("ciotola", "Notaio Ciotola"), ("carifermo", "Carifermo"), ("bper", "BPER"),
         ("eco elpidiense", "Eco Elpidiense"), ("proshop", "Pro Shop"),
@@ -580,7 +581,8 @@ struct StoricoView: View {
         .padding(.horizontal, 2)
         .task(id: periodo) { await model.load(periodo) }
         .sheet(item: $dettaglio) { d in
-            StoricoDettaglioSheet(d: d) { dettaglio = nil }
+            StoricoDettaglioSheet(d: d, onClose: { dettaglio = nil },
+                                  bersaglio: rigaArchivio, modifica: apriModifica)
         }
         // Salvato o cancellato qualcosa: i numeri qui si rifanno da soli.
         .onReceive(NotificationCenter.default.publisher(for: .datiCambiati)) { _ in
@@ -636,6 +638,22 @@ struct StoricoView: View {
         .padding(.horizontal, 12).padding(.vertical, 9)
         .background(RoundedRectangle(cornerRadius: 10).fill(PSE.accent.opacity(0.07)))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(PSE.accent.opacity(0.25), lineWidth: 1))
+    }
+
+    /// Dall'`id` di una riga di dettaglio alla riga vera dell'archivio. Le righe
+    /// di dettaglio portano l'id della riga da cui nascono, quindi basta
+    /// cercarlo: quello che non si trova è un totale o un separatore, calcolato
+    /// al volo, e resta giustamente non modificabile.
+    private func rigaArchivio(_ r: DettaglioRiga) -> StoricoEditTarget? {
+        if let m = model.movimenti.first(where: { $0.id == r.id }) { return .movimento(m) }
+        if let s = model.spese.first(where: { $0.id == r.id })     { return .spesa(s) }
+        if let a = model.affitti.first(where: { $0.id == r.id })   { return .affitto(a) }
+        // Il conguaglio fra i soci guarda tutte le stagioni insieme: le sue
+        // righe stanno in `apportiTutti`, non nel periodo aperto.
+        if let p = model.apporti.first(where: { $0.id == r.id })   { return .apporto(p) }
+        if let p = model.apportiTutti.first(where: { $0.id == r.id }) { return .apporto(p) }
+        if let p = model.pendenti.first(where: { $0.id == r.id })  { return .pendente(p) }
+        return nil
     }
 
     // ── apertura finestre ──────────────────────────────────────────────────
@@ -1652,6 +1670,13 @@ struct StoricoView: View {
 struct StoricoDettaglioSheet: View {
     let d: StoricoDettaglio
     let onClose: () -> Void
+    /// Da una riga di questa finestra alla riga vera dell'archivio, quando c'è:
+    /// i totali e i separatori non sono modificabili, una spesa sì. Restituisce
+    /// nil per tutto ciò che è calcolato e non esiste in tabella.
+    var bersaglio: ((DettaglioRiga) -> StoricoEditTarget?)? = nil
+    /// Aprire la scheda di modifica: chiude questa e la passa a chi sa aprirla
+    /// (la Tesoreria), perché due sheet uno sopra l'altro qui non convivono.
+    var modifica: ((StoricoEditTarget) -> Void)? = nil
     @State private var mostraFornitori = true
     /// Fornitore aperto: sotto il suo nome compaiono tutti i suoi pagamenti.
     @State private var aperto: String? = nil
@@ -1739,20 +1764,21 @@ struct StoricoDettaglioSheet: View {
                 if aperto == f.nome {
                     VStack(spacing: 0) {
                         ForEach(f.righe) { r in
-                            HStack(spacing: 12) {
-                                Text(r.data).font(.system(size: 11, weight: .semibold)).foregroundStyle(PSE.dim)
-                                    .frame(width: 62, alignment: .leading).monospacedDigit()
-                                Text(r.descrizione).font(.system(size: 11.5)).foregroundStyle(PSE.text)
-                                    .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
-                                Text(r.casa).font(.system(size: 10.5)).foregroundStyle(PSE.faint)
-                                    .frame(width: 82, alignment: .leading)
-                                Text(r.pagatoDa).font(.system(size: 10.5))
-                                    .foregroundStyle(r.pagatoDa == "Da chiarire" ? PSE.warn.opacity(0.8) : PSE.faint)
-                                    .frame(width: 104, alignment: .leading).lineLimit(1)
-                                Text(eurc(r.importo)).font(.system(size: 11.5, weight: .semibold))
-                                    .foregroundStyle(PSE.neg).monospacedDigit().frame(width: 90, alignment: .trailing)
+                            apribile(r) {
+                                HStack(spacing: 12) {
+                                    Text(r.data).font(.system(size: 11, weight: .semibold)).foregroundStyle(PSE.dim)
+                                        .frame(width: 62, alignment: .leading).monospacedDigit()
+                                    Text(r.descrizione).font(.system(size: 11.5)).foregroundStyle(PSE.text)
+                                        .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
+                                    Text(r.casa).font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+                                        .frame(width: 82, alignment: .leading)
+                                    Text(r.pagatoDa).font(.system(size: 10.5))
+                                        .foregroundStyle(r.pagatoDa == "Da chiarire" ? PSE.warn.opacity(0.8) : PSE.faint)
+                                        .frame(width: 104, alignment: .leading).lineLimit(1)
+                                    importoTocco(eurc(r.importo), PSE.neg, 11.5, 90, r)
+                                }
+                                .padding(.horizontal, 20).padding(.vertical, 6)
                             }
-                            .padding(.horizontal, 20).padding(.vertical, 6)
                         }
                     }
                     .background(Color.white.opacity(0.03))
@@ -1772,25 +1798,62 @@ struct StoricoDettaglioSheet: View {
     private var righe: some View {
         VStack(spacing: 0) {
             ForEach(d.righe) { r in
-                HStack(spacing: 12) {
-                    if !r.data.isEmpty {
-                        Text(r.data).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim)
-                            .frame(width: 62, alignment: .leading).monospacedDigit()
+                apribile(r) {
+                    HStack(spacing: 12) {
+                        if !r.data.isEmpty {
+                            Text(r.data).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim)
+                                .frame(width: 62, alignment: .leading).monospacedDigit()
+                        }
+                        Text(r.descrizione).font(.system(size: 12.5, weight: .medium)).foregroundStyle(PSE.ink)
+                            .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
+                        if !r.extra.isEmpty {
+                            Text(r.extra).font(.system(size: 11)).foregroundStyle(PSE.faint)
+                                .frame(width: 170, alignment: .leading).lineLimit(1)
+                        }
+                        importoTocco((r.mostraSegno ? (r.positivo ? "+" : "−") : "") + eurc(r.importo),
+                                     r.positivo ? PSE.pos : PSE.neg, 13, 100, r)
                     }
-                    Text(r.descrizione).font(.system(size: 12.5, weight: .medium)).foregroundStyle(PSE.ink)
-                        .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
-                    if !r.extra.isEmpty {
-                        Text(r.extra).font(.system(size: 11)).foregroundStyle(PSE.faint)
-                            .frame(width: 170, alignment: .leading).lineLimit(1)
-                    }
-                    Text((r.mostraSegno ? (r.positivo ? "+" : "−") : "") + eurc(r.importo))
-                        .font(.system(size: 13, weight: .bold)).monospacedDigit()
-                        .foregroundStyle(r.positivo ? PSE.pos : PSE.neg)
-                        .frame(width: 100, alignment: .trailing)
+                    .padding(.horizontal, 20).padding(.vertical, 9)
                 }
-                .padding(.horizontal, 20).padding(.vertical, 9)
                 Divider().overlay(PSE.line).padding(.leading, 20)
             }
+        }
+    }
+
+    // ── correggere una cifra da qui ────────────────────────────────────────
+    // Una cifra sbagliata la si vede leggendo il dettaglio, non tornando
+    // indietro a cercarla nell'elenco: da qui la riga si apre e si corregge.
+    // Le righe calcolate (totali, separatori, conguagli) non si aprono: non
+    // esistono in nessuna tabella.
+    private func target(_ r: DettaglioRiga) -> StoricoEditTarget? {
+        guard modifica != nil else { return nil }
+        return bersaglio?(r)
+    }
+    /// La cifra: sottolineata quando è modificabile, così si capisce che si tocca.
+    private func importoTocco(_ testo: String, _ colore: Color, _ dim: CGFloat,
+                              _ larghezza: CGFloat, _ r: DettaglioRiga) -> some View {
+        Text(testo)
+            .font(.system(size: dim, weight: .bold)).monospacedDigit()
+            .foregroundStyle(colore)
+            .underline(target(r) != nil, pattern: .dot, color: colore.opacity(0.5))
+            .frame(width: larghezza, alignment: .trailing)
+    }
+    @ViewBuilder
+    private func apribile<C: View>(_ r: DettaglioRiga, @ViewBuilder _ contenuto: () -> C) -> some View {
+        if let t = target(r) {
+            // Chiudere e riaprire nello stesso istante: la finestra di modifica
+            // arriva mentre questa se ne sta ancora andando e non compare. Le si
+            // lascia il tempo di uscire di scena.
+            Button {
+                onClose()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { modifica?(t) }
+            } label: {
+                contenuto().contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Clic per correggere questa riga")
+        } else {
+            contenuto()
         }
     }
 }
