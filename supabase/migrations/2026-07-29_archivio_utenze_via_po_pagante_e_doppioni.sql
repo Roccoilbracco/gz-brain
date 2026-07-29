@@ -63,8 +63,12 @@ update public.storico_movimenti
    and lower(coalesce(categoria,'')) in ('luce','gas')
    and importo_cents in (21713, 57861, 45365);
 
--- ── Da decidere, non fatto ─────────────────────────────────────────────────
+-- ── Guardato e chiuso: le pulizie NON sono doppie ──────────────────────────
 -- In settembre, ottobre e dicembre 2025 le stime «*mensual* (indicación
 -- 9/7/26)» da 100 €/mese convivono con le righe vere delle pulizie e della
--- lavanderia: altri 400,00 € contati due volte. Negli altri mesi la stima è
--- l'unico dato e va tenuta. Serve una conferma prima di toglierle.
+-- lavanderia. Sembrava un doppione — le note delle righe stesse lo
+-- sospettavano, «⚠ Posible solape … VERIFICAR» — ma non lo è: i 100 € di
+-- pulizia e i 100 € di lavanderia al mese sono il fisso, e le pulizie a
+-- camera e quelle della settimana dei muratori sono spese in più.
+-- Confermato dall'utente il 29/07/26. Restano tutte, e il promemoria sulle
+-- sei righe è stato riscritto per dire com'è finita.
