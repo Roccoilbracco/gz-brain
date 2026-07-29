@@ -252,18 +252,24 @@ struct DettaglioVoceSheet: View {
                 Text("Nessuna voce.").font(.system(size: 12)).foregroundStyle(PSE.faint)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).padding(.vertical, 30)
             } else {
-                ScrollView(showsIndicators: false) {
-                    VStack(spacing: 0) {
-                        // Mista Via Po / Via Romagna: si divide. Di una casa
-                        // sola resta l'elenco piatto, e la casa torna in coda
-                        // all'`extra` perché nessuna intestazione la dice.
-                        if let gruppi = gruppiPerCasa(righe, casa: { $0.casa }) {
-                            ForEach(gruppi, id: \.casa) { g in
-                                let netto = nettoDettaglio(g.righe)
-                                intestazioneCasa(g.casa, g.righe.count, netto.testo, netto.colore, padding: 20)
-                                ForEach(g.righe) { r in riga(r, mostraCasa: false) }
+                // Mista Via Po / Via Romagna: una colonna per casa, affiancate.
+                // Una sotto l'altra costringeva a scorrere fino in fondo a Via Po
+                // per arrivare a Via Romagna — e le due non si vedevano mai
+                // insieme, che è il motivo per cui uno le divide.
+                // Di una casa sola resta l'elenco piatto, e la casa torna in coda
+                // all'`extra` perché nessuna intestazione la dice.
+                if let gruppi = gruppiPerCasa(righe, casa: { $0.casa }) {
+                    HStack(alignment: .top, spacing: 0) {
+                        ForEach(Array(gruppi.enumerated()), id: \.element.casa) { i, g in
+                            colonnaCasa(g)
+                            if i < gruppi.count - 1 {
+                                Rectangle().fill(PSE.line).frame(width: 1)
                             }
-                        } else {
+                        }
+                    }
+                } else {
+                    ScrollView(showsIndicators: false) {
+                        VStack(spacing: 0) {
                             ForEach(righe) { r in riga(r, mostraCasa: true) }
                         }
                     }
@@ -278,12 +284,47 @@ struct DettaglioVoceSheet: View {
                 }
             }
         }
-        .frame(width: 760, height: 560)
+        // Affiancare due case vuole il doppio dello spazio: la finestra si allarga
+        // solo quando c'è davvero più di una colonna, e di una casa sola resta
+        // della misura di prima.
+        .frame(width: larghezza, height: altezza)
         .background(Color(hex: 0x0b0f18))
         .preferredColorScheme(.dark)
     }
 
-    private func riga(_ r: DettaglioRiga, mostraCasa: Bool) -> some View {
+    /// Quanto larga: 620 punti per colonna, la misura in cui una riga si legge
+    /// ancora tutta (data, descrizione, conto, importo). Ma mai più larga dello
+    /// schermo: una finestra che esce dai bordi nasconde la colonna di destra, che
+    /// è esattamente quella che si voleva vedere. Con una casa sola resta 760,
+    /// com'era prima.
+    private var larghezza: CGFloat {
+        let n = min(gruppiPerCasa(righe, casa: { $0.casa })?.count ?? 1, 3)
+        guard n > 1 else { return 760 }
+        let schermo = (NSScreen.main?.visibleFrame.width ?? 1440) * 0.94
+        return min(CGFloat(n) * 620, max(760, schermo))
+    }
+    private var altezza: CGFloat {
+        min(600, max(420, (NSScreen.main?.visibleFrame.height ?? 900) * 0.9))
+    }
+
+    /// Una casa: la sua intestazione col totale, e sotto le sue righe che
+    /// scorrono da sole. Ogni colonna scorre indipendente, così scendere in Via Po
+    /// non sposta Via Romagna.
+    private func colonnaCasa(_ g: (casa: String, righe: [DettaglioRiga])) -> some View {
+        let netto = nettoDettaglio(g.righe)
+        return VStack(spacing: 0) {
+            intestazioneCasa(g.casa, g.righe.count, netto.testo, netto.colore, padding: 16)
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 0) {
+                    ForEach(g.righe) { r in riga(r, mostraCasa: false, larghezzaCoda: 84, bordo: 16) }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func riga(_ r: DettaglioRiga, mostraCasa: Bool,
+                      larghezzaCoda: CGFloat = 150, bordo: CGFloat = 20) -> some View {
         let coda = mostraCasa ? [r.extra, r.casa].filter { !$0.isEmpty }.joined(separator: " · ") : r.extra
         return VStack(spacing: 0) {
             HStack(spacing: 12) {
@@ -295,15 +336,15 @@ struct DettaglioVoceSheet: View {
                     .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
                 if !coda.isEmpty {
                     Text(coda).font(.system(size: 11)).foregroundStyle(PSE.faint)
-                        .frame(width: 150, alignment: .leading).lineLimit(1)
+                        .frame(width: larghezzaCoda, alignment: .leading).lineLimit(1)
                 }
                 Text((r.mostraSegno ? (r.positivo ? "+" : "−") : "") + eurc(r.importo))
                     .font(.system(size: 13, weight: .bold)).monospacedDigit()
                     .foregroundStyle(r.mostraSegno ? (r.positivo ? PSE.pos : PSE.neg) : PSE.ink)
                     .frame(width: 100, alignment: .trailing)
             }
-            .padding(.horizontal, 20).padding(.vertical, 9)
-            Divider().overlay(PSE.line).padding(.leading, 20)
+            .padding(.horizontal, bordo).padding(.vertical, 9)
+            Divider().overlay(PSE.line).padding(.leading, bordo)
         }
     }
 }
