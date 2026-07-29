@@ -166,6 +166,62 @@ struct DettaglioRiga: Identifiable {
     var mostraSegno: Bool = true
 }
 
+// ══ Le tabelle si dividono per casa ══════════════════════════════════════════
+//
+// Quando un elenco mette insieme Via Po e Via Romagna, la casa è una colonna
+// come le altre: si legge riga per riga e il lavoro lo fa l'occhio. Diviso per
+// casa, col totale in testa al gruppo, risponde da solo alla domanda che uno si
+// fa davanti a una lista mista — «di questo, quanto è di Via Po?».
+//
+// Con una casa sola non si divide: un'intestazione «Via Po» sopra una lista
+// tutta di Via Po è rumore. Vale anche col filtro casa attivo, dove la casa è
+// una per costruzione — così le stesse tabelle si dividono o restano piatte da
+// sé, senza che nessuno debba ricordarsi di accendere niente.
+
+/// L'ordine è questo, non quello che capita dai dati: Via Po, Via Romagna, e in
+/// fondo ciò che non appartiene a una casa (spese comuni, giroconti).
+private let CASE_IN_ORDINE = ["Via Po", "Via Romagna"]
+private let CASA_SENZA = "Non attribuito"
+
+/// Le righe raccolte per casa, oppure `nil` quando la casa è una sola: in quel
+/// caso chi chiama lascia la tabella com'era. L'ordine dentro ogni gruppo non si
+/// tocca — arriva già ordinato per data da chi costruisce l'elenco.
+private func gruppiPerCasa<T>(_ righe: [T], casa: (T) -> String) -> [(casa: String, righe: [T])]? {
+    var mappa: [String: [T]] = [:]
+    for r in righe {
+        let c = casa(r)
+        mappa[c.isEmpty || c == "—" ? CASA_SENZA : c, default: []].append(r)
+    }
+    guard mappa.count > 1 else { return nil }
+    let peso: (String) -> Int = { CASE_IN_ORDINE.firstIndex(of: $0) ?? CASE_IN_ORDINE.count }
+    return mappa.keys.sorted { (peso($0), $0) < (peso($1), $1) }
+                     .map { (casa: $0, righe: mappa[$0]!) }
+}
+
+/// L'intestazione di un gruppo: la casa, quante righe, il suo totale. Il valore
+/// arriva già scritto perché ogni tabella ha la sua convenzione di segno — un
+/// estratto conto e un elenco di cauzioni non si leggono allo stesso modo.
+private func intestazioneCasa(_ casa: String, _ righe: Int, _ valore: String,
+                             _ colore: Color, padding: CGFloat = 16) -> some View {
+    HStack(spacing: 10) {
+        Text(casa.uppercased()).font(.system(size: 10, weight: .heavy)).tracking(1.2)
+            .foregroundStyle(PSE.accent)
+        Text(righe == 1 ? "1 riga" : "\(righe) righe")
+            .font(.system(size: 10)).foregroundStyle(PSE.faint)
+        Spacer(minLength: 8)
+        Text(valore).font(.system(size: 12, weight: .bold)).foregroundStyle(colore).monospacedDigit()
+    }
+    .padding(.horizontal, padding).padding(.vertical, 7)
+    .background(Color.white.opacity(0.05))
+    .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
+}
+
+/// Il netto di un gruppo di righe di dettaglio, col segno di come si legge.
+private func nettoDettaglio(_ righe: [DettaglioRiga]) -> (testo: String, colore: Color) {
+    let t = righe.reduce(0) { $0 + ($1.positivo ? $1.importo : -$1.importo) }
+    return ((t < 0 ? "−" : "") + eurc(abs(t)), t < 0 ? PSE.neg : PSE.pos)
+}
+
 // Finestra che elenca le righe di una card, con nota e totale. Riusa lo stile
 // delle tabelle della Tesoreria così il dettaglio è coerente ovunque.
 struct DettaglioVoceSheet: View {
@@ -198,25 +254,17 @@ struct DettaglioVoceSheet: View {
             } else {
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 0) {
-                        ForEach(righe) { r in
-                            HStack(spacing: 12) {
-                                if !r.data.isEmpty {
-                                    Text(r.data).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim)
-                                        .frame(width: 62, alignment: .leading).monospacedDigit()
-                                }
-                                Text(r.descrizione).font(.system(size: 12.5, weight: .medium)).foregroundStyle(PSE.ink)
-                                    .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
-                                if !r.extra.isEmpty {
-                                    Text(r.extra).font(.system(size: 11)).foregroundStyle(PSE.faint)
-                                        .frame(width: 150, alignment: .leading).lineLimit(1)
-                                }
-                                Text((r.mostraSegno ? (r.positivo ? "+" : "−") : "") + eurc(r.importo))
-                                    .font(.system(size: 13, weight: .bold)).monospacedDigit()
-                                    .foregroundStyle(r.mostraSegno ? (r.positivo ? PSE.pos : PSE.neg) : PSE.ink)
-                                    .frame(width: 100, alignment: .trailing)
+                        // Mista Via Po / Via Romagna: si divide. Di una casa
+                        // sola resta l'elenco piatto, e la casa torna in coda
+                        // all'`extra` perché nessuna intestazione la dice.
+                        if let gruppi = gruppiPerCasa(righe, casa: { $0.casa }) {
+                            ForEach(gruppi, id: \.casa) { g in
+                                let netto = nettoDettaglio(g.righe)
+                                intestazioneCasa(g.casa, g.righe.count, netto.testo, netto.colore, padding: 20)
+                                ForEach(g.righe) { r in riga(r, mostraCasa: false) }
                             }
-                            .padding(.horizontal, 20).padding(.vertical, 9)
-                            Divider().overlay(PSE.line).padding(.leading, 20)
+                        } else {
+                            ForEach(righe) { r in riga(r, mostraCasa: true) }
                         }
                     }
                 }
@@ -233,6 +281,30 @@ struct DettaglioVoceSheet: View {
         .frame(width: 760, height: 560)
         .background(Color(hex: 0x0b0f18))
         .preferredColorScheme(.dark)
+    }
+
+    private func riga(_ r: DettaglioRiga, mostraCasa: Bool) -> some View {
+        let coda = mostraCasa ? [r.extra, r.casa].filter { !$0.isEmpty }.joined(separator: " · ") : r.extra
+        return VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                if !r.data.isEmpty {
+                    Text(r.data).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim)
+                        .frame(width: 62, alignment: .leading).monospacedDigit()
+                }
+                Text(r.descrizione).font(.system(size: 12.5, weight: .medium)).foregroundStyle(PSE.ink)
+                    .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
+                if !coda.isEmpty {
+                    Text(coda).font(.system(size: 11)).foregroundStyle(PSE.faint)
+                        .frame(width: 150, alignment: .leading).lineLimit(1)
+                }
+                Text((r.mostraSegno ? (r.positivo ? "+" : "−") : "") + eurc(r.importo))
+                    .font(.system(size: 13, weight: .bold)).monospacedDigit()
+                    .foregroundStyle(r.mostraSegno ? (r.positivo ? PSE.pos : PSE.neg) : PSE.ink)
+                    .frame(width: 100, alignment: .trailing)
+            }
+            .padding(.horizontal, 20).padding(.vertical, 9)
+            Divider().overlay(PSE.line).padding(.leading, 20)
+        }
     }
 }
 
@@ -534,17 +606,22 @@ struct TesoreriaView: View {
     }
 
     // ── Contenuto delle sotto-finestre del Riepilogo ─────────────────────────
+    // La casa sta in un campo suo, non incollata dentro `extra`: così la finestra
+    // può dividere le righe per casa, e ripeterla su ogni riga solo quando non
+    // c'è un'intestazione che la dica già.
     private func rigaDaMov(_ m: TesMovimento) -> DettaglioRiga {
         DettaglioRiga(id: m.id, data: tesPrettyStr(m.data),
                       descrizione: m.descrizione ?? (m.categoria ?? "—"),
-                      extra: contoNomeBreve(m.conto_id) + (m.struttura != nil ? " · \(casaLabel(m.struttura))" : ""),
+                      extra: contoNomeBreve(m.conto_id),
+                      casa: m.struttura != nil ? casaLabel(m.struttura) : "",
                       importo: m.importo_cents, positivo: m.tipo == "entrata")
     }
     private func rigaDaPren(_ b: Prenotazione) -> DettaglioRiga {
         let res = residuoIncassare(b)
         return DettaglioRiga(id: b.id, data: "\(tesPrettyStr(b.checkin))",
                              descrizione: b.guest_name + (b.camera.map { " · \($0)" } ?? ""),
-                             extra: (b.source ?? "—").capitalized + " · " + casaLabel(b.struttura),
+                             extra: (b.source ?? "—").capitalized,
+                             casa: casaLabel(b.struttura),
                              importo: res, positivo: true, mostraSegno: false)
     }
     private func dettaglioVoce(_ v: RiepVoce) -> (titolo: String, nota: String, righe: [DettaglioRiga], totaleLabel: String, totale: Int?) {
@@ -851,22 +928,16 @@ struct TesoreriaView: View {
                     .font(.system(size: 8.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
                     .padding(.horizontal, 16).padding(.vertical, 9)
                     .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
-                    ForEach(depositiMov) { m in
-                        let entrata = m.tipo == "entrata"
-                        Button { editing = m; showForm = true } label: {
-                            HStack(spacing: 12) {
-                                Text(tesPrettyStr(m.data)).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim).frame(width: 62, alignment: .leading).monospacedDigit()
-                                Text(m.descrizione ?? "Deposito").font(.system(size: 12.5, weight: .medium)).foregroundStyle(PSE.ink).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                                Text(casaLabel(m.struttura)).font(.system(size: 11)).foregroundStyle(PSE.dim).frame(width: 96, alignment: .leading).lineLimit(1)
-                                Text(contoNomeBreve(m.conto_id)).font(.system(size: 11)).foregroundStyle(PSE.dim).frame(width: 120, alignment: .leading).lineLimit(1)
-                                Text((entrata ? "+" : "−") + eurc(m.importo_cents))
-                                    .font(.system(size: 13, weight: .bold)).monospacedDigit()
-                                    .foregroundStyle(entrata ? PSE.warn : PSE.pos)
-                                    .frame(width: 92, alignment: .trailing)
-                            }
-                            .padding(.horizontal, 16).padding(.vertical, 9).contentShape(Rectangle())
-                        }.buttonStyle(.plain)
-                        Divider().overlay(PSE.line).padding(.leading, 16)
+                    if let gruppi = gruppiPerCasa(depositiMov, casa: { casaLabel($0.struttura) }) {
+                        ForEach(gruppi, id: \.casa) { g in
+                            // Qui il totale è «cauzioni ancora in mano» di quella
+                            // casa: incassate meno restituite, come il totale in
+                            // fondo alla tabella.
+                            intestazioneCasa(g.casa, g.righe.count, saldoTesto(g.righe), PSE.warn)
+                            ForEach(g.righe) { m in depositoRow(m) }
+                        }
+                    } else {
+                        ForEach(depositiMov) { m in depositoRow(m) }
                     }
                     HStack(spacing: 12) {
                         Text("TOTALE CAUZIONI IN MANO").font(.system(size: 10.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.ink)
@@ -879,6 +950,26 @@ struct TesoreriaView: View {
                 .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(PSE.line, lineWidth: 1))
             }
         }.padding(.bottom, 20)
+    }
+
+    private func depositoRow(_ m: TesMovimento) -> some View {
+        let entrata = m.tipo == "entrata"
+        return VStack(spacing: 0) {
+            Button { editing = m; showForm = true } label: {
+                HStack(spacing: 12) {
+                    Text(tesPrettyStr(m.data)).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim).frame(width: 62, alignment: .leading).monospacedDigit()
+                    Text(m.descrizione ?? "Deposito").font(.system(size: 12.5, weight: .medium)).foregroundStyle(PSE.ink).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                    Text(casaLabel(m.struttura)).font(.system(size: 11)).foregroundStyle(PSE.dim).frame(width: 96, alignment: .leading).lineLimit(1)
+                    Text(contoNomeBreve(m.conto_id)).font(.system(size: 11)).foregroundStyle(PSE.dim).frame(width: 120, alignment: .leading).lineLimit(1)
+                    Text((entrata ? "+" : "−") + eurc(m.importo_cents))
+                        .font(.system(size: 13, weight: .bold)).monospacedDigit()
+                        .foregroundStyle(entrata ? PSE.warn : PSE.pos)
+                        .frame(width: 92, alignment: .trailing)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 9).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            Divider().overlay(PSE.line).padding(.leading, 16)
+        }
     }
 
     private func totCard(_ t: String, _ v: Int, _ c: Color) -> some View { testoCard(t, eurc(v), c) }
@@ -942,9 +1033,19 @@ struct TesoreriaView: View {
                     EmptyStateCard(icon: "tray", text: "Nessun movimento per il filtro scelto.")
                 } else {
                     movHeader
-                    ForEach(visibiliMov) { m in
-                        movRow(m)
-                        Divider().overlay(PSE.line).padding(.leading, 16)
+                    if let gruppi = gruppiPerCasa(visibiliMov, casa: { casaLabel($0.struttura) }) {
+                        ForEach(gruppi, id: \.casa) { g in
+                            intestazioneCasa(g.casa, g.righe.count, saldoTesto(g.righe), saldoColore(g.righe))
+                            ForEach(g.righe) { m in
+                                movRow(m)
+                                Divider().overlay(PSE.line).padding(.leading, 16)
+                            }
+                        }
+                    } else {
+                        ForEach(visibiliMov) { m in
+                            movRow(m)
+                            Divider().overlay(PSE.line).padding(.leading, 16)
+                        }
                     }
                     movTotaleRow
                 }
@@ -1896,26 +1997,64 @@ struct TesoreriaView: View {
     private func contoLedger(_ title: String, _ items: [TesMovimento], _ tot: Int, _ c: Color, _ sign: String, showConto: Bool = false) -> some View {
         PSEPieghevole(title, valore: sign + eurc(tot), coloreValore: c,
                       nota: "\(items.count) movimenti") {
-            ForEach(Array(items.enumerated()), id: \.element.id) { i, m in
-                Button { editing = m; showForm = true } label: {
-                    HStack(spacing: 12) {
-                        Text(tesPrettyStr(m.data)).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim).frame(width: 58, alignment: .leading).monospacedDigit()
-                        Text(m.descrizione ?? (m.categoria ?? "—")).font(.system(size: 12.5, weight: .medium)).foregroundStyle(PSE.ink).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                        if showConto {
-                            Text(contoNomeBreve(m.conto_id)).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(PSE.accent).frame(width: 76, alignment: .leading).lineLimit(1)
-                        }
-                        Text(casaLabel(m.struttura)).font(.system(size: 11)).foregroundStyle(PSE.dim).frame(width: 96, alignment: .leading).lineLimit(1)
-                        Text((m.categoria ?? "—").capitalized).font(.system(size: 11)).foregroundStyle(PSE.faint).frame(width: 100, alignment: .leading).lineLimit(1)
-                        Text(sign + eurc(m.importo_cents)).font(.system(size: 12.5, weight: .bold)).foregroundStyle(c).monospacedDigit().frame(width: 92, alignment: .trailing)
+            // Un estratto conto mette insieme le due case per forza: il conto è
+            // in comune. Dividerlo dice quanta parte di queste entrate (o di
+            // queste uscite) è di una casa e quanta dell'altra.
+            if let gruppi = gruppiPerCasa(items, casa: { casaLabel($0.struttura) }) {
+                ForEach(gruppi, id: \.casa) { g in
+                    intestazioneCasa(g.casa, g.righe.count, sommaTesto(g.righe, segno: sign), c)
+                    ForEach(Array(g.righe.enumerated()), id: \.element.id) { i, m in
+                        contoLedgerRow(m, c, sign, showConto: showConto,
+                                       ultima: i == g.righe.count - 1)
                     }
-                    .padding(.horizontal, 16).padding(.vertical, 8).contentShape(Rectangle())
-                }.buttonStyle(.plain)
-                if i < items.count - 1 { Divider().overlay(PSE.line).padding(.leading, 16) }
+                }
+            } else {
+                ForEach(Array(items.enumerated()), id: \.element.id) { i, m in
+                    contoLedgerRow(m, c, sign, showConto: showConto, ultima: i == items.count - 1)
+                }
             }
+        }
+    }
+    private func contoLedgerRow(_ m: TesMovimento, _ c: Color, _ sign: String,
+                                showConto: Bool, ultima: Bool) -> some View {
+        VStack(spacing: 0) {
+            Button { editing = m; showForm = true } label: {
+                HStack(spacing: 12) {
+                    Text(tesPrettyStr(m.data)).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim).frame(width: 58, alignment: .leading).monospacedDigit()
+                    Text(m.descrizione ?? (m.categoria ?? "—")).font(.system(size: 12.5, weight: .medium)).foregroundStyle(PSE.ink).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                    if showConto {
+                        Text(contoNomeBreve(m.conto_id)).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(PSE.accent).frame(width: 76, alignment: .leading).lineLimit(1)
+                    }
+                    Text(casaLabel(m.struttura)).font(.system(size: 11)).foregroundStyle(PSE.dim).frame(width: 96, alignment: .leading).lineLimit(1)
+                    Text((m.categoria ?? "—").capitalized).font(.system(size: 11)).foregroundStyle(PSE.faint).frame(width: 100, alignment: .leading).lineLimit(1)
+                    Text(sign + eurc(m.importo_cents)).font(.system(size: 12.5, weight: .bold)).foregroundStyle(c).monospacedDigit().frame(width: 92, alignment: .trailing)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 8).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            if !ultima { Divider().overlay(PSE.line).padding(.leading, 16) }
         }
     }
     private func casaLabel(_ s: String?) -> String {
         s == "via-po" ? "Via Po" : s == "via-romagna" ? "Via Romagna" : "—"
+    }
+    // ── Il totale di un gruppo di casa ───────────────────────────────────────
+    /// Entrate meno uscite: in un elenco che contiene i due versi è l'unico
+    /// numero che significa qualcosa. In un elenco di soli movimenti dello
+    /// stesso verso viene la loro somma, che è quello che uno si aspetta.
+    private func saldoGruppo(_ mov: [TesMovimento]) -> Int {
+        mov.reduce(0) { $0 + ($1.tipo == "entrata" ? $1.importo_cents : -$1.importo_cents) }
+    }
+    private func saldoTesto(_ mov: [TesMovimento]) -> String {
+        let s = saldoGruppo(mov)
+        return (s < 0 ? "−" : "") + eurc(abs(s))
+    }
+    private func saldoColore(_ mov: [TesMovimento]) -> Color {
+        saldoGruppo(mov) < 0 ? PSE.neg : PSE.pos
+    }
+    /// Nelle sezioni di un verso solo (ENTRATE / USCITE dell'estratto conto, le
+    /// cauzioni) il segno lo dà già il titolo: qui basta la somma.
+    private func sommaTesto(_ mov: [TesMovimento], segno: String) -> String {
+        segno + eurc(mov.reduce(0) { $0 + $1.importo_cents })
     }
     // Riga di chiusura: saldo iniziale + entrate − uscite = saldo finale
     private func rimanenteRow(_ iniz: Int, _ totE: Int, _ totU: Int) -> some View {
