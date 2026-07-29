@@ -8,7 +8,11 @@
 // Essendo aperto, l'endpoint è anche la porta più comoda per riempire il
 // calendario di prenotazioni finte — e ogni riga finta si porta dietro le
 // pulizie e le colazioni che `sync_camere_pse()` genera in automatico. Da qui
-// il limite per IP e i controlli sulle date.
+// il limite per IP, il tetto complessivo per ora e i controlli sulle date.
+//
+// Il sorgente è pubblico: chi attacca conosce i limiti e sa che il honeypot si
+// chiama `company`. Nessuna difesa qui dentro deve poggiare sul non farsi
+// leggere — il tetto globale vale proprio perché non dipende da un segreto.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -52,6 +56,10 @@ const LEGACY_SLUG: Record<string, string> = { "es-vedra": "via-po" };
 
 const MAX_PER_ORA = 5;
 const MAX_NOTTI = 120;
+// Tetto complessivo, indipendente dall'IP: nove camere non ricevono quaranta
+// richieste vere in un'ora. È questo il limite che regge se qualcuno falsifica
+// l'IP per aggirare MAX_PER_ORA.
+const MAX_GLOBALE_ORA = 40;
 
 function clean(v: unknown, max: number): string | null {
   if (typeof v !== "string") return null;
@@ -64,9 +72,23 @@ const isEmail = (s: string) => /^[^@\s]+@[^@\s]+\.[a-zA-Z]{2,}$/.test(s);
 const giorni = (a: string, b: string) =>
   Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
 
+/// Di `x-forwarded-for` la voce più a sinistra la scrive il chiamante, non il
+/// proxy: chi legge questo file può mandarne una diversa a ogni richiesta e
+/// contare come mille IP. Si preferiscono quindi le intestazioni che solo il
+/// gateway può scrivere, e di XFF si tiene l'ultimo salto — quello aggiunto per
+/// ultimo dall'infrastruttura, non quello dichiarato dal client.
+function clientIP(req: Request): string {
+  const fidata = req.headers.get("x-real-ip") ??
+    req.headers.get("cf-connecting-ip") ?? "";
+  if (fidata.trim()) return fidata.trim();
+  const catena = (req.headers.get("x-forwarded-for") ?? "")
+    .split(",").map((s) => s.trim()).filter(Boolean);
+  return catena.length ? catena[catena.length - 1] : "";
+}
+
 /// L'IP non si salva mai in chiaro: serve per contare, non per schedare.
 async function hashIP(req: Request): Promise<string | null> {
-  const ip = (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim();
+  const ip = clientIP(req);
   if (!ip) return null;
   const bytes = new TextEncoder().encode(`gz-brain|${ip}`);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
@@ -86,6 +108,23 @@ async function sottoLimite(ipHash: string): Promise<boolean> {
     const res = await fetch(url, { headers: dbHeaders });
     if (!res.ok) return true;
     return ((await res.json()) as unknown[]).length < MAX_PER_ORA;
+  } catch {
+    return true;
+  }
+}
+
+/// Il tetto globale conta le prenotazioni davvero entrate dal sito nell'ultima
+/// ora, non i tentativi: è la riga in `prenotazioni` che si porta dietro pulizie
+/// e colazioni, ed è quella che va limitata. Come sopra, nel dubbio lascia
+/// passare: un form rotto costa più di una prenotazione di troppo.
+async function sottoTettoGlobale(): Promise<boolean> {
+  const da = new Date(Date.now() - 3_600_000).toISOString();
+  const url = `${SUPABASE_URL}/rest/v1/prenotazioni` +
+    `?select=id&source=eq.sito&created_at=gt.${da}&limit=${MAX_GLOBALE_ORA}`;
+  try {
+    const res = await fetch(url, { headers: dbHeaders });
+    if (!res.ok) return true;
+    return ((await res.json()) as unknown[]).length < MAX_GLOBALE_ORA;
   } catch {
     return true;
   }
@@ -122,6 +161,10 @@ Deno.serve(async (req) => {
   // chiuderebbero fuori un cliente vero per un'ora.
   const ipHash = await hashIP(req);
   if (ipHash && !(await sottoLimite(ipHash))) {
+    return json(req, { error: "troppe_richieste" }, 429);
+  }
+  if (!(await sottoTettoGlobale())) {
+    console.error("tetto globale raggiunto: possibile flood sul form");
     return json(req, { error: "troppe_richieste" }, 429);
   }
 
