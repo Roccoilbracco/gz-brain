@@ -222,6 +222,20 @@ enum ModoFornitori { case no, spese, apporti }
 /// Da una descrizione scritta a mano tira fuori a chi sono andati i soldi.
 /// Non è magia: è un elenco di nomi che ricorrono nel libro. Quello che non
 /// riconosce finisce in «Altri», che è onesto e si vede.
+///
+/// Due regole, imparate sbagliando:
+///
+/// 1. **Vince chi compare prima nella descrizione**, non chi sta prima in
+///    questo elenco. «Enel Energia — SDD scad. 26/11/25 (utenza Paoletti
+///    Sara)» è una bolletta della luce, non un pagamento a Francesco
+///    Paoletti; «AON S.p.A. — assicurazione Via Po (polizza intestata a
+///    Sara Paoletti)» è l'assicurazione della casa. Chi scrive il libro
+///    mette davanti il nome di chi ha preso i soldi, e in fondo i dettagli.
+/// 2. **La chiave si cerca a inizio parola.** Senza questo «obi» si trovava
+///    dentro «M-OBI-LI» e dentro «IMM-OBI-LIARIA UMBERTO»: 5.680 € di
+///    mobili e la provvigione dell'agenzia finivano da OBI. Solo a inizio
+///    parola, non anche in fondo, se no «braccialarg» non prenderebbe più
+///    «Braccialarghe».
 func storicoFornitore(_ d: String?) -> String {
     let t = (d ?? "").lowercased()
     let nomi: [(String, String)] = [
@@ -252,10 +266,30 @@ func storicoFornitore(_ d: String?) -> String {
         ("karim", "Karim Ilyas"), ("immobiliaria umberto", "Immobiliare Umberto"),
         ("acquisto locale", "Acquisto immobile"), ("compra inmueble", "Acquisto immobile"),
         ("idrozeta", "Idrozeta"), ("cartelli", "Insegne e cartelli"),
-        ("registratore cassa", "Registratore di cassa"), ("prelievo", "Prelievo contante")
+        ("registratore cassa", "Registratore di cassa"), ("prelievo", "Prelievo contante"),
+        // Aggiunti passando in rassegna cos'era finito in «Altri» (29/07/26).
+        ("switch luce", "Switch Luce & Gas"),
+        ("megawatt", "Megawatt Luce-Gas"), ("booking", "Booking.com"),
+        ("agenzia entrate", "Agenzia Entrate"), ("f24", "Agenzia Entrate"),
+        // «agos» da solo prendeva anche «COLAZIONI MESE AGOSTO».
+        ("agos ducato", "Prestito Agos"),
+        // Mestieri: nel libro vecchio il nome non c'è, c'è il mestiere. È
+        // comunque meglio di «Altri»: si vede quanto è costato l'idraulico.
+        ("fontanero", "Idraulico (fontanero)"), ("elettricista", "Elettricista"),
+        ("electricista", "Elettricista"), ("carpintero", "Carpentiere"),
+        ("muratore", "Muratore")
     ]
-    for (chiave, nome) in nomi where t.contains(chiave) { return nome }
-    return "Altri"
+    guard !t.isEmpty else { return "Altri" }
+    var vince: (posizione: Int, nome: String)? = nil
+    for (chiave, nome) in nomi {
+        let pattern = "\\b" + NSRegularExpression.escapedPattern(for: chiave)
+        guard let r = t.range(of: pattern, options: .regularExpression) else { continue }
+        let dove = t.distance(from: t.startIndex, to: r.lowerBound)
+        // A parità di posizione tiene il primo dell'elenco: ci si arriva solo
+        // con due chiavi che sono lo stesso nome scritto in due modi.
+        if vince == nil || dove < vince!.posizione { vince = (dove, nome) }
+    }
+    return vince?.nome ?? "Altri"
 }
 
 /// Finestra di dettaglio aperta da un numero qualsiasi della pagina.
