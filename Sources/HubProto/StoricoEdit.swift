@@ -168,7 +168,7 @@ struct StoricoEditSheet: View {
                         .frame(width: 26, height: 26).background(Circle().fill(Color.white.opacity(0.05)))
                 }.buttonStyle(.plain)
             }
-            Text("La stagione la decide la data. La modifica resta dentro lo storico e non tocca la gestione corrente.")
+            Text("La stagione la decide la data, e l'archivio si ferma al 30/06/2026: da luglio in poi è contabilità corrente e si registra in Tesoreria. Quello che si scrive qui resta nell'archivio e non tocca nessun saldo.")
                 .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
         }
         .padding(EdgeInsets(top: 18, leading: 20, bottom: 12, trailing: 16))
@@ -332,6 +332,13 @@ struct StoricoEditSheet: View {
         }
     }
 
+    /// Il giorno in cui l'archivio finisce e comincia la contabilità di oggi.
+    /// L'archivio serve a sapere cos'è successo PRIMA: una spesa di luglio 2026
+    /// in poi è di Camere PSE e va registrata in Tesoreria, dove muove i saldi.
+    /// Senza questo muro la stagione si calcolava dalla data e una spesa di oggi
+    /// finiva zitta in «Ott 2025 – Giu 2026», raccontata due volte in due libri.
+    static let fineArchivio = "2026-07-01"
+
     /// A quale stagione appartiene una data. Sempre calcolato, mai preso dalla
     /// scheda che si aveva aperto: dal riassunto si scriverebbe «tutto».
     private func periodoDi(_ iso: String?) -> String {
@@ -382,6 +389,12 @@ struct StoricoEditSheet: View {
 
     private func salva() async {
         guard let body = corpo() else { errore = "Data non valida: scrivila come 05/03/2025."; return }
+        // Il muro: dal 1º luglio 2026 in poi non è più archivio. Si ferma qui e
+        // lo dice, invece di lasciar scrivere una riga che poi vive due volte.
+        if let d = iso(data), d >= Self.fineArchivio {
+            errore = "Questa data è della contabilità corrente: registrala in Tesoreria, non nell'archivio. L'archivio si ferma al 30/06/2026."
+            return
+        }
         salvando = true; errore = nil
         do {
             if let id = idRiga { try await HubAPI.aggiornaStorico(tabella, id: id, body) }
