@@ -92,6 +92,110 @@ struct StoricoApporto: Identifiable, Decodable, Equatable {
     var note: String?
 }
 
+// ── Lista cose da verificare ────────────────────────────────────────────────
+// Non è una tabella del database: è il risultato del confronto fra le chat di
+// WhatsApp con Giacomo (_chat 2.txt, _chat 3.txt · nov 2024 → giu 2026) e le
+// righe dell'archivio. Ogni voce è un soldo di cui si parla in chat e che in
+// archivio non si trova, oppure che si trova con un altro numero. Sta scritta
+// qui e non in Supabase apposta: è una lista di controllo, non contabilità —
+// quando una voce si chiarisce, o si registra il movimento vero o si toglie
+// da questo elenco.
+enum TipoVerifica: String {
+    case manca = "Manca in archivio"
+    case chiarire = "Da chiarire"
+    case doppione = "Rischio doppione"
+
+    var colore: Color {
+        switch self {
+        case .manca: return PSE.warn
+        case .chiarire: return PSE.accent
+        case .doppione: return PSE.neg
+        }
+    }
+}
+
+struct VerificaDaFare: Identifiable {
+    let id: String
+    /// Il giorno di cui parla la chat (yyyy-MM-dd). Serve anche a capire in
+    /// quale stagione cade la voce.
+    let data: String
+    let cosa: String
+    /// Zero = in chat non è stato detto quanto.
+    let importo_cents: Int
+    let casa: String
+    /// Dove sta scritto: file di chat e data del messaggio.
+    let fonte: String
+    let tipo: TipoVerifica
+    let nota: String
+
+    /// La stagione dell'archivio in cui cade: 2024-2025 chiude il 30/09/2025.
+    var periodo: String { data >= "2025-10-01" ? "2025-2026" : "2024-2025" }
+}
+
+let verificheArchivio: [VerificaDaFare] = [
+    // ── Rate di mutuo che in archivio non ci sono ───────────────────────────
+    .init(id: "bper-giu25", data: "2025-06-15", cosa: "Rata mutuo Via Romagna — soli interessi",
+          importo_cents: 14_500, casa: "Via Romagna", fonte: "chat 21/05/25", tipo: .manca,
+          nota: "«15 giugno arriva solo interessi 145€». La prima rata BPER registrata in archivio è quella del 15/11/2025: l'estratto caricato parte da novembre."),
+    .init(id: "bper-lug25", data: "2025-07-15", cosa: "Rata mutuo Via Romagna — BPER (luglio)",
+          importo_cents: 44_128, casa: "Via Romagna", fonte: "chat 21/05/25", tipo: .manca,
+          nota: "«Inizio pagamento mutuo 15 luglio», 441,28 € ogni 15 del mese."),
+    .init(id: "bper-ago25", data: "2025-08-15", cosa: "Rata mutuo Via Romagna — BPER (agosto)",
+          importo_cents: 44_128, casa: "Via Romagna", fonte: "chat 21/05/25", tipo: .manca, nota: ""),
+    .init(id: "bper-set25", data: "2025-09-15", cosa: "Rata mutuo Via Romagna — BPER (settembre)",
+          importo_cents: 44_128, casa: "Via Romagna", fonte: "chat 21/05/25 · 14/09/25", tipo: .manca, nota: ""),
+    .init(id: "bper-ott25", data: "2025-10-15", cosa: "Rata mutuo Via Romagna — BPER (ottobre)",
+          importo_cents: 44_128, casa: "Via Romagna", fonte: "chat 21/05/25", tipo: .manca, nota: ""),
+    .init(id: "carifermo-mar25", data: "2025-03-31", cosa: "Rata Carifermo di marzo 2025 (preammortamento)",
+          importo_cents: 21_400, casa: "Via Po", fonte: "chat 29/03/25", tipo: .manca,
+          nota: "«Siamo sotto di 214 adesso perché c'è la rata del mutuo». In archivio la serie va 31/01, 28/02, poi salta a 30/04: manca marzo."),
+
+    // ── Contante e pagamenti citati in chat e mai registrati ────────────────
+    .init(id: "prelievo-13ago25", data: "2025-08-13", cosa: "Prelievo dal conto affittacamere per Paolo idraulico",
+          importo_cents: 0, casa: "Via Po", fonte: "chat 13/08/25", tipo: .manca,
+          nota: "In chat non dice quanto: «ho prelevato i soldi per paolo idraulico dal conto affittacamere»."),
+    .init(id: "pomioli-16ago25", data: "2025-08-16", cosa: "130 € a Paolo Pomioli per i climatizzatori",
+          importo_cents: 13_000, casa: "Via Romagna", fonte: "chat 16/08/25", tipo: .manca,
+          nota: "Potrebbe già stare dentro i 570 € di «Paolo tecnico aria condizionata» del 15/08/25."),
+    .init(id: "prelievo-18ago25", data: "2025-08-18", cosa: "Prelievo 1.500 € da scalare dagli incassi di Civitanova",
+          importo_cents: 150_000, casa: "Via Po", fonte: "chat 18/08/25", tipo: .manca, nota: ""),
+    .init(id: "madre-5set25", data: "2025-09-05", cosa: "2.000 € dati alla madre di Giacomo",
+          importo_cents: 200_000, casa: "Mixto", fonte: "chat 05/09/25", tipo: .manca,
+          nota: "Lui stesso scrive «ma quello già lo avevi contati»: da confermare prima di registrarlo, se no si conta due volte."),
+    .init(id: "prelievo-19set25", data: "2025-09-19", cosa: "Prelievo 1.750 € (1.500 idraulico + 250 bollette)",
+          importo_cents: 175_000, casa: "Via Po", fonte: "chat 19/09/25", tipo: .manca,
+          nota: "È la voce più netta: in tutto settembre l'archivio non ha nessun pagamento all'idraulico."),
+    .init(id: "soggiorno-21set25", data: "2025-09-21", cosa: "Tassa di soggiorno pagata",
+          importo_cents: 18_700, casa: "Via Po", fonte: "chat 21/09/25", tipo: .manca,
+          nota: "«Ho pagato 187€ di tassa di soggiorno, le paghiamo con i ricavi»."),
+    .init(id: "armadi-22set25", data: "2025-09-22", cosa: "80 € ai due ragazzi per portare gli armadi all'Ecoelpidiense",
+          importo_cents: 8_000, casa: "Via Po", fonte: "chat 22/09/25", tipo: .manca, nota: ""),
+    .init(id: "booking-27set25", data: "2025-09-27", cosa: "Addebito Booking di 2.368 €",
+          importo_cents: 236_800, casa: "Via Po", fonte: "chat 27/09/25", tipo: .manca,
+          nota: "«Un'altra bella botta di 2368€ da Booking». In archivio la commissione Booking più vicina è di 191 € (17/10/25)."),
+    .init(id: "prelievo-1ott25", data: "2025-10-01", cosa: "Prelievo 400 €",
+          importo_cents: 40_000, casa: "Via Po", fonte: "chat 01/10/25", tipo: .manca,
+          nota: "Stesso messaggio in cui conferma di aver pagato la rata del mutuo del 30/09."),
+    .init(id: "muratori-12nov25", data: "2025-11-12", cosa: "480 € «vecchi» pagati ai muratori",
+          importo_cents: 48_000, casa: "Via Romagna", fonte: "chat 12/11/25", tipo: .manca, nota: ""),
+
+    // ── Numeri che non tornano ─────────────────────────────────────────────
+    .init(id: "elettricista-4004", data: "2025-05-28", cosa: "Elettricista: la chat dice 4.004 €, l'archivio 4.400 €",
+          importo_cents: 39_600, casa: "Via Po", fonte: "chat 28/05/25", tipo: .chiarire,
+          nota: "In archivio «Francesco Paoletti 4.400 €» il 03/06/25. Differenza 396 €: o è un altro pagamento o uno dei due numeri è sbagliato."),
+    .init(id: "colorcity-lug-ago", data: "2025-10-17", cosa: "Color City luglio e agosto: pagati o no?",
+          importo_cents: 120_000, casa: "Via Romagna", fonte: "chat 17/10/25", tipo: .chiarire,
+          nota: "L'archivio ha «Color City luglio 1.200 €» pagato il 01/08/25, ma il 17/10 Giacomo scrive che luglio e agosto risultano non pagati."),
+    .init(id: "recap-18ago25", data: "2025-08-18", cosa: "Recap di Giacomo del 18/08: Mohamed, Ikea e commercialista",
+          importo_cents: 0, casa: "Mixto", fonte: "chat 18/08/25", tipo: .chiarire,
+          nota: "Lui elenca Mohamed 2.000 (archivio: 700), Ikea Via Romagna 912 (archivio: 460+85+36), commercialista 550 (archivio: 300 + 730). Sono cifre dette a memoria: capire quali sono buone."),
+
+    // ── Rischio di contare due volte ───────────────────────────────────────
+    .init(id: "doppio-rata-giu26", data: "2026-06-15", cosa: "Rata Via Romagna del 15/06/26 registrata due volte",
+          importo_cents: 44_100, casa: "Via Romagna", fonte: "archivio + tesoreria", tipo: .doppione,
+          nota: "Sta nell'archivio (441 €, estratto BPER) e anche nei movimenti della tesoreria come «RATA MUTO LUGLIO» (442 €). Sommando le due tabelle si conta due volte."),
+]
+
 struct StoricoPendente: Identifiable, Decodable, Equatable {
     let id: String
     var periodo: String
@@ -569,6 +673,7 @@ func numeriRata(_ tutti: [StoricoMovimento]) -> [String: String] {
 enum StoricoTab: String, CaseIterable, Identifiable {
     case riepilogo = "Riepilogo", perCasa = "Per casa", affitti = "Affitti"
     case movimenti = "Movimenti", soci = "Soci", pendenti = "Da incassare"
+    case verifiche = "Cose da verificare"
     var id: String { rawValue }
 }
 
@@ -583,6 +688,11 @@ struct StoricoView: View {
     /// solo, quindi ci passiamo attraverso.
     let apriModifica: (StoricoEditTarget) -> Void
     @State private var dettaglio: StoricoDettaglio? = nil
+    /// Le voci già controllate della lista «cose da verificare». Restano sul
+    /// Mac, non in database: la lista è una checklist di lavoro, non un dato
+    /// contabile — quando una voce si risolve davvero, si registra il
+    /// movimento e la si toglie dall'elenco in codice.
+    @AppStorage("storicoVerificheFatte") private var verificheFatteRaw: String = ""
 
     /// Il nome che si legge in pagina, e le date esatte che copre.
     private var etichetta: String {
@@ -620,6 +730,7 @@ struct StoricoView: View {
                 case .movimenti: movimentiTab
                 case .soci: sociTab
                 case .pendenti: pendentiTab
+                case .verifiche: verificheTab
                 }
             }
         }
@@ -1590,6 +1701,92 @@ struct StoricoView: View {
                 }
             }
         }
+    }
+
+    // ══ LISTA COSE DA VERIFICARE ═══════════════════════════════════════════
+    /// Le voci della stagione aperta (nel Riassunto: tutte).
+    private var verifiche: [VerificaDaFare] {
+        verificheArchivio
+            .filter { eRiassunto || $0.periodo == periodo }
+            .sorted { $0.data < $1.data }
+    }
+    private var verificheFatte: Set<String> {
+        Set(verificheFatteRaw.split(separator: "|").map(String.init))
+    }
+    private func segna(_ v: VerificaDaFare) {
+        var f = verificheFatte
+        if f.contains(v.id) { f.remove(v.id) } else { f.insert(v.id) }
+        verificheFatteRaw = f.sorted().joined(separator: "|")
+    }
+
+    private var verificheTab: some View {
+        let fatte = verificheFatte
+        let aperte = verifiche.filter { !fatte.contains($0.id) }
+        let somma = aperte.reduce(0) { $0 + $1.importo_cents }
+        return VStack(alignment: .leading, spacing: 12) {
+            avvisoBox("Non è contabilità: è l'elenco dei soldi di cui si parla nelle chat con Giacomo e che in archivio non si trovano, o si trovano con un altro numero. Spuntare una voce la segna come controllata solo su questo Mac; quando si chiarisce per davvero, si registra il movimento vero.")
+            HStack(spacing: 18) {
+                conteggio("Voci aperte", "\(aperte.count)", PSE.warn)
+                conteggio("Soldi da chiarire", eurc(somma), PSE.warn)
+                conteggio("Già controllate", "\(fatte.count)", PSE.dim)
+                Spacer(minLength: 0)
+            }
+            sezione("LISTA COSE DA VERIFICARE") {
+                tabella(["", "Data", "Cosa verificare", "Importo", "Casa", "Fonte", "Tipo"],
+                        [22, 58, 330, 86, 86, 132, 118]) {
+                    ForEach(verifiche) { v in
+                        rigaVerifica(v, fatta: fatte.contains(v.id))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Etichetta + valore, per i contatori in testa alla lista (non sono tutti
+    /// importi: «voci aperte» è un numero e basta).
+    private func conteggio(_ t: String, _ v: String, _ c: Color) -> some View {
+        HStack(spacing: 6) {
+            Text(t.uppercased()).font(.system(size: 9, weight: .heavy)).tracking(0.6).foregroundStyle(PSE.faint)
+            Text(v).font(.system(size: 13, weight: .bold)).foregroundStyle(c).monospacedDigit()
+        }
+    }
+
+    private func rigaVerifica(_ v: VerificaDaFare, fatta: Bool) -> some View {
+        Button { segna(v) } label: {
+            HStack(spacing: 10) {
+                Image(systemName: fatta ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(fatta ? PSE.pos : PSE.faint)
+                    .frame(width: 22, alignment: .leading)
+                Text(stoData(v.data)).font(.system(size: 11.5))
+                    .foregroundStyle(fatta ? PSE.faint : PSE.dim).monospacedDigit()
+                    .frame(width: 58, alignment: .leading)
+                Text(v.cosa).font(.system(size: 11.5))
+                    .foregroundStyle(fatta ? PSE.faint : PSE.text)
+                    .strikethrough(fatta, color: PSE.faint)
+                    .lineLimit(1).truncationMode(.tail)
+                    .frame(width: 330, alignment: .leading)
+                Text(v.importo_cents == 0 ? "—" : eurc(v.importo_cents))
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(fatta ? PSE.faint : v.tipo.colore).monospacedDigit()
+                    .frame(width: 86, alignment: .trailing)
+                Text(v.casa).font(.system(size: 11.5)).foregroundStyle(PSE.dim)
+                    .lineLimit(1).frame(width: 86, alignment: .leading)
+                Text(v.fonte).font(.system(size: 11.5)).foregroundStyle(PSE.faint)
+                    .lineLimit(1).truncationMode(.tail).frame(width: 132, alignment: .leading)
+                Text(v.tipo.rawValue).font(.system(size: 9, weight: .bold)).tracking(0.3)
+                    .foregroundStyle(fatta ? PSE.faint : v.tipo.colore)
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(Capsule().fill(v.tipo.colore.opacity(fatta ? 0.06 : 0.14)))
+                    .frame(width: 118, alignment: .leading)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .background(Rectangle().fill(Color.white.opacity(fatta ? 0.005 : 0.015)))
+            .contentShape(Rectangle())
+            .help(v.nota.isEmpty ? "Clic per segnare come controllata" : v.nota)
+        }
+        .buttonStyle(.plain)
     }
 
     // ══ PEZZI RIUSABILI ════════════════════════════════════════════════════
