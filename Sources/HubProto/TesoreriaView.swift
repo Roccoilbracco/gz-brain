@@ -959,25 +959,14 @@ struct TesoreriaView: View {
                 EmptyStateCard(icon: "lock.shield", text: "Nessun deposito cauzionale registrato.")
             } else {
                 VStack(spacing: 0) {
-                    HStack(spacing: 12) {
-                        Text("DATA").frame(width: 62, alignment: .leading)
-                        Text("DESCRIZIONE").frame(maxWidth: .infinity, alignment: .leading)
-                        Text("CASA").frame(width: 96, alignment: .leading)
-                        Text("CONTO").frame(width: 120, alignment: .leading)
-                        Text("IMPORTO").frame(width: 92, alignment: .trailing)
-                    }
-                    .font(.system(size: 8.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
-                    .padding(.horizontal, 16).padding(.vertical, 9)
-                    .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
                     if let gruppi = gruppiPerCasa(depositiMov, casa: { casaLabel($0.struttura) }) {
-                        ForEach(gruppi, id: \.casa) { g in
-                            // Qui il totale è «cauzioni ancora in mano» di quella
-                            // casa: incassate meno restituite, come il totale in
-                            // fondo alla tabella.
-                            intestazioneCasa(g.casa, g.righe.count, saldoTesto(g.righe), PSE.warn)
-                            ForEach(g.righe) { m in depositoRow(m) }
-                        }
+                        // Il totale del gruppo è «cauzioni ancora in mano» di quella
+                        // casa: ricevute meno restituite, come il totale in fondo.
+                        colonneCase(gruppi, valore: { saldoTesto($0) }, colore: { _ in PSE.warn },
+                                    titoli: { depHeader(mostraCasa: false) },
+                                    riga: { m, _ in depositoRow(m, mostraCasa: false) })
                     } else {
+                        depHeader()
                         ForEach(depositiMov) { m in depositoRow(m) }
                     }
                     HStack(spacing: 12) {
@@ -993,14 +982,28 @@ struct TesoreriaView: View {
         }.padding(.bottom, 20)
     }
 
-    private func depositoRow(_ m: TesMovimento) -> some View {
+    private func depHeader(mostraCasa: Bool = true) -> some View {
+        HStack(spacing: 12) {
+            Text("DATA").frame(width: 62, alignment: .leading)
+            Text("DESCRIZIONE").frame(maxWidth: .infinity, alignment: .leading)
+            if mostraCasa { Text("CASA").frame(width: 96, alignment: .leading) }
+            Text("CONTO").frame(width: 120, alignment: .leading)
+            Text("IMPORTO").frame(width: 92, alignment: .trailing)
+        }
+        .font(.system(size: 8.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
+        .padding(.horizontal, 16).padding(.vertical, 9)
+        .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
+    }
+    private func depositoRow(_ m: TesMovimento, mostraCasa: Bool = true) -> some View {
         let entrata = m.tipo == "entrata"
         return VStack(spacing: 0) {
             Button { editing = m; showForm = true } label: {
                 HStack(spacing: 12) {
                     Text(tesPrettyStr(m.data)).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim).frame(width: 62, alignment: .leading).monospacedDigit()
                     Text(m.descrizione ?? "Deposito").font(.system(size: 12.5, weight: .medium)).foregroundStyle(PSE.ink).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                    Text(casaLabel(m.struttura)).font(.system(size: 11)).foregroundStyle(PSE.dim).frame(width: 96, alignment: .leading).lineLimit(1)
+                    if mostraCasa {
+                        Text(casaLabel(m.struttura)).font(.system(size: 11)).foregroundStyle(PSE.dim).frame(width: 96, alignment: .leading).lineLimit(1)
+                    }
                     Text(contoNomeBreve(m.conto_id)).font(.system(size: 11)).foregroundStyle(PSE.dim).frame(width: 120, alignment: .leading).lineLimit(1)
                     Text((entrata ? "+" : "−") + eurc(m.importo_cents))
                         .font(.system(size: 13, weight: .bold)).monospacedDigit()
@@ -1072,21 +1075,21 @@ struct TesoreriaView: View {
             VStack(spacing: 0) {
                 if visibiliMov.isEmpty {
                     EmptyStateCard(icon: "tray", text: "Nessun movimento per il filtro scelto.")
+                } else if let gruppi = gruppiPerCasa(visibiliMov, casa: { casaLabel($0.struttura) }) {
+                    colonneCase(gruppi, valore: { saldoTesto($0) }, colore: { saldoColore($0) },
+                                titoli: { movHeader(mostraCasa: false, stretta: true) },
+                                riga: { m, ultima in
+                        VStack(spacing: 0) {
+                            movRow(m, mostraCasa: false, stretta: true)
+                            if !ultima { Divider().overlay(PSE.line).padding(.leading, 16) }
+                        }
+                    })
+                    movTotaleRow
                 } else {
-                    movHeader
-                    if let gruppi = gruppiPerCasa(visibiliMov, casa: { casaLabel($0.struttura) }) {
-                        ForEach(gruppi, id: \.casa) { g in
-                            intestazioneCasa(g.casa, g.righe.count, saldoTesto(g.righe), saldoColore(g.righe))
-                            ForEach(g.righe) { m in
-                                movRow(m)
-                                Divider().overlay(PSE.line).padding(.leading, 16)
-                            }
-                        }
-                    } else {
-                        ForEach(visibiliMov) { m in
-                            movRow(m)
-                            Divider().overlay(PSE.line).padding(.leading, 16)
-                        }
+                    movHeader()
+                    ForEach(visibiliMov) { m in
+                        movRow(m)
+                        Divider().overlay(PSE.line).padding(.leading, 16)
                     }
                     movTotaleRow
                 }
@@ -1096,14 +1099,18 @@ struct TesoreriaView: View {
         }
         .padding(.bottom, 20)
     }
-    private var movHeader: some View {
+    // In colonna lo spazio è metà: la casa la dice l'intestazione del gruppo e la
+    // modalità esce (si legge dal conto), altrimenti alla descrizione resterebbero
+    // cento punti e ogni riga finirebbe in «…». I titoli e le righe leggono gli
+    // stessi due interruttori, così le colonne restano allineate.
+    private func movHeader(mostraCasa: Bool = true, stretta: Bool = false) -> some View {
         HStack(spacing: 12) {
             Text("DATA").frame(width: 62, alignment: .leading)
             Text("DESCRIZIONE").frame(maxWidth: .infinity, alignment: .leading)
-            Text("CASA").frame(width: 96, alignment: .leading)
-            Text("CONTO").frame(width: 150, alignment: .leading)
+            if mostraCasa { Text("CASA").frame(width: 96, alignment: .leading) }
+            Text("CONTO").frame(width: stretta ? 96 : 150, alignment: .leading)
             Text("CATEGORIA").frame(width: 100, alignment: .leading)
-            Text("MODALITÀ").frame(width: 84, alignment: .leading)
+            if !stretta { Text("MODALITÀ").frame(width: 84, alignment: .leading) }
             Text("IMPORTO").frame(width: 92, alignment: .trailing)
             Image(systemName: "paperclip").frame(width: 24, alignment: .trailing)
         }
@@ -1129,18 +1136,21 @@ struct TesoreriaView: View {
         .padding(.horizontal, 16).padding(.vertical, 12)
         .background(Color.white.opacity(0.04))
     }
-    private func movRow(_ m: TesMovimento) -> some View {
+    private func movRow(_ m: TesMovimento, mostraCasa: Bool = true, stretta: Bool = false) -> some View {
         let entrata = m.tipo == "entrata"
         let contoNome = model.conti.first { $0.id == m.conto_id }?.nome ?? (m.conto_id ?? "—")
-        let casa = m.struttura == "via-po" ? "Via Po" : m.struttura == "via-romagna" ? "Via Romagna" : "—"
         return Button { editing = m; showForm = true } label: {
             HStack(spacing: 12) {
                 Text(tesPrettyStr(m.data)).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim).frame(width: 62, alignment: .leading).monospacedDigit()
                 Text(m.descrizione ?? (m.categoria ?? "—")).font(.system(size: 12.5, weight: .medium)).foregroundStyle(PSE.ink).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                Text(casa).font(.system(size: 11)).foregroundStyle(PSE.dim).frame(width: 96, alignment: .leading).lineLimit(1)
-                Text(contoNome).font(.system(size: 11)).foregroundStyle(PSE.dim).frame(width: 150, alignment: .leading).lineLimit(1)
+                if mostraCasa {
+                    Text(casaLabel(m.struttura)).font(.system(size: 11)).foregroundStyle(PSE.dim).frame(width: 96, alignment: .leading).lineLimit(1)
+                }
+                Text(stretta ? contoNomeBreve(m.conto_id) : contoNome).font(.system(size: 11)).foregroundStyle(PSE.dim).frame(width: stretta ? 96 : 150, alignment: .leading).lineLimit(1)
                 Text((m.categoria ?? "—").capitalized).font(.system(size: 11)).foregroundStyle(PSE.faint).frame(width: 100, alignment: .leading).lineLimit(1)
-                Text((m.modalita ?? "—").capitalized).font(.system(size: 11)).foregroundStyle(PSE.faint).frame(width: 84, alignment: .leading).lineLimit(1)
+                if !stretta {
+                    Text((m.modalita ?? "—").capitalized).font(.system(size: 11)).foregroundStyle(PSE.faint).frame(width: 84, alignment: .leading).lineLimit(1)
+                }
                 Text((entrata ? "+" : "−") + eurc(m.importo_cents))
                     .font(.system(size: 13, weight: .bold)).monospacedDigit()
                     .foregroundStyle(entrata ? PSE.pos : PSE.neg)
@@ -2042,13 +2052,11 @@ struct TesoreriaView: View {
             // in comune. Dividerlo dice quanta parte di queste entrate (o di
             // queste uscite) è di una casa e quanta dell'altra.
             if let gruppi = gruppiPerCasa(items, casa: { casaLabel($0.struttura) }) {
-                ForEach(gruppi, id: \.casa) { g in
-                    intestazioneCasa(g.casa, g.righe.count, sommaTesto(g.righe, segno: sign), c)
-                    ForEach(Array(g.righe.enumerated()), id: \.element.id) { i, m in
-                        contoLedgerRow(m, c, sign, showConto: showConto,
-                                       ultima: i == g.righe.count - 1)
-                    }
-                }
+                colonneCase(gruppi, valore: { sommaTesto($0, segno: sign) }, colore: { _ in c },
+                            titoli: { EmptyView() },
+                            riga: { m, ultima in
+                    contoLedgerRow(m, c, sign, showConto: showConto, ultima: ultima, mostraCasa: false)
+                })
             } else {
                 ForEach(Array(items.enumerated()), id: \.element.id) { i, m in
                     contoLedgerRow(m, c, sign, showConto: showConto, ultima: i == items.count - 1)
@@ -2057,7 +2065,7 @@ struct TesoreriaView: View {
         }
     }
     private func contoLedgerRow(_ m: TesMovimento, _ c: Color, _ sign: String,
-                                showConto: Bool, ultima: Bool) -> some View {
+                                showConto: Bool, ultima: Bool, mostraCasa: Bool = true) -> some View {
         VStack(spacing: 0) {
             Button { editing = m; showForm = true } label: {
                 HStack(spacing: 12) {
@@ -2066,7 +2074,9 @@ struct TesoreriaView: View {
                     if showConto {
                         Text(contoNomeBreve(m.conto_id)).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(PSE.accent).frame(width: 76, alignment: .leading).lineLimit(1)
                     }
-                    Text(casaLabel(m.struttura)).font(.system(size: 11)).foregroundStyle(PSE.dim).frame(width: 96, alignment: .leading).lineLimit(1)
+                    if mostraCasa {
+                        Text(casaLabel(m.struttura)).font(.system(size: 11)).foregroundStyle(PSE.dim).frame(width: 96, alignment: .leading).lineLimit(1)
+                    }
                     Text((m.categoria ?? "—").capitalized).font(.system(size: 11)).foregroundStyle(PSE.faint).frame(width: 100, alignment: .leading).lineLimit(1)
                     Text(sign + eurc(m.importo_cents)).font(.system(size: 12.5, weight: .bold)).foregroundStyle(c).monospacedDigit().frame(width: 92, alignment: .trailing)
                 }
@@ -2096,6 +2106,36 @@ struct TesoreriaView: View {
     /// cauzioni) il segno lo dà già il titolo: qui basta la somma.
     private func sommaTesto(_ mov: [TesMovimento], segno: String) -> String {
         segno + eurc(mov.reduce(0) { $0 + $1.importo_cents })
+    }
+
+    /// Le case affiancate dentro la pagina: una colonna per casa, con la sua
+    /// intestazione, la sua riga di titoli e le sue righe. Una sotto l'altra
+    /// costringeva a scorrere tutta Via Po per arrivare a Via Romagna, e le due
+    /// non si vedevano mai insieme.
+    ///
+    /// Qui non serve uno scorrimento per colonna come nelle finestre: la pagina
+    /// scorre già, e le colonne finiscono dove finiscono le loro righe.
+    private func colonneCase<Titoli: View, Riga: View>(
+        _ gruppi: [(casa: String, righe: [TesMovimento])],
+        valore: ([TesMovimento]) -> String,
+        colore: ([TesMovimento]) -> Color,
+        @ViewBuilder titoli: @escaping () -> Titoli,
+        @ViewBuilder riga: @escaping (TesMovimento, Bool) -> Riga
+    ) -> some View {
+        let valori = gruppi.map { (valore($0.righe), colore($0.righe)) }
+        return HStack(alignment: .top, spacing: 0) {
+            ForEach(Array(gruppi.enumerated()), id: \.element.casa) { i, g in
+                VStack(spacing: 0) {
+                    intestazioneCasa(g.casa, g.righe.count, valori[i].0, valori[i].1)
+                    titoli()
+                    ForEach(Array(g.righe.enumerated()), id: \.element.id) { j, m in
+                        riga(m, j == g.righe.count - 1)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                if i < gruppi.count - 1 { Rectangle().fill(PSE.line).frame(width: 1) }
+            }
+        }
     }
     // Riga di chiusura: saldo iniziale + entrate − uscite = saldo finale
     private func rimanenteRow(_ iniz: Int, _ totE: Int, _ totU: Int) -> some View {
