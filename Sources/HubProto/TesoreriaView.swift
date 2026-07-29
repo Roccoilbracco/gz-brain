@@ -2336,6 +2336,67 @@ private struct TesMovimentoForm: View {
     @State private var confermaElimina = false
 
     private let modalitaOpts = ["contante", "booking", "airbnb", "bonifico"]
+
+    // ── Le categorie ─────────────────────────────────────────────────────────
+    // Il Conto economico raggruppa per questa stringa: «Affitto» e «affitto»
+    // erano due voci diverse, e una categoria scritta a mano come frase («RATA
+    // MUTUO LUGLIO») diventava una riga tutta sua. Il database ora normalizza
+    // maiuscole e spazi da sé, ma l'unico modo di non inventare ogni volta una
+    // parola nuova è vedere quelle che esistono già.
+    //
+    // Restano scrivibili a mano: le partite di giro («giro: …») non si possono
+    // elencare in anticipo, e sarebbe sbagliato impedirle.
+    private static let ALTRA = "__altra__"
+    private static let categorieEntrata: [(String, String)] = [
+        ("affitto", "Affitto — incasso di un soggiorno"),
+        ("booking", "Booking — incasso OTA"),
+        ("airbnb", "Airbnb — incasso OTA"),
+        ("educamp", "Educamp — affitto mensile"),
+        ("deposito", "Deposito — cauzione ricevuta"),
+        ("apporto", "Apporto — capitale dei soci"),
+        ("altro", "Altro"),
+    ]
+    private static let categorieUscita: [(String, String)] = [
+        ("pulizia", "Pulizia — 20 € per check-out"),
+        ("colazioni", "Colazioni"),
+        ("commissione", "Commissione — OTA"),
+        ("utenze", "Utenze — luce, gas, internet"),
+        ("mutuo", "Mutuo — rata"),
+        ("manutenzione", "Manutenzione"),
+        ("spesa", "Spesa"),
+        ("banca", "Banca — spese e commissioni"),
+        ("tasse", "Tasse"),
+        ("assicurazione", "Assicurazione"),
+        ("debito", "Debito — rimborso di un debito vecchio"),
+        ("deposito", "Deposito — cauzione restituita"),
+        ("altro", "Altro"),
+    ]
+    private var categorieCorrenti: [(String, String)] {
+        tipo == "entrata" ? Self.categorieEntrata : Self.categorieUscita
+    }
+    private var categorieOpts: [(String, String)] {
+        categorieCorrenti + [(Self.ALTRA, "Altra… (la scrivo io)")]
+    }
+    /// Cosa mostra il menù: la categoria scelta, oppure «Altra…» quando quella
+    /// che c'è non è in elenco — una `giro:` o una vecchia riga da correggere.
+    private var categoriaNelMenu: String {
+        categorieCorrenti.contains { $0.0 == categoria } ? categoria : Self.ALTRA
+    }
+    /// Le categorie che NON si scrivono qui: le porta la sincronizzazione dalla
+    /// prenotazione o dalla scheda Servizi. Metterle a mano fa contare due volte
+    /// lo stesso soggiorno — è esattamente l'errore che si vuole rendere difficile.
+    private var categoriaGiaAutomatica: String? {
+        if tipo == "entrata", ["affitto", "booking", "airbnb"].contains(categoria) {
+            return "Questa entrata la scrive la sincronizzazione da sola, dalla prenotazione. "
+                 + "Se la metti anche qui, l'incasso si conta due volte: apri la prenotazione in "
+                 + "Prenotazioni e scrivi quanto ha pagato."
+        }
+        if tipo == "uscita", ["pulizia", "colazioni"].contains(categoria) {
+            return "Questa uscita nasce dalla scheda Servizi al check-out, non si registra a mano: "
+                 + "se la scrivi qui diventa un doppione. Serve una correzione? Cambiala in Servizi."
+        }
+        return nil
+    }
     // Le camere della struttura scelta, per il selettore (niente se «Entrambe»).
     private var camereOpts: [(String, String)] {
         guard struttura == "via-po" || struttura == "via-romagna" else { return [("—", "—")] }
@@ -2365,7 +2426,20 @@ private struct TesMovimentoForm: View {
                 if struttura == "via-po" || struttura == "via-romagna" {
                     pick("Camera", camereOpts, camera) { camera = $0 }
                 }
-                HoloField(label: "Categoria", text: $categoria, placeholder: "affitto, spesa, pulizia…")
+                pick("Categoria", categorieOpts, categoriaNelMenu) { scelta in
+                    // «Altra…» non è una categoria: è il permesso di scriverne una.
+                    // Il campo di testo resta con quello che c'era, così una
+                    // «giro: …» aperta per correggerla non si perde.
+                    categoria = scelta == Self.ALTRA ? categoria : scelta
+                }
+                if categoriaNelMenu == Self.ALTRA {
+                    HoloField(label: "Quale categoria", text: $categoria, placeholder: "giro: storno commissioni…")
+                }
+                if let avviso = categoriaGiaAutomatica {
+                    Text(avviso)
+                        .font(.system(size: 10.5)).foregroundStyle(Color(hex: 0xffd08a))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 HoloField(label: "Nome e cognome", text: $descrizione, placeholder: "Es. Mario Rossi")
 
                 AllegatiBox(store: allegati)
@@ -2486,9 +2560,14 @@ private struct TesMovimentoForm: View {
         return nome.isEmpty ? nil : nome
     }
     private func fields() -> [String: Any?] {
-        [ "data": tesYmd.string(from: data), "conto_id": contoId, "tipo": tipo,
-          "categoria": categoria.isEmpty ? nil : categoria, "descrizione": descrizioneFinale(),
-          "importo_cents": cents ?? 0, "modalita": modalita, "struttura": struttura == "—" ? nil : struttura ]
+        // Minuscolo e senza spazi: lo fa anche il database con un trigger, ma
+        // farlo qui evita che la riga appena salvata si mostri diversa da come
+        // sta scritta, fino al prossimo caricamento.
+        let cat = categoria.trimmingCharacters(in: .whitespaces).lowercased()
+        return ["data": tesYmd.string(from: data), "conto_id": contoId, "tipo": tipo,
+                "categoria": cat.isEmpty ? nil : cat, "descrizione": descrizioneFinale(),
+                "importo_cents": cents ?? 0, "modalita": modalita,
+                "struttura": struttura == "—" ? nil : struttura]
     }
     private func save() async {
         saving = true; defer { saving = false }
