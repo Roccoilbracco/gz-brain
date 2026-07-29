@@ -36,6 +36,11 @@ struct StoricoMovimento: Identifiable, Decodable, Equatable {
     /// Resta salvata ma sta fuori da elenchi e totali: chi ha pagato si legge
     /// sull'uscita (campo pagato_da) e nella scheda Soci.
     var contropartita: Bool
+    /// true = la stessa spesa sta già dentro un'altra volta, da un'altra
+    /// fonte: la bolletta arrivata sia dall'estratto conto sia dalle fatture.
+    /// Come la contropartita, resta salvata ma non entra in elenchi e totali —
+    /// cancellarla vorrebbe dire non poter più ricontrollare da dove veniva.
+    var doppione: Bool
     var note: String?
 }
 
@@ -63,6 +68,10 @@ struct StoricoSpesaAlloggio: Identifiable, Decodable, Equatable {
     var categoria: String?
     var descrizione: String?
     var importo_cents: Int
+    /// Aggiunta il 29/07/26: prima non c'era, e pulizie, colazioni e
+    /// lavanderia comparivano tutte come «Da chiarire» pur uscendo dal
+    /// conto della società.
+    var pagato_da: String?
     var fonte: String?
     var note: String?
 }
@@ -393,7 +402,7 @@ func numeriRata(_ tutti: [StoricoMovimento]) -> [String: String] {
         async let s = HubAPI.listStoricoSpeseAlloggio(periodo)
         async let p = HubAPI.listStoricoApporti(periodo)
         async let d = HubAPI.listStoricoPendenti(periodo)
-        movimenti = ((try? await m) ?? []).filter { !$0.contropartita }
+        movimenti = ((try? await m) ?? []).filter { !$0.contropartita && !$0.doppione }
         affitti = (try? await a) ?? []
         spese = (try? await s) ?? []
         apporti = (try? await p) ?? []
@@ -528,11 +537,7 @@ func numeriRata(_ tutti: [StoricoMovimento]) -> [String: String] {
             DettaglioRiga(id: $0.id, data: stoData($0.data), ymd: $0.data,
                           descrizione: $0.descrizione ?? "—",
                           extra: [$0.struttura, $0.categoria].compactMap { $0 }.joined(separator: " · "),
-                          // Le spese alloggio non hanno mai avuto un «pagato da»:
-                          // nel foglio vecchio erano una colonna di soli importi.
-                          // Vanno con le altre sotto «Da chiarire», se no il conto
-                          // di chi ha pagato non torna col totale del fornitore.
-                          casa: $0.struttura ?? "", pagatoDa: nomePagante(nil),
+                          casa: $0.struttura ?? "", pagatoDa: nomePagante($0.pagato_da),
                           importo: $0.importo_cents, positivo: false)
         }
     }
