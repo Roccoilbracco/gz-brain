@@ -157,6 +157,10 @@ struct DettaglioRiga: Identifiable {
     /// Chi ha tirato fuori i soldi: il conto della società, un socio, i
     /// contanti. Serve a dire, fornitore per fornitore, chi ha pagato cosa.
     var pagatoDa: String = ""
+    /// Di che spesa si tratta — pulizie, colazioni, mutuo, utenze. Nelle
+    /// finestre dell'archivio le righe si raccolgono sotto la loro voce:
+    /// centoventi pulizie da 10 € una sotto l'altra non si leggono.
+    var voce: String = ""
     let importo: Int
     var positivo: Bool = true
     var mostraSegno: Bool = true

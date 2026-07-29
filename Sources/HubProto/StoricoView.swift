@@ -529,6 +529,7 @@ func numeriRata(_ tutti: [StoricoMovimento]) -> [String: String] {
                           descrizione: descrizioneMov($0),
                           extra: [$0.struttura, $0.categoria].compactMap { $0 }.joined(separator: " · "),
                           casa: $0.struttura ?? "", pagatoDa: nomePagante($0.pagato_da),
+                          voce: StoGruppo.da($0.categoria).rawValue,
                           importo: $0.importo_cents, positivo: $0.tipo == "entrata")
         }
     }
@@ -538,6 +539,7 @@ func numeriRata(_ tutti: [StoricoMovimento]) -> [String: String] {
                           descrizione: $0.descrizione ?? "—",
                           extra: [$0.struttura, $0.categoria].compactMap { $0 }.joined(separator: " · "),
                           casa: $0.struttura ?? "", pagatoDa: nomePagante($0.pagato_da),
+                          voce: StoGruppo.da($0.categoria).rawValue,
                           importo: $0.importo_cents, positivo: false)
         }
     }
@@ -547,6 +549,9 @@ func numeriRata(_ tutti: [StoricoMovimento]) -> [String: String] {
             return DettaglioRiga(id: $0.id, data: stoData($0.data), ymd: $0.data,
                                  descrizione: [$0.camera, $0.canale].compactMap { $0 }.joined(separator: " · "),
                                  extra: [$0.struttura ?? "", notti].filter { !$0.isEmpty }.joined(separator: " · "),
+                                 // Gli affitti si raccolgono per canale: quanto ha
+                                 // portato Booking, quanto le dirette.
+                                 voce: $0.canale ?? "Diretto",
                                  importo: netto ? $0.netto_cents : $0.lordo_cents, positivo: true)
         }
     }
@@ -555,7 +560,8 @@ func numeriRata(_ tutti: [StoricoMovimento]) -> [String: String] {
             DettaglioRiga(id: $0.id, data: stoData($0.data), ymd: $0.data,
                           descrizione: $0.descrizione ?? "—",
                           extra: [$0.struttura, $0.conta ? nil : "fuori conguaglio"].compactMap { $0 }.joined(separator: " · "),
-                          casa: $0.struttura ?? "", importo: abs($0.importo_cents), positivo: $0.importo_cents >= 0)
+                          casa: $0.struttura ?? "", voce: $0.categoria ?? "",
+                          importo: abs($0.importo_cents), positivo: $0.importo_cents >= 0)
         }
     }
 }
@@ -1719,6 +1725,8 @@ struct StoricoDettaglioSheet: View {
     @State private var mostraFornitori = true
     /// Fornitore aperto: sotto il suo nome compaiono tutti i suoi pagamenti.
     @State private var aperto: String? = nil
+    /// Voce aperta nell'elenco «Righe»: stessa idea, ma per tipo di spesa.
+    @State private var voceAperta: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1834,9 +1842,71 @@ struct StoricoDettaglioSheet: View {
             .monospacedDigit().frame(width: w, alignment: .trailing)
     }
 
-    private var righe: some View {
+    /// Una voce di spesa con dentro le sue righe: «Pulizie e lavanderia,
+    /// 181 righe, 1.810 €». Il totale è netto — se una voce ha dentro sia
+    /// entrate sia uscite, quello che conta è quanto resta.
+    private struct VoceRaccolta: Identifiable {
+        let nome: String
+        let righe: [DettaglioRiga]
+        let totale: Int
+        var id: String { nome }
+    }
+
+    /// Le righe raccolte sotto la loro voce, dalla più cara alla più piccola.
+    /// Quelle senza voce stanno insieme in fondo, sotto «Altro».
+    private var perVoce: [VoceRaccolta] {
+        Dictionary(grouping: d.righe, by: { $0.voce.isEmpty ? "Altro" : $0.voce })
+            .map { nome, rr in
+                VoceRaccolta(nome: nome, righe: rr,
+                             totale: rr.reduce(0) { $0 + ($1.positivo ? $1.importo : -$1.importo) })
+            }
+            .sorted { abs($0.totale) > abs($1.totale) }
+    }
+
+    /// Centoventi pulizie da 10 € una sotto l'altra non si leggono. Si vede
+    /// la voce col suo totale, e chi vuole i dettagli apre. Con una voce
+    /// sola raccogliere non serve: l'elenco resta piatto com'era.
+    @ViewBuilder private var righe: some View {
+        let voci = perVoce
+        if voci.count > 1 { elencoVoci(voci) } else { elencoPiatto(d.righe) }
+    }
+
+    private func elencoVoci(_ voci: [VoceRaccolta]) -> some View {
         VStack(spacing: 0) {
-            ForEach(d.righe) { r in
+            ForEach(voci) { v in
+                Button {
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        voceAperta = (voceAperta == v.nome ? nil : v.nome)
+                    }
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: voceAperta == v.nome ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 9, weight: .bold)).foregroundStyle(PSE.faint).frame(width: 12)
+                        Text(v.nome).font(.system(size: 12.5, weight: .medium)).foregroundStyle(PSE.ink)
+                            .lineLimit(1)
+                        Text(v.righe.count == 1 ? "1 riga" : "\(v.righe.count) righe")
+                            .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+                        Spacer(minLength: 8)
+                        Text((v.totale >= 0 ? "" : "−") + eurc(abs(v.totale)))
+                            .font(.system(size: 13, weight: .bold)).monospacedDigit()
+                            .foregroundStyle(v.totale >= 0 ? PSE.pos : PSE.neg)
+                            .frame(width: 110, alignment: .trailing)
+                    }
+                    .padding(.horizontal, 20).padding(.vertical, 10)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                if voceAperta == v.nome {
+                    elencoPiatto(v.righe).background(Color.white.opacity(0.03))
+                }
+                Divider().overlay(PSE.line).padding(.leading, 20)
+            }
+        }
+    }
+
+    private func elencoPiatto(_ rr: [DettaglioRiga]) -> some View {
+        VStack(spacing: 0) {
+            ForEach(rr) { r in
                 apribile(r) {
                     HStack(spacing: 12) {
                         if !r.data.isEmpty {
