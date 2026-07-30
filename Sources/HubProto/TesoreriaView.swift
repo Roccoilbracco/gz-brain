@@ -295,13 +295,15 @@ struct DettaglioVoceSheet: View {
     /// Quanto larga: 620 punti per colonna, la misura in cui una riga si legge
     /// ancora tutta (data, descrizione, conto, importo). Ma mai più larga dello
     /// schermo: una finestra che esce dai bordi nasconde la colonna di destra, che
-    /// è esattamente quella che si voleva vedere. Con una casa sola resta 760,
-    /// com'era prima.
+    /// è esattamente quella che si voleva vedere.
+    ///
+    /// Con una casa sola la colonna è una, ma 760 punti erano stretti lo stesso:
+    /// alla descrizione ne restavano poco più di trecento, e le note lunghe
+    /// andavano a capo quattro volte. 980 le fa stare quasi tutte in due righe.
     private var larghezza: CGFloat {
         let n = min(gruppiPerCasa(righe, casa: { $0.casa })?.count ?? 1, 3)
-        guard n > 1 else { return 760 }
         let schermo = (NSScreen.main?.visibleFrame.width ?? 1440) * 0.94
-        return min(CGFloat(n) * 620, max(760, schermo))
+        return min(n > 1 ? CGFloat(n) * 620 : 980, max(760, schermo))
     }
     private var altezza: CGFloat {
         min(600, max(420, (NSScreen.main?.visibleFrame.height ?? 900) * 0.9))
@@ -326,14 +328,20 @@ struct DettaglioVoceSheet: View {
     private func riga(_ r: DettaglioRiga, mostraCasa: Bool,
                       larghezzaCoda: CGFloat = 150, bordo: CGFloat = 20) -> some View {
         let coda = mostraCasa ? [r.extra, r.casa].filter { !$0.isEmpty }.joined(separator: " · ") : r.extra
+        // Le righe si allineano in alto e la descrizione va a capo quanto serve:
+        // qui dentro ci sono le note lunghe — le rettifiche di competenza, gli
+        // storni, il perché di una cifra — e finivano tutte in «…». Una nota
+        // scritta e non leggibile è una nota che non c'è: meglio una riga alta
+        // tre righe che una spiegazione tagliata a metà parola.
         return VStack(spacing: 0) {
-            HStack(spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
                 if !r.data.isEmpty {
                     Text(r.data).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim)
                         .frame(width: 62, alignment: .leading).monospacedDigit()
                 }
                 Text(r.descrizione).font(.system(size: 12.5, weight: .medium)).foregroundStyle(PSE.ink)
-                    .frame(maxWidth: .infinity, alignment: .leading).lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 if !coda.isEmpty {
                     Text(coda).font(.system(size: 11)).foregroundStyle(PSE.faint)
                         .frame(width: larghezzaCoda, alignment: .leading).lineLimit(1)
