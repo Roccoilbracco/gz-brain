@@ -856,14 +856,15 @@ struct TesoreriaView: View {
     private var daRecuperareAperti: [DaRecuperare] {
         daRecuperareTutti.filter { p in !model.movimenti.contains(where: p.rientrato) }
     }
-    /// Dove si mostra: nel Riepilogo, che è il quadro d'insieme, e nell'estratto
-    /// del conto da cui i soldi sono usciti — lì la riga ce l'hai davanti. Sugli
-    /// altri conti no: non hanno pagato niente, e un avviso che compare dove non
+    /// Dove si mostra: nei due posti da cui si passa sempre — il Riepilogo e
+    /// «Tutti i conti» — e nell'estratto del conto da cui i soldi sono usciti,
+    /// dove la riga ce l'hai davanti. Sugli altri conti no: Cassa, Beeper e
+    /// Carifermo non hanno pagato niente, e un avviso che compare anche dove non
     /// riguarda si smette di leggere.
     private var promemoriaQui: [DaRecuperare] {
         switch sub {
         case .riepilogo: return daRecuperareAperti
-        case .conti: return daRecuperareAperti.filter { $0.conto == contoSel }
+        case .conti: return daRecuperareAperti.filter { tuttiIConti || $0.conto == contoSel }
         default: return []
         }
     }
