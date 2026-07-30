@@ -597,23 +597,26 @@ struct TesoreriaView: View {
                 HStack { Spacer(); ProgressView().controlSize(.large); Spacer() }.padding(.top, 30)
             } else {
                 ScrollView(showsIndicators: false) {
-                    switch sub {
-                    case .riepilogo: riepilogo
-                    case .conti: contiView
-                    case .depositi: depositiView
-                    case .contoEconomico: contoEconomico
-                    // I movimenti arrivano da qui: registrato un incasso, il
-                    // modello si ricarica e le spunte «pagato» seguono subito.
-                    case .educamp: EducampView(movimenti: model.movimenti)
-                    case .storico2425:
-                        StoricoView(periodo: "2024-2025") { voceSheet = .storicoEdit($0, "2024-2025") }
-                    case .storico2526:
-                        StoricoView(periodo: "2025-2026") { voceSheet = .storicoEdit($0, "2025-2026") }
-                    // Il riassunto legge tutte e due le stagioni insieme.
-                    case .storicoTutto:
-                        StoricoView(periodo: "tutto") { voceSheet = .storicoEdit($0, "tutto") }
-                    case .servizi: ServiziView(tab: $servizioSel)
-                    case .movimenti: movimentiList
+                    VStack(alignment: .leading, spacing: 0) {
+                        promemoriaDaRecuperare
+                        switch sub {
+                        case .riepilogo: riepilogo
+                        case .conti: contiView
+                        case .depositi: depositiView
+                        case .contoEconomico: contoEconomico
+                        // I movimenti arrivano da qui: registrato un incasso, il
+                        // modello si ricarica e le spunte «pagato» seguono subito.
+                        case .educamp: EducampView(movimenti: model.movimenti)
+                        case .storico2425:
+                            StoricoView(periodo: "2024-2025") { voceSheet = .storicoEdit($0, "2024-2025") }
+                        case .storico2526:
+                            StoricoView(periodo: "2025-2026") { voceSheet = .storicoEdit($0, "2025-2026") }
+                        // Il riassunto legge tutte e due le stagioni insieme.
+                        case .storicoTutto:
+                            StoricoView(periodo: "tutto") { voceSheet = .storicoEdit($0, "tutto") }
+                        case .servizi: ServiziView(tab: $servizioSel)
+                        case .movimenti: movimentiList
+                        }
                     }
                 }
             }
@@ -805,6 +808,82 @@ struct TesoreriaView: View {
             .background(RoundedRectangle(cornerRadius: 12).fill(c.opacity(0.10)))
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(c.opacity(0.30), lineWidth: 1))
         }.buttonStyle(.plain)
+    }
+
+    // ══ PROMEMORIA — soldi nostri in mano a qualcun altro ═════════════════════
+    //
+    // Non è un «da incassare»: quelli sono i soggiorni, e li calcola il programma
+    // dalle prenotazioni. E non è un movimento: il denaro non si è mosso, e
+    // registrarlo falserebbe il saldo del conto. Ma scritto solo dentro la
+    // descrizione di un'uscita, in mezzo a cinquanta righe, si dimentica — e
+    // questi sono soldi nostri che stanno da un'altra parte.
+    //
+    // Sta nel codice, come la lista delle cose da verificare dell'archivio: è un
+    // promemoria di lavoro, non contabilità. E si chiude da sé — quando compare
+    // il movimento che riporta i soldi a casa, il promemoria non si mostra più.
+    // Nessuna spunta da ricordarsi di mettere, che è il modo in cui i promemoria
+    // muoiono male.
+    private struct DaRecuperare: Identifiable {
+        let id: String
+        let chi: String
+        let cents: Int
+        let perche: String
+        let dove: String
+        /// Come si riconosce il rientro. Stretto quanto basta: se combaciasse con
+        /// un movimento qualsiasi, il promemoria spegnerebbe troppo presto.
+        let rientrato: (TesMovimento) -> Bool
+    }
+    private var daRecuperareTutti: [DaRecuperare] {
+        [
+            DaRecuperare(
+                id: "gioia-f24-2026-07",
+                chi: "Gioia",
+                cents: 33604,
+                perche: "L'F24 del 21/07 è stato pagato per intero dal conto Massimo: 736,04 €. Di quelli, 400,00 € sono di Via Po e 336,04 € sono la quota di Gioia.",
+                dove: "La riga sta in Conti → Uscite, 21/07, categoria «tasse».",
+                rientrato: { m in
+                    m.tipo == "entrata" && m.data >= "2026-07-21"
+                        && (m.descrizione ?? "").lowercased().contains("gioia")
+                }),
+        ]
+    }
+    private var daRecuperareAperti: [DaRecuperare] {
+        daRecuperareTutti.filter { p in !model.movimenti.contains(where: p.rientrato) }
+    }
+    /// Sta in cima a ogni scheda della Tesoreria, non solo al Riepilogo: un
+    /// promemoria che si vede da un posto solo è un promemoria che si vede quando
+    /// si passa da quel posto.
+    @ViewBuilder private var promemoriaDaRecuperare: some View {
+        let aperti = daRecuperareAperti
+        if !aperti.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(aperti) { p in
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "bell.badge.fill").font(.system(size: 15))
+                            .foregroundStyle(PSE.warn).padding(.top, 1)
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 10) {
+                                Text("DA RECUPERARE — \(p.chi.uppercased())")
+                                    .font(.system(size: 10, weight: .heavy)).tracking(1.2)
+                                    .foregroundStyle(PSE.warn)
+                                Text(eurc(p.cents)).font(.system(size: 16, weight: .bold))
+                                    .foregroundStyle(PSE.warn).monospacedDigit()
+                            }
+                            Text(p.perche).font(.system(size: 11)).foregroundStyle(PSE.ink)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text("\(p.dove) Questo avviso sparisce da sé quando registri l'entrata: basta che «\(p.chi)» sia nella descrizione.")
+                                .font(.system(size: 10)).foregroundStyle(PSE.faint)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(14)
+                    .background(RoundedRectangle(cornerRadius: 12).fill(PSE.warn.opacity(0.10)))
+                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(PSE.warn.opacity(0.45), lineWidth: 1))
+                }
+            }
+            .padding(.bottom, 4)
+        }
     }
 
     private var riepilogo: some View {
