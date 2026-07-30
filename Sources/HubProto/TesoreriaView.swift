@@ -1233,6 +1233,7 @@ struct TesoreriaView: View {
             Text("IMPORTO").frame(width: 92, alignment: .trailing)
         }
         .font(.system(size: 8.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
+        .lineLimit(1)
         .padding(.horizontal, 16).padding(.vertical, 9)
         .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
     }
@@ -1318,14 +1319,18 @@ struct TesoreriaView: View {
                 if visibiliMov.isEmpty {
                     EmptyStateCard(icon: "tray", text: "Nessun movimento per il filtro scelto.")
                 } else if let gruppi = gruppiPerCasa(visibiliMov, casa: { casaLabel($0.struttura) }) {
-                    colonneCase(gruppi, valore: { saldoTesto($0) }, colore: { saldoColore($0) },
-                                titoli: { movHeader(mostraCasa: false, stretta: true) },
-                                riga: { m, ultima in
-                        VStack(spacing: 0) {
-                            movRow(m, mostraCasa: false, stretta: true)
-                            if !ultima { Divider().overlay(PSE.line).padding(.leading, 16) }
+                    // Qui le case restano una sotto l'altra, non affiancate come
+                    // altrove: questa tabella ha sette colonne, e a metà larghezza
+                    // la descrizione si riduceva a niente — che è la colonna per
+                    // cui si apre questa scheda. Meglio scorrere che non leggere.
+                    movHeader(mostraCasa: false)
+                    ForEach(gruppi, id: \.casa) { g in
+                        intestazioneCasa(g.casa, g.righe.count, saldoTesto(g.righe), saldoColore(g.righe))
+                        ForEach(g.righe) { m in
+                            movRow(m, mostraCasa: false)
+                            Divider().overlay(PSE.line).padding(.leading, 16)
                         }
-                    })
+                    }
                     movTotaleRow
                 } else {
                     movHeader()
@@ -1357,6 +1362,10 @@ struct TesoreriaView: View {
             Image(systemName: "paperclip").frame(width: 24, alignment: .trailing)
         }
         .font(.system(size: 8.5, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
+        // Senza questo, una colonna stretta manda «DESCRIZIONE» a capo una
+        // lettera per riga: l'intestazione diventa una banda vuota alta un dito
+        // e la tabella sembra rotta. È successo.
+        .lineLimit(1)
         .padding(.horizontal, 16).padding(.vertical, 9)
         .overlay(Rectangle().fill(PSE.line).frame(height: 1), alignment: .bottom)
     }
@@ -1384,7 +1393,12 @@ struct TesoreriaView: View {
         return Button { editing = m; showForm = true } label: {
             HStack(spacing: 12) {
                 Text(tesPrettyStr(m.data)).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.dim).frame(width: 62, alignment: .leading).monospacedDigit()
-                Text(m.descrizione ?? (m.categoria ?? "—")).font(.system(size: 12.5, weight: .medium)).foregroundStyle(PSE.ink).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                // Due righe, non una: qui dentro ci sono le note lunghe — le
+                // rettifiche di competenza, gli storni — e troncarle a metà
+                // parola vuol dire tenerle scritte per nessuno.
+                Text(m.descrizione ?? (m.categoria ?? "—")).font(.system(size: 12.5, weight: .medium)).foregroundStyle(PSE.ink)
+                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 if mostraCasa {
                     Text(casaLabel(m.struttura)).font(.system(size: 11)).foregroundStyle(PSE.dim).frame(width: 96, alignment: .leading).lineLimit(1)
                 }
