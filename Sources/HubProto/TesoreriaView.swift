@@ -829,6 +829,11 @@ struct TesoreriaView: View {
         let cents: Int
         let perche: String
         let dove: String
+        /// Il conto da cui i soldi sono usciti. Serve a non mostrare l'avviso
+        /// dove non c'entra niente: Cassa, Beeper e Carifermo non hanno pagato
+        /// quell'F24, e un promemoria che compare anche dove non riguarda
+        /// diventa sfondo, e lo sfondo non lo legge nessuno.
+        let conto: String
         /// Come si riconosce il rientro. Stretto quanto basta: se combaciasse con
         /// un movimento qualsiasi, il promemoria spegnerebbe troppo presto.
         let rientrato: (TesMovimento) -> Bool
@@ -841,6 +846,7 @@ struct TesoreriaView: View {
                 cents: 33604,
                 perche: "L'F24 del 21/07 è stato pagato per intero dal conto Massimo: 736,04 €. Di quelli, 400,00 € sono di Via Po e 336,04 € sono la quota di Gioia.",
                 dove: "La riga sta in Conti → Uscite, 21/07, categoria «tasse».",
+                conto: "massimo",
                 rientrato: { m in
                     m.tipo == "entrata" && m.data >= "2026-07-21"
                         && (m.descrizione ?? "").lowercased().contains("gioia")
@@ -850,11 +856,19 @@ struct TesoreriaView: View {
     private var daRecuperareAperti: [DaRecuperare] {
         daRecuperareTutti.filter { p in !model.movimenti.contains(where: p.rientrato) }
     }
-    /// Sta in cima a ogni scheda della Tesoreria, non solo al Riepilogo: un
-    /// promemoria che si vede da un posto solo è un promemoria che si vede quando
-    /// si passa da quel posto.
+    /// Dove si mostra: nel Riepilogo, che è il quadro d'insieme, e nell'estratto
+    /// del conto da cui i soldi sono usciti — lì la riga ce l'hai davanti. Sugli
+    /// altri conti no: non hanno pagato niente, e un avviso che compare dove non
+    /// riguarda si smette di leggere.
+    private var promemoriaQui: [DaRecuperare] {
+        switch sub {
+        case .riepilogo: return daRecuperareAperti
+        case .conti: return daRecuperareAperti.filter { $0.conto == contoSel }
+        default: return []
+        }
+    }
     @ViewBuilder private var promemoriaDaRecuperare: some View {
-        let aperti = daRecuperareAperti
+        let aperti = promemoriaQui
         if !aperti.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(aperti) { p in
