@@ -349,6 +349,82 @@ struct DettaglioVoceSheet: View {
     }
 }
 
+// La finestra di un promemoria «da recuperare»: la riga d'origine com'è scritta,
+// e intorno quello che sappiamo. Il posto dove sta scritto perché quei soldi sono
+// nostri, se sono mai tornati, e cosa invece è solo un ricordo — la distinzione
+// che fra sei mesi non sapremo più rifare.
+struct PromemoriaSheet: View {
+    let chi: String
+    let cents: Int
+    let dove: String
+    let scheda: [(String, String)]
+    let note: [String]
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("DA RECUPERARE — \(chi.uppercased())")
+                        .font(.system(size: 14, weight: .heavy)).tracking(1).foregroundStyle(PSE.warn)
+                    Text(eurc(cents)).font(.system(size: 24, weight: .bold))
+                        .foregroundStyle(PSE.warn).monospacedDigit()
+                }
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark").font(.system(size: 12, weight: .bold)).foregroundStyle(PSE.dim)
+                        .frame(width: 26, height: 26).background(Circle().fill(Color.white.opacity(0.05)))
+                }.buttonStyle(.plain)
+            }
+            .padding(EdgeInsets(top: 18, leading: 20, bottom: 14, trailing: 16))
+
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("LA RIGA").font(.system(size: 9.5, weight: .heavy)).tracking(1.2)
+                        .foregroundStyle(PSE.faint)
+                        .padding(.horizontal, 20).padding(.bottom, 8)
+                    ForEach(Array(scheda.enumerated()), id: \.offset) { _, r in
+                        HStack(alignment: .top, spacing: 12) {
+                            Text(r.0).font(.system(size: 11)).foregroundStyle(PSE.faint)
+                                .frame(width: 130, alignment: .leading)
+                            Text(r.1).font(.system(size: 12.5, weight: .medium)).foregroundStyle(PSE.ink)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.horizontal, 20).padding(.vertical, 7)
+                        Divider().overlay(PSE.line).padding(.leading, 20)
+                    }
+
+                    Text("COSA SAPPIAMO").font(.system(size: 9.5, weight: .heavy)).tracking(1.2)
+                        .foregroundStyle(PSE.faint)
+                        .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 8)
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(Array(note.enumerated()), id: \.offset) { _, n in
+                            HStack(alignment: .top, spacing: 10) {
+                                Circle().fill(PSE.warn.opacity(0.7)).frame(width: 5, height: 5).padding(.top, 6)
+                                Text(n).font(.system(size: 12)).foregroundStyle(PSE.ink)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20).padding(.bottom, 18)
+                }
+            }
+
+            HStack {
+                Image(systemName: "doc.text.magnifyingglass").font(.system(size: 11)).foregroundStyle(PSE.faint)
+                Text(dove).font(.system(size: 11)).foregroundStyle(PSE.faint).lineLimit(2)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 20).padding(.vertical, 12).background(Color.white.opacity(0.04))
+        }
+        .frame(width: 720, height: 560)
+        .background(Color(hex: 0x0b0f18))
+        .preferredColorScheme(.dark)
+    }
+}
+
 // Le voci del Riepilogo che aprono una sotto-finestra al click.
 enum RiepVoce: Identifiable {
     case conto(String)                       // id conto → estratto
@@ -367,6 +443,8 @@ enum RiepVoce: Identifiable {
     case cauzioniApporti
     // Movimenti / Conti: un elenco di movimenti già filtrato, con titolo
     case movimenti(String, [TesMovimento], Int)
+    // Un promemoria «da recuperare» aperto: la riga d'origine e cosa sappiamo
+    case promemoria(String)
     // Archivio storico: la scheda per correggere una riga. Passa da qui perché
     // di tutti i .sheet appesi a questa vista ne funziona uno solo, l'ultimo.
     case storicoEdit(StoricoEditTarget, String)
@@ -386,6 +464,7 @@ enum RiepVoce: Identifiable {
         case .debiti: return "debiti"
         case .cauzioniApporti: return "cauzapp"
         case .movimenti(let t, _, _): return "mov-\(t)"
+        case .promemoria(let p): return "prom-\(p)"
         case .storicoEdit(let t, let p): return "sto-\(p)-\(t.id)"
         }
     }
@@ -641,6 +720,10 @@ struct TesoreriaView: View {
         .sheet(item: $voceSheet) { v in
             if case .storicoEdit(let t, let p) = v {
                 StoricoEditSheet(periodo: p, target: t) { voceSheet = nil }
+            } else if case .promemoria(let id) = v,
+                      let p = daRecuperareTutti.first(where: { $0.id == id }) {
+                PromemoriaSheet(chi: p.chi, cents: p.cents, dove: p.dove,
+                                scheda: p.scheda, note: p.note) { voceSheet = nil }
             } else {
                 let d = dettaglioVoce(v)
                 DettaglioVoceSheet(titolo: d.titolo, nota: d.nota, righe: d.righe,
@@ -761,6 +844,9 @@ struct TesoreriaView: View {
                     mov.map { rigaDaMov($0) }, "TOTALE", totEntrateFinanziarie)
         case .movimenti(let titolo, let mov, let tot):
             return (titolo.uppercased(), "", mov.sorted { $0.data > $1.data }.map { rigaDaMov($0) }, "TOTALE", tot)
+        // Il promemoria ha una finestra sua: non è un elenco di righe.
+        case .promemoria:
+            return ("", "", [], "", nil)
         }
     }
     private func contoNotaFor(_ id: String) -> String {
@@ -833,7 +919,16 @@ struct TesoreriaView: View {
         /// dove non c'entra niente: Cassa, Beeper e Carifermo non hanno pagato
         /// quell'F24, e un promemoria che compare anche dove non riguarda
         /// diventa sfondo, e lo sfondo non lo legge nessuno.
+        /// Vuoto = solo Riepilogo e «Tutti i conti»: è il caso dei soldi usciti
+        /// da una cassa che oggi non esiste più come conto.
         let conto: String
+        /// I fatti della riga d'origine, come si leggono nell'archivio.
+        let scheda: [(String, String)]
+        /// Quello che sappiamo oltre alla riga: se è tornato qualcosa, cosa dice
+        /// esattamente il libro e cosa invece ci mettiamo noi ricordandolo. Sta
+        /// scritto qui perché fra sei mesi non ce lo ricorderemo, e la riga da
+        /// sola non lo dice.
+        let note: [String]
         /// Come si riconosce il rientro. Stretto quanto basta: se combaciasse con
         /// un movimento qualsiasi, il promemoria spegnerebbe troppo presto.
         let rientrato: (TesMovimento) -> Bool
@@ -847,10 +942,52 @@ struct TesoreriaView: View {
                 perche: "L'F24 del 21/07 è stato pagato per intero dal conto Massimo: 736,04 €. Di quelli, 400,00 € sono di Via Po e 336,04 € sono la quota di Gioia.",
                 dove: "La riga sta in Conti → Uscite, 21/07, categoria «tasse».",
                 conto: "massimo",
+                scheda: [
+                    ("Data", "21 luglio 2026"),
+                    ("Casa", "Via Po"),
+                    ("Categoria", "tasse"),
+                    ("Descrizione", "PAGAM. DELEGA F24 Agenzia Entrate"),
+                    ("Importo pagato", "736,04 €"),
+                    ("Conto", "Massimo Affittacamere · OTA"),
+                    ("Quota nostra", "400,00 € (Via Po)"),
+                    ("Quota di Gioia", "336,04 €"),
+                ],
+                note: [
+                    "L'F24 è stato pagato per intero dal conto Massimo, ma solo 400,00 € erano nostri: i 336,04 € restanti sono la quota di Gioia e vanno chiesti indietro.",
+                    "Finché non rientrano, il saldo di Massimo è più basso di quello che ci spetta davvero: quei 336 € sono nostri, sono solo stati anticipati.",
+                    "L'avviso sparisce da sé quando registri l'entrata: basta che «Gioia» sia nella descrizione e la data sia dal 21/07/2026 in poi.",
+                ],
                 rientrato: { m in
                     m.tipo == "entrata" && m.data >= "2026-07-21"
                         && (m.descrizione ?? "").lowercased().contains("gioia")
                 }),
+            // Il prestito del 2025: sta nell'archivio, non nei movimenti — quei
+            // soldi sono usciti da una cassa che oggi non è più un conto. Per
+            // questo `conto` è vuoto: si mostra nel Riepilogo e in «Tutti i
+            // conti», e non finge di appartenere a Cassa o a Beeper.
+            DaRecuperare(
+                id: "giacomo-prestito-2025-08",
+                chi: "Giacomo",
+                cents: 200_000,
+                perche: "Prestito infruttifero del 22/08/2025, uscito dalla cassa degli affitti e segnato «DA RIDARE». Nell'archivio non risulta nessuna restituzione.",
+                dove: "La riga sta in ARCHIVIO → Apr 2024 – Set 2025, categoria «Prestito a socio».",
+                conto: "",
+                scheda: [
+                    ("Data", "22 agosto 2025"),
+                    ("Casa", "Via Romagna"),
+                    ("Categoria", "Prestito a socio"),
+                    ("Descrizione", "PRESTITO INFRUTTIFERO A GIACOMO DAL CONTO DELL AFFITTACAMERA DA RIDARE"),
+                    ("Importo", "2.000,00 € (uscita)"),
+                    ("Pagato da", "«Affiti» — la cassa degli affitti"),
+                    ("Fonte", "Doc. oficial (libro maestro)"),
+                ],
+                note: [
+                    "Non è mai tornato. Fra le 120 righe dell'archivio che parlano di Giacomo, dopo il 22/08/2025 non c'è nessuna entrata da 2.000 €: i suoi ingressi successivi sono rimborsi di spese precise (colazioni 280 €, pulizie 200 €, Edif 623 €, la porta 130 € a gennaio) e il rimborso spese d'asta da 6.000 € del 30/06/2026, che è un'altra cosa.",
+                    "È l'unico prestito che abbiamo dato verso l'esterno in tutto l'archivio. Gli altri «prestiti» vanno nel verso opposto e sono già stati restituiti: 2.200 € di Donatella Carbonari, 1.500 € e 1.110 € di Massimo Anastasi. I 24.000 € di Agos Ducato sono finanziamento esterno, non un prestito nostro.",
+                    "Attenzione a cosa dice la riga e cosa no: parla di un prestito «a Giacomo», e «dal conto dell'affittacamera» vuol dire dalla nostra cassa. Le parole «Gioia» e «Civitanova» non compaiono in nessuna riga dell'archivio — che il denaro sia finito nell'affittacamere Gioia di Civitanova è un ricordo, non un fatto scritto.",
+                    "Questo avviso non si spegne da sé: nell'archivio non c'è una regola che riconosca il rientro. Quando Giacomo restituisce, registra l'entrata e cancella questa voce dal codice.",
+                ],
+                rientrato: { _ in false }),
         ]
     }
     private var daRecuperareAperti: [DaRecuperare] {
@@ -872,29 +1009,40 @@ struct TesoreriaView: View {
         let aperti = promemoriaQui
         if !aperti.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
+                // Si apre: sulla card sta il fatto in due righe, dentro c'è la
+                // riga d'origine e quello che sappiamo intorno — dove sta scritta,
+                // se è mai tornato indietro, e cosa invece ci mettiamo noi
+                // ricordando. Sulla card non ci sta, e cancellarlo lo perde.
                 ForEach(aperti) { p in
-                    HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: "bell.badge.fill").font(.system(size: 15))
-                            .foregroundStyle(PSE.warn).padding(.top, 1)
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack(spacing: 10) {
-                                Text("DA RECUPERARE — \(p.chi.uppercased())")
-                                    .font(.system(size: 10, weight: .heavy)).tracking(1.2)
-                                    .foregroundStyle(PSE.warn)
-                                Text(eurc(p.cents)).font(.system(size: 16, weight: .bold))
-                                    .foregroundStyle(PSE.warn).monospacedDigit()
+                    Button { voceSheet = .promemoria(p.id) } label: {
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: "bell.badge.fill").font(.system(size: 15))
+                                .foregroundStyle(PSE.warn).padding(.top, 1)
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 10) {
+                                    Text("DA RECUPERARE — \(p.chi.uppercased())")
+                                        .font(.system(size: 10, weight: .heavy)).tracking(1.2)
+                                        .foregroundStyle(PSE.warn)
+                                    Text(eurc(p.cents)).font(.system(size: 16, weight: .bold))
+                                        .foregroundStyle(PSE.warn).monospacedDigit()
+                                }
+                                Text(p.perche).font(.system(size: 11)).foregroundStyle(PSE.ink)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .multilineTextAlignment(.leading)
+                                Text("\(p.dove) Clicca per il dettaglio.")
+                                    .font(.system(size: 10)).foregroundStyle(PSE.faint)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .multilineTextAlignment(.leading)
                             }
-                            Text(p.perche).font(.system(size: 11)).foregroundStyle(PSE.ink)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Text("\(p.dove) Questo avviso sparisce da sé quando registri l'entrata: basta che «\(p.chi)» sia nella descrizione.")
-                                .font(.system(size: 10)).foregroundStyle(PSE.faint)
-                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.right").font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(PSE.warn.opacity(0.7)).padding(.top, 3)
                         }
-                        Spacer(minLength: 0)
-                    }
-                    .padding(14)
-                    .background(RoundedRectangle(cornerRadius: 12).fill(PSE.warn.opacity(0.10)))
-                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(PSE.warn.opacity(0.45), lineWidth: 1))
+                        .padding(14)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(PSE.warn.opacity(0.10)))
+                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(PSE.warn.opacity(0.45), lineWidth: 1))
+                        .contentShape(RoundedRectangle(cornerRadius: 12))
+                    }.buttonStyle(.plain)
                 }
             }
             .padding(.bottom, 4)
