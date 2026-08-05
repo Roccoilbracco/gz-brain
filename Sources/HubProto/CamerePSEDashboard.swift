@@ -213,7 +213,7 @@ extension HubAPI {
     }
 }
 
-enum PSEViewMode { case prenotazioni, tesoreria }
+enum PSEViewMode { case prenotazioni, tesoreria, quadratura }
 
 // segmented control coerente col tema Camere PSE (niente picker nativo grigio)
 //
@@ -470,7 +470,9 @@ struct CamerePSEDashboard: View {
         ZStack(alignment: .trailing) {
             VStack(alignment: .leading, spacing: 16) {
                 header
-                if viewMode == .tesoreria {
+                if viewMode == .quadratura {
+                    QuadraturaView()
+                } else if viewMode == .tesoreria {
                     TesoreriaView(prenotazioni: items, newTrigger: $newMovimento)
                 } else {
                     strutturaChips
@@ -550,7 +552,9 @@ struct CamerePSEDashboard: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: 14) {
-            PSESegmented(items: [(PSEViewMode.prenotazioni, "Prenotazioni"), (PSEViewMode.tesoreria, "Tesoreria")], selection: $viewMode)
+            PSESegmented(items: [(PSEViewMode.prenotazioni, "Prenotazioni"),
+                                 (PSEViewMode.tesoreria, "Tesoreria"),
+                                 (PSEViewMode.quadratura, "Quadratura")], selection: $viewMode)
             Spacer()
             // L'occhio copre tutti gli importi della sezione, come nell'app della
             // banca: si può mostrare come funziona Camere PSE senza far vedere
@@ -571,16 +575,20 @@ struct CamerePSEDashboard: View {
             }
             .buttonStyle(.plain)
             .help(nascosti.attivo ? "Mostra di nuovo gli importi" : "Copri gli importi (per far vedere l'app senza i numeri)")
-            Button {
-                if viewMode == .prenotazioni { editing = nil; showForm = true } else { newMovimento = true }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "plus").font(.system(size: 11, weight: .bold))
-                    Text(viewMode == .prenotazioni ? "Nuova prenotazione" : "Nuovo movimento").font(.system(size: 12.5, weight: .semibold))
-                }
-                .foregroundStyle(PSE.ink).padding(.horizontal, 14).padding(.vertical, 8)
-                .background(Capsule().fill(PSE.warn.opacity(0.95)))
-            }.buttonStyle(.plain)
+            // In Quadratura non si crea niente: la pagina è un referto, e il suo
+            // comando («Ricontrolla») sta dentro la vista.
+            if viewMode != .quadratura {
+                Button {
+                    if viewMode == .prenotazioni { editing = nil; showForm = true } else { newMovimento = true }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus").font(.system(size: 11, weight: .bold))
+                        Text(viewMode == .prenotazioni ? "Nuova prenotazione" : "Nuovo movimento").font(.system(size: 12.5, weight: .semibold))
+                    }
+                    .foregroundStyle(PSE.ink).padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(Capsule().fill(PSE.warn.opacity(0.95)))
+                }.buttonStyle(.plain)
+            }
         }
     }
 
