@@ -55,10 +55,6 @@ private let CONNESSIONI: [ConnDef] = [
           label: "Ponte WhatsApp — indirizzo",
           hint: "Dove risponde il servizio, es. https://wa.camerepse.it — serve all'app per il QR e per l'invio manuale.",
           icon: "link"),
-    .init(key: "beds24_refresh_token",
-          label: "Beds24",
-          hint: "Sincronizza le prenotazioni OTA (Airbnb, Booking) con Camere PSE.",
-          icon: "calendar"),
 ]
 
 // ─── Card "Connessioni API" nelle Impostazioni ───────────────────────────────
