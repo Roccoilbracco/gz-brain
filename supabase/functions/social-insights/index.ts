@@ -18,13 +18,30 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import Anthropic from "npm:@anthropic-ai/sdk";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+// Supabase inietta sia le variabili storiche (SUPABASE_SERVICE_ROLE_KEY, una
+// stringa) sia quelle nuove (SUPABASE_SECRET_KEYS, un JSON per nome chiave).
+// Si prende la nuova se c'è, altrimenti la vecchia: così la funzione attraversa
+// la rotazione senza modifiche.
+function chiaveSegreta(): string {
+  const nuove = Deno.env.get("SUPABASE_SECRET_KEYS");
+  if (nuove) {
+    try {
+      const k = JSON.parse(nuove)["default"];
+      if (k) return k;
+    } catch { /* formato inatteso: si ricade sulla legacy */ }
+  }
+  return Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+}
+const SERVICE_KEY = chiaveSegreta();
 const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
 
-const dbHeaders = {
+// Le chiavi `sb_secret_...` non sono JWT: su Authorization verrebbero rifiutate.
+// Vanno sempre su `apikey`; Authorization si aggiunge solo per le legacy.
+const dbHeaders: Record<string, string> = {
   apikey: SERVICE_KEY,
-  Authorization: `Bearer ${SERVICE_KEY}`,
   "content-type": "application/json",
+  ...(SERVICE_KEY.startsWith("eyJ") ? { Authorization: `Bearer ${SERVICE_KEY}` } : {}),
 };
 
 async function db<T>(path: string): Promise<T> {
@@ -249,8 +266,27 @@ Aim for 400-600 words. The title should read like a report heading, e.g. "July 2
 }
 
 // ── Handler ─────────────────────────────────────────────────────────────────
+// Finché la funzione gira con verify_jwt=true è la piattaforma a filtrare le
+// chiamate. Ma quel controllo capisce solo le chiavi legacy (JWT): quando si
+// passa a una chiave `sb_secret_...` va spento, e allora l'autorizzazione deve
+// stare qui. Questo controllo vale in entrambi i mondi, quindi si può
+// aggiungere prima della rotazione senza rompere niente.
+function autorizzata(req: Request): boolean {
+  const presentata = req.headers.get("apikey") ??
+    req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+  if (!presentata || !SERVICE_KEY) return false;
+  // confronto a lunghezza costante: non deve far trapelare quanti caratteri tornano
+  if (presentata.length !== SERVICE_KEY.length) return false;
+  let diff = 0;
+  for (let i = 0; i < presentata.length; i++) {
+    diff |= presentata.charCodeAt(i) ^ SERVICE_KEY.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 Deno.serve(async (req) => {
   if (req.method !== "POST") return new Response("POST only", { status: 405 });
+  if (!autorizzata(req)) return new Response("non autorizzata", { status: 401 });
   if (!ANTHROPIC_API_KEY) {
     return Response.json({ error: "ANTHROPIC_API_KEY secret is not set" }, { status: 500 });
   }

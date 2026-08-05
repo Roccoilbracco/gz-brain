@@ -16,12 +16,29 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-const dbHeaders = {
+// Supabase inietta sia la variabile storica (SUPABASE_SERVICE_ROLE_KEY, una
+// stringa) sia quella nuova (SUPABASE_SECRET_KEYS, un JSON per nome chiave).
+// Si prende la nuova se c'è, altrimenti la vecchia: così la funzione attraversa
+// la rotazione delle chiavi senza modifiche.
+function chiaveSegreta(): string {
+  const nuove = Deno.env.get("SUPABASE_SECRET_KEYS");
+  if (nuove) {
+    try {
+      const k = JSON.parse(nuove)["default"];
+      if (k) return k;
+    } catch { /* formato inatteso: si ricade sulla legacy */ }
+  }
+  return Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+}
+const SERVICE_KEY = chiaveSegreta();
+
+// Le chiavi `sb_secret_...` non sono JWT: su Authorization verrebbero rifiutate.
+// Vanno sempre su `apikey`; Authorization si aggiunge solo per le legacy.
+const dbHeaders: Record<string, string> = {
   apikey: SERVICE_KEY,
-  Authorization: `Bearer ${SERVICE_KEY}`,
   "content-type": "application/json",
+  ...(SERVICE_KEY.startsWith("eyJ") ? { Authorization: `Bearer ${SERVICE_KEY}` } : {}),
 };
 
 // Il sito è servito da camerepse.it. Un `*` lascerebbe che qualunque pagina

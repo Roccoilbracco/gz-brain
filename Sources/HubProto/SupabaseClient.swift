@@ -17,6 +17,20 @@ struct SupabaseClient {
 
     static let shared: SupabaseClient? = try? SupabaseClient.fromHubConfig()
 
+    /// Mette le credenziali sulla richiesta.
+    ///
+    /// Le chiavi storiche sono JWT e viaggiano su entrambi gli header; quelle
+    /// nuove (`sb_secret_…`) non lo sono, e su `Authorization` la piattaforma
+    /// prova comunque a decodificarle e risponde «Invalid JWT». Vanno solo su
+    /// `apikey`. Il controllo sul prefisso fa sì che l'app funzioni prima e
+    /// dopo la rotazione, senza doverla ricompilare in mezzo al guado.
+    private func firmaLaRichiesta(_ req: inout URLRequest) {
+        req.setValue(secretKey, forHTTPHeaderField: "apikey")
+        if secretKey.hasPrefix("eyJ") {
+            req.setValue("Bearer \(secretKey)", forHTTPHeaderField: "Authorization")
+        }
+    }
+
     static func fromHubConfig() throws -> SupabaseClient {
         let path = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/dev.gz.brain/config.json")
@@ -37,8 +51,7 @@ struct SupabaseClient {
         }
         var req = URLRequest(url: url)
         req.httpMethod = method
-        req.setValue(secretKey, forHTTPHeaderField: "apikey")
-        req.setValue("Bearer \(secretKey)", forHTTPHeaderField: "Authorization")
+        firmaLaRichiesta(&req)
         if let prefer { req.setValue(prefer, forHTTPHeaderField: "Prefer") }
         if let body {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -106,8 +119,7 @@ struct SupabaseClient {
         let url = baseURL.appendingPathComponent("storage/v1/object/\(bucket)/\(path)")
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.setValue(secretKey, forHTTPHeaderField: "apikey")
-        req.setValue("Bearer \(secretKey)", forHTTPHeaderField: "Authorization")
+        firmaLaRichiesta(&req)
         req.setValue(contentType, forHTTPHeaderField: "Content-Type")
         req.setValue("true", forHTTPHeaderField: "x-upsert")
         req.httpBody = data
@@ -118,8 +130,7 @@ struct SupabaseClient {
     func downloadFile(bucket: String, path: String) async throws -> Data {
         let url = baseURL.appendingPathComponent("storage/v1/object/\(bucket)/\(path)")
         var req = URLRequest(url: url)
-        req.setValue(secretKey, forHTTPHeaderField: "apikey")
-        req.setValue("Bearer \(secretKey)", forHTTPHeaderField: "Authorization")
+        firmaLaRichiesta(&req)
         let (data, _) = try await run(req)
         return data
     }
@@ -137,8 +148,7 @@ struct SupabaseClient {
         let url = baseURL.appendingPathComponent("storage/v1/object/\(bucket)/\(path)")
         var req = URLRequest(url: url)
         req.httpMethod = "DELETE"
-        req.setValue(secretKey, forHTTPHeaderField: "apikey")
-        req.setValue("Bearer \(secretKey)", forHTTPHeaderField: "Authorization")
+        firmaLaRichiesta(&req)
         _ = try await run(req)
     }
 
