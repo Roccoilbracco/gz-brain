@@ -754,6 +754,9 @@ struct StoricoView: View {
     /// chi lo ha già letto vuole i numeri, non la storia.
     @State private var riepiloghi: [RiepilogoBooking] = []
     @State private var verificheTutte: [VerificaDaFare] = []
+    /// La verifica aperta in questo momento, e il testo che si sta scrivendo.
+    @State private var inLavorazione: VerificaDaFare?
+    @State private var comeFinita = ""
     /// Gli stessi documenti, ma della nostra struttura: stanno sotto Affitti,
     /// che è dove si leggono i soggiorni che giustificano.
     @StateObject private var allegatiViaPo = AllegatiStore(entita: .dossier, entitaId: dossierViaPo)
@@ -1853,15 +1856,110 @@ struct StoricoView: View {
         return pezzi.isEmpty ? "Clic per segnare come risolta" : pezzi.joined(separator: "\n\n")
     }
 
-    private func segna(_ v: VerificaDaFare) {
-        let nuovo = !v.risolta
+    /// Un clic apre la voce, non la chiude. Prima bastava sfiorarla per segnarla
+    /// risolta — o per riaprirla senza accorgersene, lasciando una riga che
+    /// diceva «da chiarire» e insieme come era finita. È successo davvero: il
+    /// 05/08/2026 quattro voci erano tornate aperte con la spiegazione ancora
+    /// attaccata. Adesso la riga si apre, si legge, e si chiude solo scrivendo
+    /// com'è andata.
+    private func apriVerifica(_ v: VerificaDaFare) {
+        inLavorazione = v
+        comeFinita = v.come_finita ?? ""
+    }
+
+    /// Senza spiegazione non si chiude: «risolta» e basta, fra sei mesi, non
+    /// dice niente a nessuno.
+    private func chiudiVerifica(_ v: VerificaDaFare) {
+        let testo = comeFinita.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !testo.isEmpty else { return }
         Task {
             try? await HubAPI.salvaVerifica(id: v.id, [
-                "risolta": nuovo,
-                "risolta_il": nuovo ? oggiISO() : nil,
+                "risolta": true, "risolta_il": oggiISO(), "come_finita": testo,
             ])
             verificheTutte = (try? await HubAPI.listVerifiche()) ?? verificheTutte
+            inLavorazione = nil
         }
+    }
+
+    /// Riapre una voce chiusa. La spiegazione resta scritta: dice comunque cosa
+    /// si era capito, e serve a chi riprende in mano la cosa.
+    private func riapriVerifica(_ v: VerificaDaFare) {
+        Task {
+            try? await HubAPI.salvaVerifica(id: v.id, ["risolta": false, "risolta_il": nil])
+            verificheTutte = (try? await HubAPI.listVerifiche()) ?? verificheTutte
+            inLavorazione = nil
+        }
+    }
+
+    /// La voce aperta: cosa dice la chat, cosa si è capito, e i due comandi.
+    /// Sta in pagina e non in una finestra perché in questo ScrollView di
+    /// `.sheet` ne funziona uno solo, ed è già preso dal dettaglio.
+    private func schedaVerifica(_ v: VerificaDaFare) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(v.quale.rawValue).font(.system(size: 9, weight: .bold)).tracking(0.3)
+                    .foregroundStyle(v.quale.colore)
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(Capsule().fill(v.quale.colore.opacity(0.14)))
+                Text(v.cosa).font(.system(size: 12.5, weight: .bold)).foregroundStyle(PSE.text)
+                if v.importo_cents > 0 {
+                    Text(eurc(v.importo_cents)).font(.system(size: 12.5, weight: .bold))
+                        .foregroundStyle(v.quale.colore).monospacedDigit()
+                }
+                Spacer(minLength: 0)
+                Button { inLavorazione = nil } label: {
+                    Image(systemName: "xmark").font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(PSE.faint).frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
+                }.buttonStyle(.plain)
+            }
+            if let n = v.nota, !n.isEmpty {
+                Text(n).font(.system(size: 11.5)).foregroundStyle(PSE.dim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text(v.risolta ? "COM'È FINITA" : "COM'È FINITA — scrivilo, poi si chiude")
+                .font(.system(size: 9, weight: .heavy)).tracking(0.8).foregroundStyle(PSE.faint)
+            TextEditor(text: $comeFinita)
+                .font(.system(size: 11.5)).foregroundStyle(PSE.text)
+                .scrollContentBackground(.hidden)
+                .frame(minHeight: 64).padding(6)
+                .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(0.045)))
+                .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(PSE.line, lineWidth: 1))
+            HStack(spacing: 9) {
+                if v.risolta {
+                    Text("Chiusa il \(stoData(v.risolta_il))")
+                        .font(.system(size: 10.5)).foregroundStyle(PSE.pos)
+                    Spacer(minLength: 0)
+                    Button { riapriVerifica(v) } label: {
+                        Text("Riapri").font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(PSE.warn)
+                            .padding(.horizontal, 10).padding(.vertical, 4)
+                            .background(Capsule().fill(PSE.warn.opacity(0.14)))
+                    }.buttonStyle(.plain)
+                    Button { chiudiVerifica(v) } label: {
+                        Text("Salva").font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 10).padding(.vertical, 4)
+                            .background(Capsule().fill(PSE.accent.opacity(0.9)))
+                    }.buttonStyle(.plain)
+                } else {
+                    Spacer(minLength: 0)
+                    Button { chiudiVerifica(v) } label: {
+                        Text("Segna risolta").font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 11).padding(.vertical, 4)
+                            .background(Capsule().fill(
+                                comeFinita.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                ? PSE.faint.opacity(0.35) : PSE.pos.opacity(0.9)))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(comeFinita.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .padding(13)
+        .background(RoundedRectangle(cornerRadius: 11).fill(PSE.surface))
+        .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(PSE.accent.opacity(0.35), lineWidth: 1))
     }
 
     private var verificheTab: some View {
@@ -1876,6 +1974,7 @@ struct StoricoView: View {
                 conteggio("Risolte", "\(risolte.count)", PSE.pos)
                 Spacer(minLength: 0)
             }
+            if let v = inLavorazione { schedaVerifica(v) }
             sezione("LISTA COSE DA VERIFICARE") {
                 tabella(["", "Data", "Cosa verificare", "Importo", "Casa", "Fonte", "Tipo"],
                         [22, 58, 330, 86, 86, 132, 118]) {
@@ -1895,7 +1994,7 @@ struct StoricoView: View {
     }
 
     private func rigaVerifica(_ v: VerificaDaFare, fatta: Bool) -> some View {
-        Button { segna(v) } label: {
+        Button { apriVerifica(v) } label: {
             HStack(spacing: 10) {
                 Image(systemName: fatta ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 11))

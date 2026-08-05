@@ -132,6 +132,8 @@ enum TesSub: String, CaseIterable, Identifiable {
     case riepilogo = "Riepilogo", conti = "Conti", contoEconomico = "Conto economico", servizi = "Servizi", movimenti = "Movimenti", depositi = "Depositi", educamp = "Educamp"
     /// La guida: com'è fatta questa contabilità e cosa vuol dire ogni parola.
     /// Ultima apposta — si apre quando serve, non sta di mezzo ogni giorno.
+    /// Il controllo di fine mese: prenotazioni contro conti, e cosa non torna.
+    case chiusura = "Chiusura"
     case comeFunziona = "Come funziona"
     case storico2425 = "Apr 2024 – Set 2025", storico2526 = "Ott 2025 – Giu 2026"
     case storicoTutto = "Riassunto"
@@ -707,6 +709,9 @@ struct TesoreriaView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         promemoriaDaRecuperare
                         switch sub {
+                        case .chiusura:
+                            ChiusuraMensile(prenotazioni: prenotazioni,
+                                            movimenti: model.movimenti)
                         case .comeFunziona: comeFunzionaView
                         case .riepilogo: riepilogo
                         case .conti: contiView
