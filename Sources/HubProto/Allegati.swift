@@ -31,7 +31,17 @@ struct Allegato: Identifiable, Decodable, Equatable {
 /// un refuso in un `eq.` non darebbe errore, restituirebbe zero righe.
 enum AllegatoEntita: String {
     case movimento, bolletta
-    var etichetta: String { self == .movimento ? "Fattura o ricevuta" : "Bolletta in PDF" }
+    /// Non è appeso a una riga ma a una scheda di studio: il dossier dei soldi
+    /// di Gioia tiene qui gli estratti conto e i report Booking con cui si
+    /// controlla se i conti tornano. `entita_id` è la sigla della scheda.
+    case dossier
+    var etichetta: String {
+        switch self {
+        case .movimento: return "Fattura o ricevuta"
+        case .bolletta:  return "Bolletta in PDF"
+        case .dossier:   return "Estratto conto o report"
+        }
+    }
 }
 
 private func aq(_ s: String) -> String {
@@ -52,6 +62,12 @@ extension HubAPI {
     @discardableResult
     static func createAllegato(_ f: [String: Any?]) async throws -> Allegato {
         try await sb.insertReturning("allegati", body: f)
+    }
+    /// Cambia il nome che si legge in elenco. Il file nel bucket non si tocca:
+    /// rinominarlo vorrebbe dire ricaricarlo, e il `file_path` è la chiave con
+    /// cui la riga lo ritrova.
+    static func rinominaAllegato(id: String, titolo: String) async throws {
+        try await sb.mutate("allegati?id=eq.\(aq(id))", method: "PATCH", body: ["titolo": titolo])
     }
     /// Prima la riga, poi il file: un file orfano nel bucket è un peccato
     /// veniale, una riga che punta al vuoto no.
@@ -87,9 +103,17 @@ extension HubAPI {
 
     var totale: Int { items.count + inAttesa.count }
 
+    /// In ordine di titolo, non di caricamento: i titoli cominciano dalla
+    /// struttura e portano il periodo in forma ordinabile (2025-07), così
+    /// l'elenco si raggruppa da solo per casa e per tipo di documento invece di
+    /// seguire l'ordine casuale con cui i file sono saliti.
     func load() async {
         guard let id = entitaId else { return }
-        items = (try? await HubAPI.listAllegati(entita, id: id)) ?? []
+        let elenco = (try? await HubAPI.listAllegati(entita, id: id)) ?? []
+        items = elenco.sorted {
+            ($0.titolo ?? $0.file_name ?? "").localizedStandardCompare($1.titolo ?? $1.file_name ?? "")
+                == .orderedAscending
+        }
     }
 
     /// File scelti dal pannello o trascinati dentro. Senza id restano in attesa.
@@ -116,6 +140,14 @@ extension HubAPI {
     }
 
     func togliInAttesa(_ url: URL) { inAttesa.removeAll { $0 == url } }
+
+    func rinomina(_ a: Allegato, in titolo: String) async {
+        let t = titolo.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty, t != a.titolo else { return }
+        occupato = true; defer { occupato = false }
+        do { try await HubAPI.rinominaAllegato(id: a.id, titolo: t); await load() }
+        catch { errore = "Non si è potuto rinominare l'allegato." }
+    }
 
     func elimina(_ a: Allegato) async {
         occupato = true; defer { occupato = false }
@@ -159,6 +191,9 @@ struct AllegatiBox: View {
     @ObservedObject var store: AllegatiStore
     var titolo: String = "ALLEGATI — FATTURE E RICEVUTE"
     @State private var sopra = false
+    /// L'allegato in corso di rinomina, e il nome che si sta scrivendo.
+    @State private var rinominando: Allegato?
+    @State private var nuovoTitolo = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -218,16 +253,39 @@ struct AllegatiBox: View {
             }
         }
         .task { await store.load() }
+        .alert("Rinomina allegato", isPresented: Binding(
+            get: { rinominando != nil },
+            set: { if !$0 { rinominando = nil } })) {
+            TextField("Nome", text: $nuovoTitolo)
+            Button("Salva") {
+                if let a = rinominando { let t = nuovoTitolo; Task { await store.rinomina(a, in: t) } }
+                rinominando = nil
+            }
+            Button("Annulla", role: .cancel) { rinominando = nil }
+        } message: {
+            Text("Cambia solo il nome che si legge qui: il file resta quello che è.")
+        }
     }
 
+    /// In elenco vince il titolo che gli abbiamo dato noi: «Riepilogo pagamenti
+    /// luglio 2025» dice molto più di «1000-1636138544.pdf». Il nome del file
+    /// resta scritto sotto, piccolo, perché è quello che si ritrova scaricandolo.
     private func rigaSalvata(_ a: Allegato) -> some View {
-        HStack(spacing: 9) {
+        let titolo = a.titolo ?? a.file_name ?? "Allegato"
+        return HStack(spacing: 9) {
             Image(systemName: iconaPer(a.mime)).font(.system(size: 12)).foregroundStyle(PSE.accent)
                 .frame(width: 16)
-            Text(a.file_name ?? a.titolo ?? "Allegato")
-                .font(.system(size: 11.5)).foregroundStyle(PSE.text).lineLimit(1)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(titolo).font(.system(size: 11.5)).foregroundStyle(PSE.text).lineLimit(1)
+                if let f = a.file_name, a.titolo != nil, f != titolo {
+                    Text(f).font(.system(size: 9.5)).foregroundStyle(PSE.faint).lineLimit(1)
+                }
+            }
             Spacer(minLength: 6)
             Text(docPeso(a.size_bytes)).font(.system(size: 10)).foregroundStyle(PSE.faint).monospacedDigit()
+            Button { nuovoTitolo = titolo; rinominando = a } label: {
+                Text("Rinomina").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(PSE.dim)
+            }.buttonStyle(.plain).disabled(store.occupato)
             Button { Task { await store.apri(a) } } label: {
                 Text("Apri").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(PSE.accent)
             }.buttonStyle(.plain)
