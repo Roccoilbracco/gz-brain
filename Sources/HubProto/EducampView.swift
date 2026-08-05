@@ -81,6 +81,8 @@ private func eduDayStr(_ s: String?) -> String {
 }
 
 struct EducampView: View {
+    // Osservato per rifare la vista quando l'occhio copre o scopre gli importi.
+    @ObservedObject private var nascosti = NumeriCoperti.shared
     /// Movimenti di cassa passati da Tesoreria: appena si registra un incasso
     /// la lista cambia e le spunte di «pagato» si aggiornano da sole.
     var movimenti: [TesMovimento]? = nil
@@ -550,6 +552,8 @@ struct EducampView: View {
 // Serve a rispondere a «perché questa riga risulta pagata?» senza andare a
 // cercare in Tesoreria: qui ci sono i versamenti veri, con data, conto e modo.
 struct EducampMovimentiSheet: View {
+    // Osservato per rifare la vista quando l'occhio copre o scopre gli importi.
+    @ObservedObject private var nascosti = NumeriCoperti.shared
     let titolo: String
     let sottotitolo: String
     let righe: [TesMovimento]

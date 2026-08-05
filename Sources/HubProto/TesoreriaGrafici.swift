@@ -19,6 +19,8 @@ private func grNomeMese(_ key: String, lungo: Bool = false) -> String {
 }
 
 struct GraficiTesoreria: View {
+    // Osservato per rifare la vista quando l'occhio copre o scopre gli importi.
+    @ObservedObject private var nascosti = NumeriCoperti.shared
     let movimenti: [TesMovimento]
     let prenotazioni: [Prenotazione]
     let struttura: Struttura?

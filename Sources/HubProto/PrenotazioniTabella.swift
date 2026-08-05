@@ -24,6 +24,8 @@ private func tabFold(_ s: String) -> String {
 }
 
 struct PrenotazioniTabella<Striscia: View>: View {
+    // Osservato per rifare la vista quando l'occhio copre o scopre gli importi.
+    @ObservedObject private var nascosti = NumeriCoperti.shared
     let items: [Prenotazione]
     /// Filtro casa già scelto in cima alla pagina: la tabella lo rispetta.
     let struttura: Struttura?
@@ -567,6 +569,8 @@ struct ElencoPrenotazioni: Identifiable {
 }
 
 struct ElencoPrenotazioniSheet: View {
+    // Osservato per rifare la vista quando l'occhio copre o scopre gli importi.
+    @ObservedObject private var nascosti = NumeriCoperti.shared
     let elenco: ElencoPrenotazioni
     let onClose: () -> Void
     let onSelect: (Prenotazione) -> Void

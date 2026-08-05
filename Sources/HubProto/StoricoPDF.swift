@@ -101,7 +101,9 @@ private enum Carta {
     static let ambra = Color(hex: 0xb07c3a)
 }
 
-private func e(_ c: Int) -> String { eurc(c) }
+// Il PDF scrive sempre le cifre vere: l'occhio dei «numeri coperti» serve a chi
+// guarda lo schermo, un documento con dentro «€ •••» sarebbe solo sbagliato.
+private func e(_ c: Int) -> String { eurcChiaro(c) }
 
 // ── Pezzi comuni ────────────────────────────────────────────────────────────
 private struct Testata: View {

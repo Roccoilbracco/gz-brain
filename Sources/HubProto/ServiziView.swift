@@ -149,6 +149,8 @@ let INIZIO_CONTEGGIO_PSE = "2026-07-01"
 // Sheet che apre le transazioni di un servizio (pulizie/colazioni) dal Riepilogo:
 // riusa la stessa vista della pagina dedicata, così i dati non possono discordare.
 struct ServizioDettaglioSheet: View {
+    // Osservato per rifare la vista quando l'occhio copre o scopre gli importi.
+    @ObservedObject private var nascosti = NumeriCoperti.shared
     let tab: ServizioTab
     let onClose: () -> Void
     @State private var t: ServizioTab
@@ -179,6 +181,8 @@ struct ServizioDettaglioSheet: View {
 }
 
 struct ServiziView: View {
+    // Osservato per rifare la vista quando l'occhio copre o scopre gli importi.
+    @ObservedObject private var nascosti = NumeriCoperti.shared
     @Binding var tab: ServizioTab
     @StateObject private var model = ServiziModel()
     @State private var bollettaSheet: Bolletta?
@@ -665,6 +669,8 @@ struct ServiziView: View {
 // e da qui lo si riapre quando c'è da controllare un conguaglio o discutere un
 // addebito col fornitore.
 private struct BollettaForm: View {
+    // Osservato per rifare la vista quando l'occhio copre o scopre gli importi.
+    @ObservedObject private var nascosti = NumeriCoperti.shared
     let existing: Bolletta?
     let onSaved: () async -> Void
     @Environment(\.dismiss) private var dismiss

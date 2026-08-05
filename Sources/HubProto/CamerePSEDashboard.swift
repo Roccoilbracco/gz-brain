@@ -80,12 +80,44 @@ func payState(amount: Int, paid: Int) -> PayState {
     return paid >= amount ? .pagato : .acconto
 }
 
+// ── Numeri coperti («come nell'app della banca») ─────────────────────────────
+// Un occhio in alto copre tutti gli importi di Camere PSE: serve a far vedere a
+// qualcuno come funziona il gestionale senza mostrargli quanto c'è in cassa.
+// La scelta resta salvata, così una chiusura dell'app a metà dimostrazione non
+// rimette i numeri in chiaro davanti a chi sta guardando.
+@MainActor final class NumeriCoperti: ObservableObject {
+    static let shared = NumeriCoperti()
+    private static let chiave = "pseNumeriCoperti"
+    @Published var attivo: Bool {
+        didSet {
+            numeriCopertiFlag = attivo
+            UserDefaults.standard.set(attivo, forKey: Self.chiave)
+        }
+    }
+    private init() {
+        let salvato = UserDefaults.standard.bool(forKey: Self.chiave)
+        attivo = salvato
+        numeriCopertiFlag = salvato
+    }
+}
+// Copia piatta del flag: `eur` ed `eurc` sono funzioni libere, chiamate anche da
+// fuori il main actor, e non possono toccare l'oggetto osservabile.
+private var numeriCopertiFlag = false
+// Al posto della cifra. Lungo quanto un importo medio, così accendendo e
+// spegnendo l'occhio le colonne non ballano.
+private let IMPORTO_COPERTO = "€ •••"
+
 // cents → "€X" (arrotondato all'euro: viste operative, prezzi di listino)
-func eur(_ cents: Int) -> String { LeadFmt.euro(cents / 100) }
+func eur(_ cents: Int) -> String { numeriCopertiFlag ? IMPORTO_COPERTO : LeadFmt.euro(cents / 100) }
 
 // cents → "€1.076,77" — in contabilità i centesimi si mostrano sempre, altrimenti
 // le righe non sommano al totale mostrato.
-func eurc(_ cents: Int) -> String {
+func eurc(_ cents: Int) -> String { numeriCopertiFlag ? IMPORTO_COPERTO : eurcChiaro(cents) }
+
+/// L'importo scritto per intero, che l'occhio sia acceso o no: per quello che
+/// esce dall'app — PDF, esportazioni — dove un «€ •••» sarebbe un documento
+/// sbagliato, non una cortesia.
+func eurcChiaro(_ cents: Int) -> String {
     let neg = cents < 0, a = abs(cents)
     return "€" + (neg ? "-" : "") + LeadFmt.euro(a / 100).dropFirst() + "," + String(format: "%02d", a % 100)
 }
@@ -216,6 +248,9 @@ struct PSESegmented<T: Hashable>: View {
 
 // ── Dashboard ────────────────────────────────────────────────────────────────
 struct CamerePSEDashboard: View {
+    /// L'interruttore dei numeri coperti: le viste che scrivono importi lo
+    /// osservano, così alla pressione dell'occhio si rifanno da sole.
+    @ObservedObject private var nascosti = NumeriCoperti.shared
     @State private var items: [Prenotazione] = []
     // Gli ospiti Educamp sono le "prenotazioni" di Via Romagna: camere condivise
     // a letto, quindi stanno in una tabella a parte e nel planning si mostrano
@@ -517,6 +552,25 @@ struct CamerePSEDashboard: View {
         HStack(alignment: .center, spacing: 14) {
             PSESegmented(items: [(PSEViewMode.prenotazioni, "Prenotazioni"), (PSEViewMode.tesoreria, "Tesoreria")], selection: $viewMode)
             Spacer()
+            // L'occhio copre tutti gli importi della sezione, come nell'app della
+            // banca: si può mostrare come funziona Camere PSE senza far vedere
+            // quanto c'è in cassa.
+            Button { nascosti.attivo.toggle() } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: nascosti.attivo ? "eye.slash" : "eye")
+                        .font(.system(size: 12, weight: .semibold))
+                    if nascosti.attivo {
+                        Text("Numeri coperti").font(.system(size: 11.5, weight: .semibold))
+                    }
+                }
+                .foregroundStyle(nascosti.attivo ? PSE.warn : PSE.dim)
+                .padding(.horizontal, nascosti.attivo ? 12 : 9).padding(.vertical, 7)
+                .background(Capsule().fill(nascosti.attivo ? PSE.warn.opacity(0.14) : PSE.surface))
+                .overlay(Capsule().strokeBorder(nascosti.attivo ? PSE.warn.opacity(0.45) : PSE.line, lineWidth: 1))
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help(nascosti.attivo ? "Mostra di nuovo gli importi" : "Copri gli importi (per far vedere l'app senza i numeri)")
             Button {
                 if viewMode == .prenotazioni { editing = nil; showForm = true } else { newMovimento = true }
             } label: {
@@ -1890,6 +1944,8 @@ struct CamerePSEDashboard: View {
 
 // ── Drawer dettaglio prenotazione ────────────────────────────────────────────
 private struct BookingDrawer: View {
+    // Osservato per rifare la vista quando l'occhio copre o scopre gli importi.
+    @ObservedObject private var nascosti = NumeriCoperti.shared
     @Binding var booking: Prenotazione
     let onStatus: (BookingStatus) -> Void
     let onPay: (Int) -> Void
@@ -2086,6 +2142,8 @@ private struct BookingDrawer: View {
 
 // ── Form prenotazione ─────────────────────────────────────────────────────────
 private struct BookingForm: View {
+    // Osservato per rifare la vista quando l'occhio copre o scopre gli importi.
+    @ObservedObject private var nascosti = NumeriCoperti.shared
     let existing: Prenotazione?
     let onSaved: () async -> Void
     @Environment(\.dismiss) private var dismiss
