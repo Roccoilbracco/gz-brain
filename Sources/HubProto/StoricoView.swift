@@ -105,6 +105,14 @@ enum TipoVerifica: String {
     case chiarire = "Da chiarire"
     case doppione = "Rischio doppione"
 
+    init(chiave: String) {
+        switch chiave {
+        case "manca": self = .manca
+        case "doppione": self = .doppione
+        default: self = .chiarire
+        }
+    }
+
     var colore: Color {
         switch self {
         case .manca: return PSE.warn
@@ -114,87 +122,45 @@ enum TipoVerifica: String {
     }
 }
 
-struct VerificaDaFare: Identifiable {
+/// Una cosa da chiarire. Dal 31/07/2026 sta in `storico_verifiche` e non più in
+/// un elenco scritto qui dentro: prima le spunte vivevano in AppStorage, cioè
+/// su un Mac solo, e quando una voce si chiariva davvero restava lì a chiedere
+/// una cosa già risolta. Adesso si spunta, si scrive com'è finita, e lo vedono
+/// tutti.
+struct VerificaDaFare: Identifiable, Decodable, Equatable {
     let id: String
     /// Il giorno di cui parla la chat (yyyy-MM-dd). Serve anche a capire in
     /// quale stagione cade la voce.
-    let data: String
-    let cosa: String
+    var data: String?
+    var cosa: String
     /// Zero = in chat non è stato detto quanto.
-    let importo_cents: Int
-    let casa: String
+    var importo_cents: Int
+    var casa: String?
     /// Dove sta scritto: file di chat e data del messaggio.
-    let fonte: String
-    let tipo: TipoVerifica
-    let nota: String
+    var fonte: String?
+    /// `manca` | `chiarire` | `doppione`
+    var tipo: String
+    var nota: String?
+    var risolta: Bool
+    var risolta_il: String?
+    /// Come è finita: si scrive quando si spunta, ed è la parte che serve fra
+    /// sei mesi. «Risolta» senza spiegazione non vale niente.
+    var come_finita: String?
 
+    var quale: TipoVerifica { TipoVerifica(chiave: tipo) }
     /// La stagione dell'archivio in cui cade: 2024-2025 chiude il 30/09/2025.
-    var periodo: String { data >= "2025-10-01" ? "2025-2026" : "2024-2025" }
+    var periodo: String { (data ?? "") >= "2025-10-01" ? "2025-2026" : "2024-2025" }
 }
 
-let verificheArchivio: [VerificaDaFare] = [
-    // ── Rate di mutuo che in archivio non ci sono ───────────────────────────
-    .init(id: "bper-giu25", data: "2025-06-15", cosa: "Rata mutuo Via Romagna — soli interessi",
-          importo_cents: 14_500, casa: "Via Romagna", fonte: "chat 21/05/25", tipo: .manca,
-          nota: "«15 giugno arriva solo interessi 145€». La prima rata BPER registrata in archivio è quella del 15/11/2025: l'estratto caricato parte da novembre."),
-    .init(id: "bper-lug25", data: "2025-07-15", cosa: "Rata mutuo Via Romagna — BPER (luglio)",
-          importo_cents: 44_128, casa: "Via Romagna", fonte: "chat 21/05/25", tipo: .manca,
-          nota: "«Inizio pagamento mutuo 15 luglio», 441,28 € ogni 15 del mese."),
-    .init(id: "bper-ago25", data: "2025-08-15", cosa: "Rata mutuo Via Romagna — BPER (agosto)",
-          importo_cents: 44_128, casa: "Via Romagna", fonte: "chat 21/05/25", tipo: .manca, nota: ""),
-    .init(id: "bper-set25", data: "2025-09-15", cosa: "Rata mutuo Via Romagna — BPER (settembre)",
-          importo_cents: 44_128, casa: "Via Romagna", fonte: "chat 21/05/25 · 14/09/25", tipo: .manca, nota: ""),
-    .init(id: "bper-ott25", data: "2025-10-15", cosa: "Rata mutuo Via Romagna — BPER (ottobre)",
-          importo_cents: 44_128, casa: "Via Romagna", fonte: "chat 21/05/25", tipo: .manca, nota: ""),
-    .init(id: "carifermo-mar25", data: "2025-03-31", cosa: "Rata Carifermo di marzo 2025 (preammortamento)",
-          importo_cents: 21_400, casa: "Via Po", fonte: "chat 29/03/25", tipo: .manca,
-          nota: "«Siamo sotto di 214 adesso perché c'è la rata del mutuo». In archivio la serie va 31/01, 28/02, poi salta a 30/04: manca marzo."),
+extension HubAPI {
+    static func listVerifiche() async throws -> [VerificaDaFare] {
+        try await sb.fetch("storico_verifiche?select=*&order=data.asc&limit=500")
+    }
+    static func salvaVerifica(id: String, _ f: [String: Any?]) async throws {
+        try await sb.mutate("storico_verifiche?id=eq.\(id)", method: "PATCH", body: f)
+    }
+}
 
-    // ── Contante e pagamenti citati in chat e mai registrati ────────────────
-    .init(id: "prelievo-13ago25", data: "2025-08-13", cosa: "Prelievo dal conto affittacamere per Paolo idraulico",
-          importo_cents: 0, casa: "Via Po", fonte: "chat 13/08/25", tipo: .manca,
-          nota: "In chat non dice quanto: «ho prelevato i soldi per paolo idraulico dal conto affittacamere»."),
-    .init(id: "pomioli-16ago25", data: "2025-08-16", cosa: "130 € a Paolo Pomioli per i climatizzatori",
-          importo_cents: 13_000, casa: "Via Romagna", fonte: "chat 16/08/25", tipo: .manca,
-          nota: "Potrebbe già stare dentro i 570 € di «Paolo tecnico aria condizionata» del 15/08/25."),
-    .init(id: "prelievo-18ago25", data: "2025-08-18", cosa: "Prelievo 1.500 € da scalare dagli incassi di Civitanova",
-          importo_cents: 150_000, casa: "Via Po", fonte: "chat 18/08/25", tipo: .manca, nota: ""),
-    .init(id: "madre-5set25", data: "2025-09-05", cosa: "2.000 € dati alla madre di Giacomo",
-          importo_cents: 200_000, casa: "Mixto", fonte: "chat 05/09/25", tipo: .manca,
-          nota: "Lui stesso scrive «ma quello già lo avevi contati»: da confermare prima di registrarlo, se no si conta due volte."),
-    .init(id: "prelievo-19set25", data: "2025-09-19", cosa: "Prelievo 1.750 € (1.500 idraulico + 250 bollette)",
-          importo_cents: 175_000, casa: "Via Po", fonte: "chat 19/09/25", tipo: .manca,
-          nota: "È la voce più netta: in tutto settembre l'archivio non ha nessun pagamento all'idraulico."),
-    .init(id: "soggiorno-21set25", data: "2025-09-21", cosa: "Tassa di soggiorno pagata",
-          importo_cents: 18_700, casa: "Via Po", fonte: "chat 21/09/25", tipo: .manca,
-          nota: "«Ho pagato 187€ di tassa di soggiorno, le paghiamo con i ricavi»."),
-    .init(id: "armadi-22set25", data: "2025-09-22", cosa: "80 € ai due ragazzi per portare gli armadi all'Ecoelpidiense",
-          importo_cents: 8_000, casa: "Via Po", fonte: "chat 22/09/25", tipo: .manca, nota: ""),
-    .init(id: "booking-27set25", data: "2025-09-27", cosa: "Addebito Booking di 2.368 €",
-          importo_cents: 236_800, casa: "Via Po", fonte: "chat 27/09/25", tipo: .manca,
-          nota: "«Un'altra bella botta di 2368€ da Booking». In archivio la commissione Booking più vicina è di 191 € (17/10/25)."),
-    .init(id: "prelievo-1ott25", data: "2025-10-01", cosa: "Prelievo 400 €",
-          importo_cents: 40_000, casa: "Via Po", fonte: "chat 01/10/25", tipo: .manca,
-          nota: "Stesso messaggio in cui conferma di aver pagato la rata del mutuo del 30/09."),
-    .init(id: "muratori-12nov25", data: "2025-11-12", cosa: "480 € «vecchi» pagati ai muratori",
-          importo_cents: 48_000, casa: "Via Romagna", fonte: "chat 12/11/25", tipo: .manca, nota: ""),
-
-    // ── Numeri che non tornano ─────────────────────────────────────────────
-    .init(id: "elettricista-4004", data: "2025-05-28", cosa: "Elettricista: la chat dice 4.004 €, l'archivio 4.400 €",
-          importo_cents: 39_600, casa: "Via Po", fonte: "chat 28/05/25", tipo: .chiarire,
-          nota: "In archivio «Francesco Paoletti 4.400 €» il 03/06/25. Differenza 396 €: o è un altro pagamento o uno dei due numeri è sbagliato."),
-    .init(id: "colorcity-lug-ago", data: "2025-10-17", cosa: "Color City luglio e agosto: pagati o no?",
-          importo_cents: 120_000, casa: "Via Romagna", fonte: "chat 17/10/25", tipo: .chiarire,
-          nota: "L'archivio ha «Color City luglio 1.200 €» pagato il 01/08/25, ma il 17/10 Giacomo scrive che luglio e agosto risultano non pagati."),
-    .init(id: "recap-18ago25", data: "2025-08-18", cosa: "Recap di Giacomo del 18/08: Mohamed, Ikea e commercialista",
-          importo_cents: 0, casa: "Mixto", fonte: "chat 18/08/25", tipo: .chiarire,
-          nota: "Lui elenca Mohamed 2.000 (archivio: 700), Ikea Via Romagna 912 (archivio: 460+85+36), commercialista 550 (archivio: 300 + 730). Sono cifre dette a memoria: capire quali sono buone."),
-
-    // ── Rischio di contare due volte ───────────────────────────────────────
-    .init(id: "doppio-rata-giu26", data: "2026-06-15", cosa: "Rata Via Romagna del 15/06/26 registrata due volte",
-          importo_cents: 44_100, casa: "Via Romagna", fonte: "archivio + tesoreria", tipo: .doppione,
-          nota: "Sta nell'archivio (441 €, estratto BPER) e anche nei movimenti della tesoreria come «RATA MUTO LUGLIO» (442 €). Sommando le due tabelle si conta due volte."),
-]
 
 struct StoricoPendente: Identifiable, Decodable, Equatable {
     let id: String
@@ -240,6 +206,9 @@ extension HubAPI {
 }
 
 private let stoYmd: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f }()
+
+/// Oggi in `yyyy-MM-dd`: la data con cui si timbra una verifica risolta.
+private func oggiISO() -> String { stoYmd.string(from: Date()) }
 private let stoDay: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "it_IT"); f.dateFormat = "dd/MM/yy"; return f }()
 
 private func stoData(_ s: String?) -> String {
@@ -275,23 +244,32 @@ enum StoGruppo: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 
     /// Dove finisce ogni categoria scritta nel libro maestro.
+    /// Il 31/07/2026 le categorie sono state normalizzate: via lo spagnolo e i
+    /// refusi («Affiti», «Asicurazioni», «Aredo casa», «Limpieza», «Tase» —
+    /// che con «Tasse» faceva due gruppi per la stessa cosa). Le vecchie
+    /// scritture restano qui come sinonimi: costano niente e se un domani
+    /// rispunta una riga vecchia, da un export o da un backup, finisce nel suo
+    /// gruppo invece che in «Altro».
     static func da(_ categoria: String?) -> StoGruppo {
         switch (categoria ?? "").lowercased() {
-        case "spese aquisto inmobile": return .acquisto
-        case "tecnici casa", "materiali", "aredo casa": return .opera
+        case "spese acquisto immobile", "spese aquisto inmobile": return .acquisto
+        case "tecnici casa", "materiali", "arredo casa", "aredo casa",
+             "fondi lavori", "fondos obra": return .opera
         case "cambio d'uso": return .cambioUso
-        case "mutuo — rata", "mutuo — gastos", "mutuo liquidità", "mutuo": return .mutuo
+        case "mutuo — rata", "mutuo — spese", "mutuo — gastos",
+             "mutuo liquidità", "mutuo": return .mutuo
         case "luce", "gas", "acqua", "internet": return .utenze
         case "pulizie", "limpieza", "lavanderia": return .pulizie
         case "colazioni", "colazione": return .colazioni
-        case "tase", "tasse", "tari", "imu": return .tasse
+        case "tasse", "tase", "tari", "imu": return .tasse
         case "commercialista", "spese bancarie": return .commercialista
         case "manutenzione": return .manutenzione
         case "prelievo": return .prelievi
         case "prestito a socio": return .prestiti
-        case "asicurazioni", "assicurazioni": return .assicurazioni
-        case "restituzione prestiti", "recupero liquidita aquisto", "rata prestito agos",
-             "prestito agos": return .prestiti
+        case "assicurazioni", "asicurazioni": return .assicurazioni
+        case "restituzione prestiti", "restituzione",
+             "recupero liquidità acquisto", "recupero liquidita aquisto",
+             "rata prestito agos", "prestito agos": return .prestiti
         default: return .altro
         }
     }
@@ -489,6 +467,11 @@ func numeriRata(_ tutti: [StoricoMovimento]) -> [String: String] {
     /// Apporti di tutti e due i periodi: servono per il conguaglio, che è
     /// complessivo e non ha senso spezzato per stagione.
     @Published var apportiTutti: [StoricoApporto] = []
+    /// I movimenti **grezzi**, come stanno in tabella: dentro ci sono anche le
+    /// contropartite e i doppioni che `movimenti` scarta. Servono alla scheda
+    /// «Soldi di Gioia», che deve rifare l'estratto conto riga per riga — e un
+    /// estratto conto senza i giroconti non torna mai.
+    @Published var tutti: [StoricoMovimento] = []
     /// Numero di rata per id, su tutte e due le stagioni (vedi `numeriRata`).
     @Published var numeroRata: [String: String] = [:]
     @Published var loading = true
@@ -512,7 +495,8 @@ func numeriRata(_ tutti: [StoricoMovimento]) -> [String: String] {
         apporti = (try? await p) ?? []
         pendenti = (try? await d) ?? []
         apportiTutti = (try? await HubAPI.listStoricoApportiTutti()) ?? []
-        numeroRata = numeriRata((try? await HubAPI.listStoricoMovimentiTutti()) ?? [])
+        tutti = (try? await HubAPI.listStoricoMovimentiTutti()) ?? []
+        numeroRata = numeriRata(tutti)
         caricato = periodo
         loading = false
     }
@@ -670,14 +654,83 @@ func numeriRata(_ tutti: [StoricoMovimento]) -> [String: String] {
     }
 }
 
+// ── Soldi di Gioia ──────────────────────────────────────────────────────────
+//
+// Il B&B Gioia di Civitanova Marche non è nostro: è della famiglia Anastasi.
+// I suoi incassi però passano dal conto BPER dell'affittacamere — Booking paga
+// tutto lì, su un'unica bolsa — e poi escono verso Giacomo. Sul conto sono
+// soldi di passaggio, non ricavi: se si contassero come nostri, il risultato di
+// Via Po uscirebbe gonfio di quello che è di un'altra casa.
+
+/// L'identificativo della scheda: gli allegati si attaccano a questa, non a una
+/// riga di contabilità. È un uuid fisso e non una sigla parlante perché
+/// `allegati.entita_id` è una colonna uuid — una stringa qualsiasi la rifiuta.
+/// Non cambiarlo: gli estratti conto già caricati puntano a questo.
+let dossierGioia = "919cdf8d-0f82-4610-af4c-00b2e881e53f"
+
+/// La scheda documenti di Via Po, sotto Affitti: i riepiloghi dei pagamenti e
+/// le fatture delle commissioni della nostra struttura su Booking. Separata da
+/// quella di Gioia apposta — mischiarle è l'errore che questa storia è servita
+/// a scoprire. Via Romagna non ne ha una: su Booking non c'è, i suoi soggiorni
+/// sono tutti diretti.
+let dossierViaPo = "9d40b674-2b77-4a02-9cf4-754a1d18761d"
+
+/// Il conto BPER 4509110, intestato all'affittacamere di Massimo Anastasi: è
+/// quello da cui passano i soldi di Gioia.
+private let contoMassimo = "Conto Affittacamere Massimo"
+
+// ── Il racconto di una scheda ───────────────────────────────────────────────
+//
+// Come si è arrivati ai numeri: chi domani troverà una riga marcata «doppione»
+// o «partita di giro» deve poter leggere perché. Sta in `storico_racconto` e
+// non in codice, così si corregge dall'app come tutto il resto dell'archivio.
+
+/// Un riepilogo mensile dei pagamenti di Booking. È la controparte degli
+/// accrediti in banca: qui c'è quanto Booking ha pagato e quanto ha trattenuto,
+/// lì quanto è arrivato davvero sul conto.
+struct RiepilogoBooking: Identifiable, Decodable, Equatable {
+    let id: String
+    var struttura: String
+    var codice: String
+    var anno: Int
+    var mese: Int
+    var prenotazioni: Int
+    var lordo_cents: Int
+    var trattenute_cents: Int
+    var netto_cents: Int
+    var note: String?
+}
+
+extension HubAPI {
+    static func listRiepiloghiBooking() async throws -> [RiepilogoBooking] {
+        try await sb.fetch("storico_booking_riepiloghi?select=*&order=struttura.asc,anno.asc,mese.asc&limit=500")
+    }
+}
+
+/// I codici struttura che Booking scrive — e la banca ricopia — nella causale
+/// di ogni accredito. Sono loro a dire di chi sono i soldi: finché non ce ne
+/// siamo accorti, la quota di Gioia si ricavava per differenza, a stima.
+private let idGioia = "ID.10032828"   // B&B GIOIA Civitanova Marche, Via Calatafimi 14
+private let idViaPo = "ID.14499400"   // Affittacamere Via Po, Porto Sant'Elpidio
+
+/// Bonifici misti: quanto di quella riga è davvero di Gioia. Il 25/08/2025
+/// escono 4.750 € e la causale li spacca da sola — «1500 idraulico 1250 said
+/// 2000 incassi gioia» — quindi di Gioia ce ne sono 2.000, non 4.750. Sta qui
+/// e non in database perché è una lettura della causale, non un dato che la
+/// banca ci dà spaccato. Chiave: `data|importo_cents`.
+private let quotaGioia: [String: Int] = ["2025-08-25|475000": 200_000]
+
 enum StoricoTab: String, CaseIterable, Identifiable {
     case riepilogo = "Riepilogo", perCasa = "Per casa", affitti = "Affitti"
     case movimenti = "Movimenti", soci = "Soci", pendenti = "Da incassare"
     case verifiche = "Cose da verificare"
+    case gioia = "Soldi di Gioia"
     var id: String { rawValue }
 }
 
 struct StoricoView: View {
+    // Osservato per rifare la vista quando l'occhio copre o scopre gli importi.
+    @ObservedObject private var nascosti = NumeriCoperti.shared
     /// "2024-2025" oppure "2025-2026".
     let periodo: String
     @StateObject private var model = StoricoModel()
@@ -693,6 +746,17 @@ struct StoricoView: View {
     /// contabile — quando una voce si risolve davvero, si registra il
     /// movimento e la si toglie dall'elenco in codice.
     @AppStorage("storicoVerificheFatte") private var verificheFatteRaw: String = ""
+    /// Gli estratti conto e i report Booking appesi alla scheda «Soldi di
+    /// Gioia». Non stanno su una riga di contabilità: stanno sulla scheda, che
+    /// è il posto dove si controlla se i conti tornano.
+    @StateObject private var allegatiGioia = AllegatiStore(entita: .dossier, entitaId: dossierGioia)
+    /// Il racconto della ricostruzione: aperto la prima volta, richiudibile —
+    /// chi lo ha già letto vuole i numeri, non la storia.
+    @State private var riepiloghi: [RiepilogoBooking] = []
+    @State private var verificheTutte: [VerificaDaFare] = []
+    /// Gli stessi documenti, ma della nostra struttura: stanno sotto Affitti,
+    /// che è dove si leggono i soggiorni che giustificano.
+    @StateObject private var allegatiViaPo = AllegatiStore(entita: .dossier, entitaId: dossierViaPo)
 
     /// Il nome che si legge in pagina, e le date esatte che copre.
     private var etichetta: String {
@@ -731,11 +795,15 @@ struct StoricoView: View {
                 case .soci: sociTab
                 case .pendenti: pendentiTab
                 case .verifiche: verificheTab
+                case .gioia: gioiaTab
                 }
             }
         }
         .padding(.horizontal, 2)
         .task(id: periodo) { await model.load(periodo) }
+        .task { await allegatiGioia.load() }
+        .task { riepiloghi = (try? await HubAPI.listRiepiloghiBooking()) ?? [] }
+        .task { verificheTutte = (try? await HubAPI.listVerifiche()) ?? [] }
         .sheet(item: $dettaglio) { d in
             StoricoDettaglioSheet(d: d, onClose: { dettaglio = nil },
                                   bersaglio: rigaArchivio, modifica: apriModifica)
@@ -1617,6 +1685,69 @@ struct StoricoView: View {
                     ], nota: r.note, modifica: { apriModifica(.affitto(r)) })
                 }
             }
+            if casa == nil || casa == .viaPo { soldiViaPo }
+            documentiAffitti
+        }
+    }
+
+    /// Quello che Via Po ha davvero incassato in banca, con la stessa faccia
+    /// della scheda «Soldi di Gioia»: la tabella di Affitti dice cosa si è
+    /// venduto, questa dice cosa è arrivato sul conto. Sono due cose diverse e
+    /// vanno lette una accanto all'altra.
+    private var soldiViaPo: some View {
+        let accrediti = booking(idViaPo)
+        let daBooking = accrediti.reduce(0) { $0 + $1.importo_cents }
+        let daOspiti = direttiViaPo.reduce(0) { $0 + $1.importo_cents }
+        return VStack(alignment: .leading, spacing: 14) {
+            if !accrediti.isEmpty || !direttiViaPo.isEmpty {
+                HStack(spacing: 18) {
+                    conteggio("Arrivato da Booking", eurc(daBooking), PSE.pos)
+                    conteggio("Arrivato dagli ospiti", eurc(daOspiti), PSE.pos)
+                    conteggio("In banca, in tutto", eurc(daBooking + daOspiti), PSE.text)
+                    Spacer(minLength: 0)
+                }
+            }
+            riepiloghiBooking("Via Po", idViaPo.replacingOccurrences(of: "ID.", with: ""))
+            if !accrediti.isEmpty {
+                sezione("ACCREDITI BOOKING DI VIA PO — ARRIVATI SUL CONTO") {
+                    tabella(["Data", "Causale sull'estratto conto", "Importo"], [58, 530, 110]) {
+                        ForEach(accrediti) { m in
+                            rigaTabella([(stoData(m.data), 58, PSE.dim, false),
+                                         (m.descrizione ?? "", 530, PSE.text, false),
+                                         (eurc(m.importo_cents), 110, PSE.pos, true)],
+                                        nota: m.note)
+                        }
+                    }
+                }
+            }
+            if !direttiViaPo.isEmpty {
+                sezione("INCASSI DIRETTI DEGLI OSPITI DI VIA PO") {
+                    tabella(["Data", "Chi ha pagato", "Importo"], [58, 530, 110]) {
+                        ForEach(direttiViaPo) { m in
+                            rigaTabella([(stoData(m.data), 58, PSE.dim, false),
+                                         (m.descrizione ?? "", 530, PSE.text, false),
+                                         (eurc(m.importo_cents), 110, PSE.pos, true)],
+                                        nota: m.note)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// I documenti Booking di Via Po. Stanno qui, sotto i soggiorni che
+    /// giustificano, e non insieme a quelli di Gioia: ogni carta porta scritta
+    /// in testa la struttura, perché confonderle è l'errore che questa storia è
+    /// servita a scoprire.
+    private var documentiAffitti: some View {
+        sezione("DOCUMENTI BOOKING — VIA PO") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("I riepiloghi dei pagamenti e le fatture delle commissioni di Via Po su Booking (\(idViaPo)). Ogni riepilogo mensile deve tornare con gli accrediti arrivati sul conto. I documenti del B&B Gioia stanno nella scheda «Soldi di Gioia»: sono di un'altra struttura e di un'altra famiglia.")
+                    .font(.system(size: 11.5)).foregroundStyle(PSE.dim)
+                    .fixedSize(horizontal: false, vertical: true)
+                AllegatiBox(store: allegatiViaPo,
+                            titolo: "VIA PO — ESTRATTI CONTO E REPORT BOOKING")
+            }
         }
     }
 
@@ -1706,37 +1837,49 @@ struct StoricoView: View {
     // ══ LISTA COSE DA VERIFICARE ═══════════════════════════════════════════
     /// Le voci della stagione aperta (nel Riassunto: tutte).
     private var verifiche: [VerificaDaFare] {
-        verificheArchivio
+        verificheTutte
             .filter { eRiassunto || $0.periodo == periodo }
-            .sorted { $0.data < $1.data }
+            .sorted { ($0.data ?? "") < ($1.data ?? "") }
     }
-    private var verificheFatte: Set<String> {
-        Set(verificheFatteRaw.split(separator: "|").map(String.init))
+    /// Spuntare scrive in database, non più su questo Mac. Chi spunta senza
+    /// dire com'è finita lascia il lavoro a metà: il campo `come_finita` si
+    /// riempie dalla scheda di dettaglio, e la riga lo mostra come nota.
+    /// Il testo che compare passandoci sopra: la nota di partenza e, se la voce
+    /// è chiusa, come è finita. Serve più la seconda della prima.
+    private func dettaglioVerifica(_ v: VerificaDaFare) -> String {
+        var pezzi: [String] = []
+        if let n = v.nota, !n.isEmpty { pezzi.append(n) }
+        if let f = v.come_finita, !f.isEmpty { pezzi.append("RISOLTA — " + f) }
+        return pezzi.isEmpty ? "Clic per segnare come risolta" : pezzi.joined(separator: "\n\n")
     }
+
     private func segna(_ v: VerificaDaFare) {
-        var f = verificheFatte
-        if f.contains(v.id) { f.remove(v.id) } else { f.insert(v.id) }
-        verificheFatteRaw = f.sorted().joined(separator: "|")
+        let nuovo = !v.risolta
+        Task {
+            try? await HubAPI.salvaVerifica(id: v.id, [
+                "risolta": nuovo,
+                "risolta_il": nuovo ? oggiISO() : nil,
+            ])
+            verificheTutte = (try? await HubAPI.listVerifiche()) ?? verificheTutte
+        }
     }
 
     private var verificheTab: some View {
-        let fatte = verificheFatte
-        let aperte = verifiche.filter { !fatte.contains($0.id) }
+        let aperte = verifiche.filter { !$0.risolta }
+        let risolte = verifiche.filter { $0.risolta }
         let somma = aperte.reduce(0) { $0 + $1.importo_cents }
         return VStack(alignment: .leading, spacing: 12) {
-            avvisoBox("Non è contabilità: è l'elenco dei soldi di cui si parla nelle chat con Giacomo e che in archivio non si trovano, o si trovano con un altro numero. Spuntare una voce la segna come controllata solo su questo Mac; quando si chiarisce per davvero, si registra il movimento vero.")
+            avvisoBox("Non è contabilità: è l'elenco dei soldi di cui si parla nelle chat con Giacomo e che in archivio non si trovano, o si trovano con un altro numero. Spuntare una voce la salva in database — la vedono tutti, non solo questo Mac. Quando si chiarisce per davvero, si registra il movimento vero e si scrive qui com'è finita.")
             HStack(spacing: 18) {
                 conteggio("Voci aperte", "\(aperte.count)", PSE.warn)
                 conteggio("Soldi da chiarire", eurc(somma), PSE.warn)
-                conteggio("Già controllate", "\(fatte.count)", PSE.dim)
+                conteggio("Risolte", "\(risolte.count)", PSE.pos)
                 Spacer(minLength: 0)
             }
             sezione("LISTA COSE DA VERIFICARE") {
                 tabella(["", "Data", "Cosa verificare", "Importo", "Casa", "Fonte", "Tipo"],
                         [22, 58, 330, 86, 86, 132, 118]) {
-                    ForEach(verifiche) { v in
-                        rigaVerifica(v, fatta: fatte.contains(v.id))
-                    }
+                    ForEach(verifiche) { v in rigaVerifica(v, fatta: v.risolta) }
                 }
             }
         }
@@ -1768,25 +1911,341 @@ struct StoricoView: View {
                     .frame(width: 330, alignment: .leading)
                 Text(v.importo_cents == 0 ? "—" : eurc(v.importo_cents))
                     .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(fatta ? PSE.faint : v.tipo.colore).monospacedDigit()
+                    .foregroundStyle(fatta ? PSE.faint : v.quale.colore).monospacedDigit()
                     .frame(width: 86, alignment: .trailing)
-                Text(v.casa).font(.system(size: 11.5)).foregroundStyle(PSE.dim)
+                Text(v.casa ?? "—").font(.system(size: 11.5)).foregroundStyle(PSE.dim)
                     .lineLimit(1).frame(width: 86, alignment: .leading)
-                Text(v.fonte).font(.system(size: 11.5)).foregroundStyle(PSE.faint)
+                Text(v.fonte ?? "—").font(.system(size: 11.5)).foregroundStyle(PSE.faint)
                     .lineLimit(1).truncationMode(.tail).frame(width: 132, alignment: .leading)
-                Text(v.tipo.rawValue).font(.system(size: 9, weight: .bold)).tracking(0.3)
-                    .foregroundStyle(fatta ? PSE.faint : v.tipo.colore)
+                Text(v.quale.rawValue).font(.system(size: 9, weight: .bold)).tracking(0.3)
+                    .foregroundStyle(fatta ? PSE.faint : v.quale.colore)
                     .padding(.horizontal, 7).padding(.vertical, 3)
-                    .background(Capsule().fill(v.tipo.colore.opacity(fatta ? 0.06 : 0.14)))
+                    .background(Capsule().fill(v.quale.colore.opacity(fatta ? 0.06 : 0.14)))
                     .frame(width: 118, alignment: .leading)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 12).padding(.vertical, 7)
             .background(Rectangle().fill(Color.white.opacity(fatta ? 0.005 : 0.015)))
             .contentShape(Rectangle())
-            .help(v.nota.isEmpty ? "Clic per segnare come controllata" : v.nota)
+            .help(dettaglioVerifica(v))
         }
         .buttonStyle(.plain)
+    }
+
+    // ══ SOLDI DI GIOIA ═════════════════════════════════════════════════════
+    //
+    // Non è una tabella nuova: è una lettura di quelle che ci sono. Prende i
+    // movimenti grezzi del conto di Massimo — contropartite comprese, che qui
+    // servono — e risponde a una domanda sola: quanto di quel conto è di Gioia
+    // e non nostro.
+
+    /// I movimenti grezzi della stagione che si sta guardando.
+    private var movScope: [StoricoMovimento] {
+        eRiassunto ? model.tutti : model.tutti.filter { $0.periodo == periodo }
+    }
+    /// Quello che nomina **Gioia** sul conto di Massimo. Solo il nome della
+    /// struttura: «Civitanova» da sola tirava dentro cose che col B&B non
+    /// c'entrano — quattro scontrini di Brico Io e OBI comprati in paese, e due
+    /// versamenti di contante fatti al bancomat di Civitanova che erano soldi
+    /// di Via Po. Le righe di Gioia portano tutte il suo nome in causale.
+    private var movGioia: [StoricoMovimento] {
+        movScope.filter {
+            $0.pagato_da == contoMassimo
+            && ($0.descrizione ?? "").lowercased().contains("gioia")
+        }.sorted { $0.data < $1.data }
+    }
+    /// Gli accrediti di Booking sul conto dell'affittacamere: la bolsa comune.
+    private var accreditiBooking: [StoricoMovimento] {
+        movScope.filter {
+            $0.pagato_da == contoMassimo && $0.tipo == "entrata"
+            && ($0.descrizione ?? "").hasPrefix("Booking.com")
+        }.sorted { $0.data < $1.data }
+    }
+    /// Di un bonifico, la parte che è di Gioia: tutta, salvo i misti.
+    private func quotaDiGioia(_ m: StoricoMovimento) -> Int {
+        quotaGioia["\(m.data)|\(m.importo_cents)"] ?? m.importo_cents
+    }
+
+    /// La bolsa Booking, spaccata dal codice struttura nella causale.
+    private func booking(_ id: String) -> [StoricoMovimento] {
+        accreditiBooking.filter { ($0.descrizione ?? "").contains(id) }
+    }
+    /// Accrediti Booking senza codice: se ce ne sono, la scheda lo dice invece
+    /// di farli sparire dentro un totale.
+    private var bookingSenzaCodice: [StoricoMovimento] {
+        accreditiBooking.filter {
+            let d = $0.descrizione ?? ""
+            return !d.contains(idGioia) && !d.contains(idViaPo)
+        }
+    }
+    /// Incassi di Gioia arrivati dall'ospite, non passando da Booking.
+    private var direttiGioia: [StoricoMovimento] {
+        movGioia.filter { $0.tipo == "entrata" && !($0.descrizione ?? "").hasPrefix("Booking.com") }
+    }
+    /// Gli stessi incassi, ma di Via Po: bonifici degli ospiti arrivati sul
+    /// conto senza passare da Booking. Le righe di Gioia stanno su «Mixto», e
+    /// il filtro sulla struttura le tiene fuori.
+    private var direttiViaPo: [StoricoMovimento] {
+        movScope.filter {
+            $0.pagato_da == contoMassimo && $0.tipo == "entrata"
+            && $0.struttura == "Via Po" && ($0.categoria ?? "") == "Affiti"
+            && !($0.descrizione ?? "").hasPrefix("Booking.com")
+        }.sorted { $0.data < $1.data }
+    }
+    private var giroGioia: [StoricoMovimento] {
+        movGioia.filter { $0.tipo == "uscita" && $0.categoria == "Giroconto" }
+    }
+    private var commissioniGioia: [StoricoMovimento] {
+        movGioia.filter { $0.tipo == "uscita" && $0.categoria == "Commissioni OTA" }
+    }
+
+    private var gioiaTab: some View {
+        let accrediti = booking(idGioia)
+        let inBooking = accrediti.reduce(0) { $0 + $1.importo_cents }
+        let inDiretti = direttiGioia.reduce(0) { $0 + $1.importo_cents }
+        let entrato = inBooking + inDiretti
+        let girato = giroGioia.reduce(0) { $0 + quotaDiGioia($1) }
+        let commissioni = commissioniGioia.reduce(0) { $0 + $1.importo_cents }
+        let uscito = girato + commissioni
+        let saldo = entrato - uscito
+        // Nel dettaglio dei giroconti si mostra la quota di Gioia, non l'intero
+        // bonifico: se no le righe non sommano al numero della card. Dove le due
+        // cose differiscono, la descrizione lo dice.
+        let righeGiro = giroGioia.sorted { $0.data < $1.data }.map { m in
+            DettaglioRiga(id: m.id, data: stoData(m.data), ymd: m.data,
+                          descrizione: (m.descrizione ?? "") + (quotaDiGioia(m) == m.importo_cents
+                              ? "" : " — quota di Gioia dentro un bonifico da \(eurc(m.importo_cents))"),
+                          extra: [m.struttura, m.categoria].compactMap { $0 }.joined(separator: " · "),
+                          casa: m.struttura ?? "", pagatoDa: "Conto Massimo",
+                          voce: StoGruppo.da(m.categoria).rawValue,
+                          importo: quotaDiGioia(m), positivo: false)
+        }
+
+        return VStack(alignment: .leading, spacing: 14) {
+            spiegazioneGioia
+            HStack(spacing: 10) {
+                cardClic("ENTRATO PER GIOIA", eurc(entrato), PSE.pos) {
+                    apri("Entrato per Gioia",
+                         "Gli accrediti Booking col codice \(idGioia) più gli incassi arrivati direttamente dagli ospiti del B&B. Non sono ricavi nostri: sono soldi di passaggio.",
+                         model.righe(accrediti + direttiGioia), entrato)
+                }
+                cardClic("GIRATO A ANASTASI GIACOMO", eurc(girato), PSE.warn) {
+                    apri("Girato a Anastasi Giacomo",
+                         "I bonifici che riportano gli incassi di Gioia alla famiglia Anastasi. Dove il bonifico porta dentro anche altro, qui si legge la sola parte di Gioia: quello del 25/08/2025 esce da 4.750 € ma di Gioia ne sono 2.000, il resto paga l'idraulico e Said, come dice la causale.",
+                         righeGiro, girato)
+                }
+                cardClic("COMMISSIONI DI GIOIA PAGATE DAL CONTO", eurc(commissioni), PSE.warn) {
+                    apri("Commissioni di Gioia pagate dal conto",
+                         "Addebiti SDD di Booking che il conto dell'affittacamere paga ma che sono fatturati al B&B Gioia: ogni riga porta il numero della fattura, allegata qui sotto. Via Po non c'entra — a lei Booking paga già al netto della commissione.",
+                         model.righe(commissioniGioia), commissioni)
+                }
+                card(saldo >= 0 ? "RESTA DA GIRARE A GIOIA" : "GIRATO PIÙ DI QUEL CHE È ENTRATO",
+                     eurc(abs(saldo)), abs(saldo) < 5_00 ? PSE.pos : PSE.accent)
+            }
+
+            sezione("LA BOLSA DI BOOKING — DI CHI SONO I SOLDI") {
+                VStack(alignment: .leading, spacing: 0) {
+                    rigaConto("Accreditato da Booking sul conto di Massimo",
+                              accreditiBooking.reduce(0) { $0 + $1.importo_cents }, PSE.text,
+                              "\(accreditiBooking.count) accrediti")
+                    Divider().overlay(PSE.line)
+                    rigaConto("di cui B&B Gioia — \(idGioia)", inBooking, PSE.warn,
+                              "\(accrediti.count) accrediti, ognuno combacia al centesimo con un pagamento del riepilogo Booking")
+                    rigaConto("di cui Via Po — \(idViaPo)",
+                              booking(idViaPo).reduce(0) { $0 + $1.importo_cents }, PSE.pos,
+                              "\(booking(idViaPo).count) accrediti · i soggiorni stanno in Affitti")
+                    if !bookingSenzaCodice.isEmpty {
+                        rigaConto("senza codice struttura — da attribuire",
+                                  bookingSenzaCodice.reduce(0) { $0 + $1.importo_cents }, PSE.neg,
+                                  "\(bookingSenzaCodice.count) accrediti")
+                    }
+                }
+                .background(RoundedRectangle(cornerRadius: 12).fill(PSE.surface))
+                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(PSE.line, lineWidth: 1))
+            }
+
+            riepiloghiBooking("B&B Gioia", idGioia.replacingOccurrences(of: "ID.", with: ""))
+            if !accrediti.isEmpty {
+                sezione("ACCREDITI BOOKING DEL B&B GIOIA") {
+                    tabella(["Data", "Causale sull'estratto conto", "Importo"], [58, 530, 110]) {
+                        ForEach(accrediti) { m in
+                            rigaTabella([(stoData(m.data), 58, PSE.dim, false),
+                                         (m.descrizione ?? "", 530, PSE.text, false),
+                                         (eurc(m.importo_cents), 110, PSE.pos, true)],
+                                        nota: m.note)
+                        }
+                    }
+                }
+            }
+
+            if !direttiGioia.isEmpty {
+                sezione("INCASSI DIRETTI DEGLI OSPITI DI GIOIA") {
+                    tabella(["Data", "Chi ha pagato", "Importo"], [58, 530, 110]) {
+                        ForEach(direttiGioia) { m in
+                            rigaTabella([(stoData(m.data), 58, PSE.dim, false),
+                                         (m.descrizione ?? "", 530, PSE.text, false),
+                                         (eurc(m.importo_cents), 110, PSE.pos, true)],
+                                        nota: m.note)
+                        }
+                    }
+                }
+            }
+
+            if !(giroGioia + commissioniGioia).isEmpty {
+                sezione("USCITE PER CONTO DI GIOIA") {
+                    tabella(["Data", "Causale sull'estratto conto", "Movimento", "Di cui Gioia"],
+                            [58, 420, 110, 110]) {
+                        ForEach(giroGioia + commissioniGioia) { m in
+                            rigaTabella([(stoData(m.data), 58, PSE.dim, false),
+                                         (m.descrizione ?? "", 420, PSE.text, false),
+                                         (eurc(m.importo_cents), 110, PSE.dim, true),
+                                         (eurc(quotaDiGioia(m)), 110, PSE.warn, true)],
+                                        nota: m.note)
+                        }
+                    }
+                }
+            }
+
+            RaccontoBox(scheda: "gioia",
+                        intestazione: "COME CI SIAMO ARRIVATI",
+                        sottotitolo: "la ricostruzione del 30/07/2026, passo per passo")
+
+            sezione("DOCUMENTI PER CONTROLLARE") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Solo i documenti del **B&B Gioia**: i riepiloghi dei pagamenti che Booking gli ha fatto e le fatture delle sue commissioni. Sono le carte con cui i numeri qui sopra sono stati verificati uno per uno. Ogni titolo dice struttura, se il documento porta soldi **dentro o fuori**, il tipo, il mese e l'importo — così si riconosce senza aprirlo.")
+                        .font(.system(size: 11.5)).foregroundStyle(PSE.dim)
+                        .fixedSize(horizontal: false, vertical: true)
+                    AllegatiBox(store: allegatiGioia,
+                                titolo: "B&B GIOIA — ESTRATTI CONTO E REPORT BOOKING")
+                }
+            }
+
+            confrontoViaPo
+        }
+    }
+
+    /// I riepiloghi mensili di Booking di una struttura. Sta accanto alla
+    /// tabella degli accrediti: quella dice cosa è arrivato in banca, questa
+    /// cosa Booking ha pagato e quanto ha trattenuto per strada.
+    @ViewBuilder
+    private func riepiloghiBooking(_ struttura: String, _ codice: String) -> some View {
+        // Lo stesso muro della scheda di modifica: dal 1º luglio 2026 in poi non
+        // è più archivio, è contabilità corrente. Un riepilogo di luglio 2026
+        // sommato qui gonfierebbe i totali di soldi che in questi conti non sono
+        // mai entrati — successo davvero, con 6.089,98 € di troppo.
+        let righe = riepiloghi.filter {
+            $0.struttura == struttura
+            && String(format: "%d-%02d-01", $0.anno, $0.mese) < StoricoEditSheet.fineArchivio
+        }
+        if !righe.isEmpty {
+            let lordo = righe.reduce(0) { $0 + $1.lordo_cents }
+            let tratt = righe.reduce(0) { $0 + $1.trattenute_cents }
+            let netto = righe.reduce(0) { $0 + $1.netto_cents }
+            sezione("RIEPILOGHI PAGAMENTI BOOKING — \(struttura.uppercased()) (\(codice))") {
+                VStack(alignment: .leading, spacing: 8) {
+                    tabella(["Mese", "Pren.", "Lordo", "Trattenute", "Netto pagato"],
+                            [96, 56, 96, 96, 106]) {
+                        ForEach(righe) { r in
+                            rigaTabella([
+                                (String(format: "%d-%02d", r.anno, r.mese), 96, PSE.text, false),
+                                ("\(r.prenotazioni)", 56, PSE.dim, true),
+                                (eurc(r.lordo_cents), 96, PSE.dim, true),
+                                (r.trattenute_cents > 0 ? "−" + eurc(r.trattenute_cents) : "—",
+                                 96, PSE.neg, true),
+                                (eurc(r.netto_cents), 106, PSE.pos, true),
+                            ], nota: r.note)
+                        }
+                        Divider().overlay(PSE.line)
+                        rigaTabella([("Totale", 96, PSE.text, false),
+                                     ("\(righe.reduce(0) { $0 + $1.prenotazioni })", 56, PSE.dim, true),
+                                     (eurc(lordo), 96, PSE.text, true),
+                                     (tratt > 0 ? "−" + eurc(tratt) : "—", 96, PSE.neg, true),
+                                     (eurc(netto), 106, PSE.pos, true)], nota: nil)
+                    }
+                    Text(tratt > 0
+                         ? "Le trattenute sono commissione, costo di transazione e IVA sui servizi di piattaforma: Booking le toglie **prima** di pagare, quindi in banca arriva il netto. Le fatture qui sotto sono il documento fiscale di quelle trattenute, non un pagamento da fare."
+                         : "Booking paga il **lordo** e fattura le commissioni a parte, con addebito diretto: per questo la colonna delle trattenute è vuota e le commissioni si vedono fra le uscite del conto.")
+                        .font(.system(size: 11)).foregroundStyle(PSE.faint)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    /// L'altra metà del conto: tutto quello che sullo stesso estratto è di Via
+    /// Po. Sta qui accanto perché la domanda vera non è «quanto è di Gioia» ma
+    /// «di questo conto, cosa è di chi»: le due liste, una sotto l'altra,
+    /// rispondono insieme. La loro casa resta Affitti — questi sono gli stessi
+    /// dati, non una copia.
+    private var confrontoViaPo: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.left.arrow.right")
+                    .font(.system(size: 11)).foregroundStyle(PSE.pos)
+                Text("E, PER CONFRONTO, LA PARTE DI VIA PO")
+                    .font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PSE.pos)
+                Spacer(minLength: 0)
+            }
+            Text("Lo stesso conto, l'altra struttura. Si distinguono dal codice che la banca scrive in causale: **\(idViaPo)** è Via Po, **\(idGioia)** è Gioia. Quello che si vede qui sotto è la contabilità vera di Via Po — quella che l'archivio conta — mentre le righe di Gioia qui sopra sono soldi di passaggio. Tutto questo vive in **Affitti**: qui è messo accanto per non dover cambiare pagina.")
+                .font(.system(size: 11.5)).foregroundStyle(PSE.dim)
+                .fixedSize(horizontal: false, vertical: true)
+
+            riepiloghiBooking("Via Po", idViaPo.replacingOccurrences(of: "ID.", with: ""))
+            soldiViaPo
+
+            sezione("DOCUMENTI DI VIA PO") {
+                AllegatiBox(store: allegatiViaPo,
+                            titolo: "VIA PO — ESTRATTI CONTO E REPORT BOOKING")
+            }
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 12).fill(PSE.pos.opacity(0.045)))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(PSE.pos.opacity(0.22), lineWidth: 1))
+    }
+
+    /// Il cappello della scheda: cos'è Gioia e perché i suoi soldi stanno su un
+    /// conto nostro. Senza questo, i numeri sotto non si capiscono.
+    private var spiegazioneGioia: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.left.arrow.right.circle.fill")
+                    .font(.system(size: 12)).foregroundStyle(PSE.accent)
+                Text("Soldi che passano, non soldi nostri")
+                    .font(.system(size: 12.5, weight: .bold)).foregroundStyle(PSE.text)
+            }
+            Text("Il **B&B Gioia** sta a Civitanova Marche ed è della famiglia Anastasi: non è Via Po né Via Romagna. Ma i suoi incassi arrivano sul conto BPER intestato all'affittacamere di Massimo — Booking paga tutte le strutture su quell'unico conto — e da lì escono con bonifici a Anastasi Giacomo che nella causale dicono «incassi Gioia».")
+                .font(.system(size: 11.5)).foregroundStyle(PSE.dim)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Per questo in archivio sono **partite di giro**: entrano e riescono, non sono né ricavo né costo. Se si contassero come nostri, il conto economico di Via Po direbbe più di 10.000 € di ricavi che non ha mai visto — e altrettanti di uscite. I ricavi veri delle nostre case stanno in **Affitti**, soggiorno per soggiorno.")
+                .font(.system(size: 11.5)).foregroundStyle(PSE.dim)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Di chi siano i soldi **non è una stima**: ogni accredito Booking porta in causale il codice della struttura — \(idGioia) è Gioia, \(idViaPo) è Via Po — e ogni accredito di Gioia combacia al centesimo con un pagamento dei riepiloghi Booking allegati qui sotto. Le stesse carte dicono che anche le commissioni addebitate sul conto sono fatturate a Gioia.")
+                .font(.system(size: 11.5)).foregroundStyle(PSE.dim)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Le righe di questa scheda restano nell'estratto conto — servono a farlo tornare al centesimo — ma stanno fuori da elenchi e totali dell'archivio.")
+                .font(.system(size: 11)).foregroundStyle(PSE.faint)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(13)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10).fill(PSE.accent.opacity(0.07)))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(PSE.accent.opacity(0.25), lineWidth: 1))
+    }
+
+    /// Riga di un conticino a colonna: etichetta a sinistra, importo a destra,
+    /// e sotto da dove esce il numero.
+    private func rigaConto(_ t: String, _ cents: Int, _ c: Color, _ da: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(t).font(.system(size: 11.5)).foregroundStyle(c)
+                Text(da).font(.system(size: 10)).foregroundStyle(PSE.faint)
+            }
+            Spacer(minLength: 0)
+            Text((cents < 0 ? "−" : "") + eurc(abs(cents)))
+                .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(c).monospacedDigit()
+                .frame(width: 110, alignment: .trailing)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
     }
 
     // ══ PEZZI RIUSABILI ════════════════════════════════════════════════════
@@ -1910,6 +2369,8 @@ struct StoricoView: View {
 /// il totale per fornitore — «a chi sono andati i soldi», che è la domanda
 /// che uno si fa davanti a 300.000 € di opera.
 struct StoricoDettaglioSheet: View {
+    // Osservato per rifare la vista quando l'occhio copre o scopre gli importi.
+    @ObservedObject private var nascosti = NumeriCoperti.shared
     let d: StoricoDettaglio
     let onClose: () -> Void
     /// Da una riga di questa finestra alla riga vera dell'archivio, quando c'è:

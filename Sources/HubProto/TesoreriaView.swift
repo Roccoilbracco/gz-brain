@@ -130,6 +130,9 @@ let BREAKFAST_COST = 350   // 3,50 € per persona/notte (solo Booking)
 // gruppo staccato nella barra, sotto l'etichetta ARCHIVIO.
 enum TesSub: String, CaseIterable, Identifiable {
     case riepilogo = "Riepilogo", conti = "Conti", contoEconomico = "Conto economico", servizi = "Servizi", movimenti = "Movimenti", depositi = "Depositi", educamp = "Educamp"
+    /// La guida: com'è fatta questa contabilità e cosa vuol dire ogni parola.
+    /// Ultima apposta — si apre quando serve, non sta di mezzo ogni giorno.
+    case comeFunziona = "Come funziona"
     case storico2425 = "Apr 2024 – Set 2025", storico2526 = "Ott 2025 – Giu 2026"
     case storicoTutto = "Riassunto"
     var id: String { rawValue }
@@ -225,6 +228,8 @@ private func nettoDettaglio(_ righe: [DettaglioRiga]) -> (testo: String, colore:
 // Finestra che elenca le righe di una card, con nota e totale. Riusa lo stile
 // delle tabelle della Tesoreria così il dettaglio è coerente ovunque.
 struct DettaglioVoceSheet: View {
+    // Osservato per rifare la vista quando l'occhio copre o scopre gli importi.
+    @ObservedObject private var nascosti = NumeriCoperti.shared
     let titolo: String
     var nota: String = ""
     let righe: [DettaglioRiga]
@@ -362,21 +367,28 @@ struct DettaglioVoceSheet: View {
 // nostri, se sono mai tornati, e cosa invece è solo un ricordo — la distinzione
 // che fra sei mesi non sapremo più rifare.
 struct PromemoriaSheet: View {
+    // Osservato per rifare la vista quando l'occhio copre o scopre gli importi.
+    @ObservedObject private var nascosti = NumeriCoperti.shared
     let chi: String
     let cents: Int
     let dove: String
     let scheda: [(String, String)]
     let note: [String]
+    /// Intestazione e tinta arrivano dalla card che l'ha aperta, così la finestra
+    /// è riconoscibile come la sua: arancione i soldi da riprendere, blu le schede
+    /// che spiegano e basta.
+    var titolo: String = ""
+    var tinta: Color = PSE.warn
     let onClose: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("DA RECUPERARE — \(chi.uppercased())")
-                        .font(.system(size: 14, weight: .heavy)).tracking(1).foregroundStyle(PSE.warn)
+                    Text(titolo.isEmpty ? "DA RECUPERARE — \(chi.uppercased())" : titolo)
+                        .font(.system(size: 14, weight: .heavy)).tracking(1).foregroundStyle(tinta)
                     Text(eurc(cents)).font(.system(size: 24, weight: .bold))
-                        .foregroundStyle(PSE.warn).monospacedDigit()
+                        .foregroundStyle(tinta).monospacedDigit()
                 }
                 Spacer()
                 Button(action: onClose) {
@@ -409,7 +421,7 @@ struct PromemoriaSheet: View {
                     VStack(alignment: .leading, spacing: 12) {
                         ForEach(Array(note.enumerated()), id: \.offset) { _, n in
                             HStack(alignment: .top, spacing: 10) {
-                                Circle().fill(PSE.warn.opacity(0.7)).frame(width: 5, height: 5).padding(.top, 6)
+                                Circle().fill(tinta.opacity(0.7)).frame(width: 5, height: 5).padding(.top, 6)
                                 Text(n).font(.system(size: 12)).foregroundStyle(PSE.ink)
                                     .fixedSize(horizontal: false, vertical: true)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -427,7 +439,10 @@ struct PromemoriaSheet: View {
             }
             .padding(.horizontal, 20).padding(.vertical, 12).background(Color.white.opacity(0.04))
         }
-        .frame(width: 720, height: 560)
+        // Più alta di prima: le schede lunghe — il prestito Agos ha tredici voci
+        // e otto note — in 560 punti erano tutte da scorrere, e una spiegazione
+        // che si legge tre righe per volta non si legge.
+        .frame(width: 720, height: 640)
         .background(Color(hex: 0x0b0f18))
         .preferredColorScheme(.dark)
     }
@@ -486,6 +501,8 @@ private func meseNome(_ key: String) -> String {
 }
 
 struct TesoreriaView: View {
+    // Osservato per rifare la vista quando l'occhio copre o scopre gli importi.
+    @ObservedObject private var nascosti = NumeriCoperti.shared
     let prenotazioni: [Prenotazione]
     @Binding var newTrigger: Bool
     @StateObject private var model = TesoreriaModel()
@@ -501,6 +518,9 @@ struct TesoreriaView: View {
     @State private var servizioSel: ServizioTab = .pulizie
     // Quale scheda servizi aprire in dettaglio dal Riepilogo (nil = nessuna)
     @State private var servizioSheet: ServizioTab?
+    /// Le regole di lettura in testa al Riepilogo: chiuse di default, perché chi
+    /// le sa non le rilegge.
+    @State private var regoleAperte = false
     // Quale card del Riepilogo aprire in dettaglio
     @State private var voceSheet: RiepVoce?
     // Movimenti: di default nasconde le entrate datate in avanti (incassi di
@@ -522,7 +542,7 @@ struct TesoreriaView: View {
         model.movimenti.filter { m in
             (movStrut == nil || m.struttura == movStrut!.rawValue) && nelPeriodo(m) && matchCerca(m)
             && (!soloFinoAOggi || m.data <= oggiStr)   // niente entrate future se il filtro è attivo
-        }
+        }.sorted { $0.data > $1.data }
     }
     private var movEntrate: Int { var t = 0; for m in visibiliMov where m.tipo == "entrata" { t += m.importo_cents }; return t }
     private var movUscite: Int { var t = 0; for m in visibiliMov where m.tipo == "uscita" { t += m.importo_cents }; return t }
@@ -687,6 +707,7 @@ struct TesoreriaView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         promemoriaDaRecuperare
                         switch sub {
+                        case .comeFunziona: comeFunzionaView
                         case .riepilogo: riepilogo
                         case .conti: contiView
                         case .depositi: depositiView
@@ -731,7 +752,8 @@ struct TesoreriaView: View {
             } else if case .promemoria(let id) = v,
                       let p = daRecuperareTutti.first(where: { $0.id == id }) {
                 PromemoriaSheet(chi: p.chi, cents: p.cents, dove: p.dove,
-                                scheda: p.scheda, note: p.note) { voceSheet = nil }
+                                scheda: p.scheda, note: p.note,
+                                titolo: p.titolo, tinta: p.tinta) { voceSheet = nil }
             } else {
                 let d = dettaglioVoce(v)
                 DettaglioVoceSheet(titolo: d.titolo, nota: d.nota, righe: d.righe,
@@ -940,6 +962,17 @@ struct TesoreriaView: View {
         /// Come si riconosce il rientro. Stretto quanto basta: se combaciasse con
         /// un movimento qualsiasi, il promemoria spegnerebbe troppo presto.
         let rientrato: (TesMovimento) -> Bool
+        /// L'intestazione della card. Vuota = «DA RECUPERARE — CHI», che è il
+        /// caso normale. Si riempie quando la scheda non chiede indietro niente
+        /// e serve solo a spiegare: un avviso arancione che grida «da recuperare»
+        /// su una cosa che non si recupera insegna a ignorare gli avvisi.
+        var etichetta: String = ""
+        /// Il colore della card. Arancione = soldi nostri da riprendere, blu =
+        /// spiegazione. Due tinte diverse perché si distinguano da lontano,
+        /// senza doverle leggere.
+        var tinta: Color = PSE.warn
+        var icona: String = "bell.badge.fill"
+        var titolo: String { etichetta.isEmpty ? "DA RECUPERARE — \(chi.uppercased())" : etichetta }
     }
     private var daRecuperareTutti: [DaRecuperare] {
         [
@@ -996,6 +1029,50 @@ struct TesoreriaView: View {
                     "Questo avviso non si spegne da sé: nell'archivio non c'è una regola che riconosca il rientro. Quando Giacomo restituisce, registra l'entrata e cancella questa voce dal codice.",
                 ],
                 rientrato: { _ in false }),
+            // Non è un «da recuperare»: non c'è niente da chiedere indietro. È la
+            // risposta scritta a una domanda che torna ogni volta che si guarda il
+            // Carifermo — «questo prestito è di Giacomo, perché lo paghiamo noi?».
+            // Verificata sugli estratti veri (13 file Movimenti_020-330-0120064 +
+            // il consolidato al 31/07/2026), non ricostruita dal libro maestro: il
+            // libro dice cosa abbiamo scritto, l'estratto dice cosa è successo.
+            DaRecuperare(
+                id: "agos-24000-2025-06",
+                chi: "Prestito Agos",
+                cents: 2_400_000,
+                perche: "Il prestito è intestato a Giacomo, ma i 24.000 € sono entrati sul conto della gestione e le rate escono da lì: 7 rate su 10 sono addebiti SDD sul Carifermo, riscontrati sull'estratto. Non le ha pagate lui di tasca sua.",
+                dove: "Erogazione e rate stanno in ARCHIVIO, categorie «Prestito Agos» e «Rata prestito Agos».",
+                conto: "carifermo",
+                scheda: [
+                    ("Finanziaria", "Agos Ducato S.p.A. — pratica 75965699"),
+                    ("Importo", "24.000,00 €"),
+                    ("Erogato il", "5 giugno 2025, bonifico da AGOS DUCATO S.P.A."),
+                    ("Accreditato su", "c/c Carifermo 020-330-0120064"),
+                    ("Intestatari del conto", "Anastasi Giacomo / Paoletti Sara"),
+                    ("Mandato SDD", "PR. 75965699/006/01, addebito sullo stesso conto"),
+                    ("Rata", "318,38 €/mese — la prima, 334,38 €, comprende le spese"),
+                    ("Prima rata", "1º settembre 2025"),
+                    ("Rate registrate", "12 — set/2025 → ago/2026"),
+                    ("Pagate dal conto", "7 rate — 2.244,66 € (riscontrate sull'estratto)"),
+                    ("Fuori dal conto", "3 rate — 955,14 € (mar, mag, giu 2026)"),
+                    ("Presunte", "2 rate — 636,76 € (lug, ago 2026), mai riscontrate"),
+                    ("Totale registrato", "3.836,56 €, di cui 2.244,66 € provati"),
+                    ("Piano di ammortamento", "non agli atti: durata e residuo non calcolabili"),
+                ],
+                note: [
+                    "I 24.000 € non sono mai passati da un conto personale di Giacomo: il 05/06/2025 sono entrati sul Carifermo, portando il saldo a 27.794,46 €. Nello stesso mese da quel conto sono usciti 34.417 € di lavori a Via Po — Maroni 7.150, Edif 6.015 + 4.800, Said 5.900, Paoletti 4.400, Esatec 2.426. Il prestito ha finanziato la casa, non lui.",
+                    "Sette rate sono addebiti SDD sul Carifermo, uno per uno sull'estratto: 02/09/25 (334,38), 02/10, 05/11, 02/12/25, 05/01, 04/02 e 07/04/26 (318,38 ciascuna). Guarda i saldi dopo l'addebito — 2,44 €, 107,88 €, −170,92 €, −172,41 €: dietro non c'è nessun cuscinetto suo, c'è un conto che resta a zero.",
+                    "Marzo, maggio e giugno 2026 non hanno nessun addebito Agos su quel conto, e nessun insoluto o storno. I periodi sono coperti dagli estratti, quindi non è una lacuna: quelle tre rate sono uscite da un'altra parte. Il perché si vede dai saldi — dopo la rata del mutuo il conto era a 6,21 € (09/03), 7,22 € (20/05), 5,13 € (29/06): 318,38 € non ci stavano.",
+                    "Quei 955,14 € sono l'unico punto aperto: nel libro sono segnati «Cassa contanti» sulla parola di Giorgio del 28/07/2026, senza un documento. È l'unica finestra in cui può aver pagato Giacomo di suo. Si chiude con l'estratto Agos della pratica 75965699, che dice chi ha pagato e quanto manca.",
+                    "Il conto che paga non è di nessuno dei due da solo: dal 11/04/2024 al 03/07/2026 ci sono entrati 256.545,89 € — 108.750 dal mutuo, 50.735 di prestiti della famiglia Anastasi (Carbonari Donatella, Anastasi Massimo), 27.000 di bonifici di Giorgio, 24.000 da Agos, 21.871 di assegni circolari, 15.005 di contanti versati allo sportello con la Carta 469 e 7.846 di bonifici di Giacomo.",
+                    "Da settembre 2025 — da quando corre la rata — il conto vive quasi solo di quei versamenti contanti: 7.195 € nel 2025 e 7.810 € nel 2026, cioè gli incassi delle camere portati in banca. Sono quelli che pagano mutuo e Agos. Per questo il prestito è classificato «finanziamento esterno, non un apporto dei soci»: se lo rimborsa la cassa comune, non può valere anche come apporto di Giacomo.",
+                    "Il confronto che chiude il discorso è il mutuo BPER di Via Romagna, dove il libro dice l'opposto: 81.000 € di capitale, 72.000 erogati direttamente ai soci (44.000 a Giacomo, 28.000 a Giorgio), rate dal conto BPER Giacomo·Giorgio. Lì i soldi sono andati alle persone ed è scritto. Per l'Agos no.",
+                    "Le rate di luglio e agosto 2026 sono in archivio come PRESUNTE, non come fatti: gli estratti si fermano al 03/07/2026 e nessuno le ha riscontrate. Valgono 636,76 € che il libro sta contando e la banca non conferma — vanno confermate o cancellate quando arriva l'estratto. Occhio che al 03/07 il conto era a 4,52 €, quindi come a marzo, maggio e giugno l'SDD potrebbe non aver avuto capienza.",
+                    "E senza piano di ammortamento non sappiamo quante rate mancano: il residuo oggi non è calcolabile. Serve il contratto Agos o l'area clienti della pratica.",
+                ],
+                rientrato: { _ in false },
+                etichetta: "PRESTITO AGOS — CHI LO STA PAGANDO",
+                tinta: PSE.accent,
+                icona: "info.circle.fill"),
         ]
     }
     private var daRecuperareAperti: [DaRecuperare] {
@@ -1024,15 +1101,15 @@ struct TesoreriaView: View {
                 ForEach(aperti) { p in
                     Button { voceSheet = .promemoria(p.id) } label: {
                         HStack(alignment: .top, spacing: 12) {
-                            Image(systemName: "bell.badge.fill").font(.system(size: 15))
-                                .foregroundStyle(PSE.warn).padding(.top, 1)
+                            Image(systemName: p.icona).font(.system(size: 15))
+                                .foregroundStyle(p.tinta).padding(.top, 1)
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack(spacing: 10) {
-                                    Text("DA RECUPERARE — \(p.chi.uppercased())")
+                                    Text(p.titolo)
                                         .font(.system(size: 10, weight: .heavy)).tracking(1.2)
-                                        .foregroundStyle(PSE.warn)
+                                        .foregroundStyle(p.tinta)
                                     Text(eurc(p.cents)).font(.system(size: 16, weight: .bold))
-                                        .foregroundStyle(PSE.warn).monospacedDigit()
+                                        .foregroundStyle(p.tinta).monospacedDigit()
                                 }
                                 Text(p.perche).font(.system(size: 11)).foregroundStyle(PSE.ink)
                                     .fixedSize(horizontal: false, vertical: true)
@@ -1044,11 +1121,11 @@ struct TesoreriaView: View {
                             }
                             Spacer(minLength: 0)
                             Image(systemName: "chevron.right").font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(PSE.warn.opacity(0.7)).padding(.top, 3)
+                                .foregroundStyle(p.tinta.opacity(0.7)).padding(.top, 3)
                         }
                         .padding(14)
-                        .background(RoundedRectangle(cornerRadius: 12).fill(PSE.warn.opacity(0.10)))
-                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(PSE.warn.opacity(0.45), lineWidth: 1))
+                        .background(RoundedRectangle(cornerRadius: 12).fill(p.tinta.opacity(0.10)))
+                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(p.tinta.opacity(0.45), lineWidth: 1))
                         .contentShape(RoundedRectangle(cornerRadius: 12))
                     }.buttonStyle(.plain)
                 }
@@ -1057,8 +1134,30 @@ struct TesoreriaView: View {
         }
     }
 
+    /// La guida alla contabilità: i passi stanno in `storico_racconto`, scheda
+    /// «tesoreria», e si correggono da qui senza ricompilare.
+    private var comeFunzionaView: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Come funziona questa contabilità")
+                    .font(.system(size: 15, weight: .bold)).foregroundStyle(PSE.text)
+                Text("Le regole che stanno dietro ai numeri delle altre schede: quali sono i conti, da dove nascono gli incassi, cosa vuol dire ogni etichetta. Si può correggere: se una regola cambia, si riscrive qui — è la pagina che risponde al posto tuo quando qualcuno chiede «ma questo numero cosa vuol dire».")
+                    .font(.system(size: 11.5)).foregroundStyle(PSE.dim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(13)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 10).fill(PSE.accent.opacity(0.07)))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(PSE.accent.opacity(0.25), lineWidth: 1))
+
+            RaccontoBox(scheda: "tesoreria")
+        }
+        .padding(.bottom, 20)
+    }
+
     private var riepilogo: some View {
         VStack(alignment: .leading, spacing: 12) {
+            comeSiLeggono
             // ── CONTI ──────────────────────────────────────────────────────
             sezione("CONTI — saldo attuale").padding(.top, 0)
             LazyVGrid(columns: cols(3), spacing: 12) {
@@ -1110,14 +1209,42 @@ struct TesoreriaView: View {
                 nota("I conti dell'affittacamere partono dal 1° luglio 2026. Le bollette arrivate prima — \(eurc(utenzeArchivio)) fra luce, gas e internet da settembre 2025 — sono arretrati di casa: restano registrate e si ritrovano in Servizi → Utenze, in fondo, ma non entrano in nessun totale.")
             }
 
-            // ── note ───────────────────────────────────────────────────────
-            VStack(alignment: .leading, spacing: 7) {
-                nota("I saldi dei conti sono NETTI (su Massimo la commissione Booking è già registrata come uscita); il «da incassare» invece è LORDO, quello che il cliente paga all'OTA. Su Booking arriverà circa il 16,5% in meno — oggi ≈ \(eurc(commissioneAttesa)) — mentre Airbnb e le dirette non hanno commissione. Perciò il «potenziale» è un tetto, non l'incasso atteso.")
-                nota("OTA (Booking/Airbnb) → conto Massimo · dirette → Beeper o Cassa (scelto per prenotazione). Pulizia 20 €/check-out. Le colazioni Booking (3,50 €/pers·notte) sono aggiunte automaticamente ai Movimenti.")
-            }
-            .padding(.top, 12)
-            .overlay(Rectangle().fill(PSE.line).frame(height: 1).padding(.top, 4), alignment: .top)
         }.padding(.bottom, 20)
+    }
+
+    /// Le due regole che cambiano la lettura di tutti i numeri sotto. Stavano in
+    /// fondo alla pagina: si leggevano dopo essersi già fatti l'idea sbagliata.
+    /// Chiuse di default — chi le sa non le rilegge — ma con la riga di sopra
+    /// sempre visibile, che è il minimo indispensabile.
+    private var comeSiLeggono: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button { withAnimation(.easeInOut(duration: 0.18)) { regoleAperte.toggle() } } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: regoleAperte ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .bold)).foregroundStyle(PSE.accent)
+                    Text("Contabilità viva, dal 1° luglio 2026.")
+                        .font(.system(size: 11.5, weight: .semibold)).foregroundStyle(PSE.text)
+                    Text("Quello di prima sta nell'Archivio e non si somma mai a questi numeri.")
+                        .font(.system(size: 11.5)).foregroundStyle(PSE.dim)
+                    Spacer(minLength: 0)
+                    Text(regoleAperte ? "" : "come si leggono questi numeri →")
+                        .font(.system(size: 10.5)).foregroundStyle(PSE.faint)
+                }
+                .contentShape(Rectangle())
+            }.buttonStyle(.plain)
+
+            if regoleAperte {
+                VStack(alignment: .leading, spacing: 7) {
+                    nota("I saldi dei conti sono NETTI (su Massimo la commissione Booking è già registrata come uscita); il «da incassare» invece è LORDO, quello che il cliente paga all'OTA. Su Booking arriverà circa il 16,5% in meno — oggi ≈ \(eurc(commissioneAttesa)) — mentre Airbnb e le dirette non hanno commissione. Perciò il «potenziale» è un tetto, non l'incasso atteso.")
+                    nota("OTA (Booking/Airbnb) → conto Massimo · dirette → Beeper o Cassa (scelto per prenotazione). Pulizia 20 €/check-out. Le colazioni Booking (3,50 €/pers·notte) sono aggiunte automaticamente ai Movimenti.")
+                    nota("Gli incassi nascono dalla prenotazione, non da un movimento scritto a mano: segnarli anche qui li conta due volte. Spiegazione completa nella scheda «Come funziona».")
+                }
+            }
+        }
+        .padding(11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10).fill(PSE.accent.opacity(0.07)))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(PSE.accent.opacity(0.25), lineWidth: 1))
     }
     private func contoCard(_ c: Conto) -> some View {
         let s = model.saldo(c.id)
@@ -1317,30 +1444,40 @@ struct TesoreriaView: View {
     }
     private var movimentiList: some View {
         VStack(alignment: .leading, spacing: 12) {
+            nota("Ogni euro entrato o uscito dai conti, riga per riga. Gli incassi dei soggiorni e le pulizie compaiono qui da soli quando si registra la prenotazione: scriverli anche a mano li conta due volte. A mano si registrano le spese vere e i giroconti.")
             HStack(spacing: 12) {
                 clic(.movimenti("Entrate del periodo", visibiliMov.filter { $0.tipo == "entrata" }, movEntrate)) { totCard("ENTRATE", movEntrate, PSE.pos) }
                 clic(.movimenti("Uscite del periodo", visibiliMov.filter { $0.tipo == "uscita" }, movUscite)) { totCard("USCITE", movUscite, PSE.neg) }
                 clic(.movimenti("Movimenti del periodo", visibiliMov, movEntrate - movUscite)) { totCard("SALDO PERIODO", movEntrate - movUscite, PSE.accent) }
                 clic(.daIncassareTotale) { totCard("DA INCASSARE (lordo)", daIncassarePeriodo, PSE.warn) }
             }
+            // I saldi che prima stavano nelle intestazioni dei gruppi: l'elenco
+            // adesso è in ordine di data, ma quanto ha fatto ogni casa resta qui
+            // sopra, a colpo d'occhio.
+            if let gruppi = gruppiPerCasa(visibiliMov, casa: { casaLabel($0.struttura) }) {
+                HStack(spacing: 16) {
+                    ForEach(gruppi, id: \.casa) { g in
+                        HStack(spacing: 6) {
+                            Text(g.casa.uppercased()).font(.system(size: 9.5, weight: .heavy)).tracking(1)
+                                .foregroundStyle(PSE.accent)
+                            Text(g.righe.count == 1 ? "1 riga" : "\(g.righe.count) righe")
+                                .font(.system(size: 10)).foregroundStyle(PSE.faint)
+                            Text(saldoTesto(g.righe)).font(.system(size: 11.5, weight: .bold))
+                                .foregroundStyle(saldoColore(g.righe)).monospacedDigit()
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
             VStack(spacing: 0) {
                 if visibiliMov.isEmpty {
                     EmptyStateCard(icon: "tray", text: "Nessun movimento per il filtro scelto.")
-                } else if let gruppi = gruppiPerCasa(visibiliMov, casa: { casaLabel($0.struttura) }) {
-                    // Qui le case restano una sotto l'altra, non affiancate come
-                    // altrove: questa tabella ha sette colonne, e a metà larghezza
-                    // la descrizione si riduceva a niente — che è la colonna per
-                    // cui si apre questa scheda. Meglio scorrere che non leggere.
-                    movHeader(mostraCasa: false)
-                    ForEach(gruppi, id: \.casa) { g in
-                        intestazioneCasa(g.casa, g.righe.count, saldoTesto(g.righe), saldoColore(g.righe))
-                        ForEach(g.righe) { m in
-                            movRow(m, mostraCasa: false)
-                            Divider().overlay(PSE.line).padding(.leading, 16)
-                        }
-                    }
-                    movTotaleRow
                 } else {
+                    // Un elenco solo, in ordine di data. Raggruppato per casa i
+                    // movimenti nuovi di Via Romagna finivano sotto le ottanta
+                    // righe di Via Po: registrati oggi e invisibili senza scorrere
+                    // mezza pagina. La casa la dice la colonna, i totali stanno
+                    // nella riga qui sopra.
                     movHeader()
                     ForEach(visibiliMov) { m in
                         movRow(m)
@@ -1556,6 +1693,7 @@ struct TesoreriaView: View {
 
     private var contoEconomico: some View {
         VStack(alignment: .leading, spacing: 12) {
+            nota("Quanto rende tenere aperte le case, dal 1° luglio 2026 a oggi. Le entrate sono gli incassi già arrivati, non le prenotazioni future. «Utile di gestione» è entrate meno costi correnti; «utile netto» toglie anche rate e debiti. I soldi messi dai soci non sono ricavi e restano fuori.")
             let utileOp = totEntrate - totCostiOperativi          // margine di gestione
             let utileNetto = utileOp - totDebiti                  // dopo debiti/finanziamenti
             let margineOp = totEntrate > 0 ? Int((Double(utileOp) / Double(totEntrate) * 100).rounded()) : 0
@@ -1994,12 +2132,23 @@ struct TesoreriaView: View {
         let iniz = saldoIniziale
         let nome = tuttiIConti ? "TOTALE" : (conto?.nome.uppercased() ?? "")
         return VStack(alignment: .leading, spacing: 12) {
+            nota(perCasa
+                 ? "Con il filtro per casa questi non sono saldi: è quanto quella casa ha generato e speso. Un conto non si divide per casa — il saldo vero si vede su «Tutte»."
+                 : "Cassa = contante · Beeper = conto di Giacomo e Giorgio, dove vanno le dirette · Massimo = ci arrivano gli incassi delle OTA · Carifermo = da lì escono il mutuo e le utenze di Via Po, per questo sta in negativo. Sono i saldi dal 1° luglio 2026: quello di prima sta nell’Archivio e non si somma.")
             // intestazione: col periodo filtrato l'estratto parte dal saldo
             // iniziale e chiude sul finale, come un vero estratto conto.
             HStack(spacing: 12) {
                 if periodo == "tutto" {
-                    testoCard(perCasa ? "GENERATO DA \(movStrut!.label.uppercased())" : "SALDO \(nome)\(perCasa ? "" : " (già entrato)")",
-                              eurc(totE - totU), (totE - totU) < 0 ? PSE.neg : PSE.ink)
+                    // Anche il saldo di testa apre il suo estratto, come le card
+                    // dei conti qui sotto: su «Tutti i conti» sono tutti i
+                    // movimenti insieme, col filtro casa solo quelli di quella casa.
+                    let voceSaldo: RiepVoce = perCasa
+                        ? .movimenti("Generato da \(movStrut!.label)", mov, totE - totU)
+                        : (tuttiIConti ? .totaleConti : .conto(contoSel))
+                    clic(voceSaldo) {
+                        testoCard(perCasa ? "GENERATO DA \(movStrut!.label.uppercased())" : "SALDO \(nome)\(perCasa ? "" : " (già entrato)")",
+                                  eurc(totE - totU), (totE - totU) < 0 ? PSE.neg : PSE.ink)
+                    }
                     clic(.movimenti("Entrate", entrate, totE)) { totCard("ENTRATE", totE, PSE.pos) }
                     clic(.movimenti("Uscite", uscite, totU)) { totCard("USCITE", totU, PSE.neg) }
                     // Per un singolo conto: quarta card = soldi che devono ancora
@@ -2793,6 +2942,8 @@ struct TesoreriaView: View {
 
 // ── Form nuovo/modifica movimento ──
 private struct TesMovimentoForm: View {
+    // Osservato per rifare la vista quando l'occhio copre o scopre gli importi.
+    @ObservedObject private var nascosti = NumeriCoperti.shared
     let conti: [Conto]
     let existing: TesMovimento?
     let onSaved: () async -> Void
