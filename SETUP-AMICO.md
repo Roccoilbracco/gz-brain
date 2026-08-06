@@ -59,16 +59,22 @@ truncate public.prenotazioni;
 -- le foto/documenti demo restano nel bucket 'proprieta': cancellali dallo Storage se vuoi
 ```
 
-## 7. Integrazione prenotazioni Airbnb / Booking (da fare)
-Airbnb e Booking non hanno API dirette per il singolo host. Opzioni:
+## 7. Integrazione prenotazioni Airbnb / Booking (provata e abbandonata)
+Un channel manager è stato messo in piedi a luglio 2026 e dismesso ad agosto:
+oggi le prenotazioni OTA si copiano a mano dall'extranet dentro
+`public.prenotazioni`, con `crea_prenotazione` che controlla le sovrapposizioni.
+Se un domani si volesse riprovare, Airbnb e Booking non hanno API dirette per il
+singolo host. Le opzioni restano queste:
 - **iCal 2-way (gratis, consigliato per iniziare)**: esporta il link .ics da Airbnb
   (Calendario → Sincronizza) e Booking (Tariffe e disponibilità → Sincronizza),
   un job ogni 15-30 min li legge e scrive in `public.prenotazioni`
   (`source='airbnb'`/`'booking'`, date, camera). Genera anche un iCal dalle
   prenotazioni dirette e importalo su Airbnb/Booking per bloccare le date.
   Limite: l'iCal dà solo date, non prezzo/ospite.
-- **Channel manager (Smoobu/Beds24/Hostaway, a pagamento)**: API complete, sync
-  bidirezionale, dati ospite+prezzo.
+- **Channel manager (Smoobu/Hostaway, a pagamento)**: API complete, sync
+  bidirezionale, dati ospite+prezzo. È la strada già percorsa, e il punto dove
+  si è rotta: le camere gemelle Booking e Airbnb vanno collegate fra loro, se no
+  il channel manager stesso lascia vendere due volte lo stesso letto.
 - **Parsing email (Gmail API)**: legge le mail di conferma → più dati, ma fragile.
 
 Il sito camerepse.it può scrivere le richieste dirette in `public.prenotazioni`

@@ -177,11 +177,13 @@ extension HubAPI {
         try await sb.insertReturning("prenotazioni", body: f)
     }
     /// - Parameter aMano: true quando la modifica la fa una persona. Segna la
-    ///   riga come «toccata a mano» e da lì in poi la sincronizzazione Beds24 la
-    ///   lascia stare: prima riscriveva tutto a ogni giro e le correzioni
-    ///   sparivano da sole dopo venti minuti. Le scritture automatiche dell'app
-    ///   (l'allineamento del pagato Educamp) passano `false`, se no basterebbe
-    ///   aprire l'app per bloccare mezzo archivio.
+    ///   riga come «toccata a mano» in `modificata_a_mano`. Nasce per difendere
+    ///   le correzioni dal channel manager, che le riscriveva a ogni giro e le
+    ///   faceva sparire dopo venti minuti; il channel manager non c'è più, ma la
+    ///   marcatura resta ed è l'unica cosa che distingue una riga corretta da una
+    ///   riga importata. Le scritture automatiche dell'app (l'allineamento del
+    ///   pagato Educamp) passano `false`, se no basterebbe aprire l'app per
+    ///   marcare mezzo archivio.
     static func updatePrenotazione(id: String, fields: [String: Any?], aMano: Bool = true) async throws {
         var b = fields
         b["updated_at"] = isoNowString()
@@ -2089,8 +2091,9 @@ private struct BookingDrawer: View {
                     }.padding(.top, 8)
                     // Cancellare non è eliminare: la prenotazione resta in
                     // archivio ma esce dai conti (pulizia prevista, colazioni non
-                    // servite, e se serve l'incasso registrato). Il calendario OTA
-                    // si sblocca da solo al giro dopo di beds24-push.
+                    // servite, e se serve l'incasso registrato). Il calendario
+                    // delle OTA però no: da quando il channel manager non c'è
+                    // più, quelle date vanno riaperte a mano su Booking e Airbnb.
                     if st != .cancellata {
                         Button { confermaAnnulla = true } label: {
                             Label("Cancella prenotazione", systemImage: "calendar.badge.minus")
