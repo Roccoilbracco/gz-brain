@@ -33,8 +33,30 @@ struct TesMovimento: Identifiable, Decodable, Equatable {
     var prenotazione_id: String?
 }
 
+/// Una riga dell'estratto conto vero della banca (public.storico_banca).
+/// Non è un movimento nostro: è quello che la banca ha scritto. I due elenchi
+/// non coincidono e non devono — il libro di tesoreria parte dal 1° luglio
+/// 2026, l'estratto viene da prima e contiene anche ciò che non passa di qui.
+struct RigaEstratto: Identifiable, Decodable, Equatable {
+    let id: String
+    var data: String
+    var data_valuta: String?
+    var descrizione: String?
+    var causale: String?
+    /// Segnato: positivo entrata, negativo uscita. Come lo dà la banca.
+    var importo_cents: Int
+    /// Saldo progressivo. Carifermo ce l'ha, le liste movimenti BPER no.
+    var saldo_cents: Int?
+    var conto_id: String?
+    var conto: String?
+}
+
 extension HubAPI {
     static func listConti() async throws -> [Conto] { try await sb.fetch("conti?select=*&order=sort_order.asc") }
+    /// Ordine decrescente: l'estratto si legge dall'ultimo movimento, come in banca.
+    static func listStoricoBanca() async throws -> [RigaEstratto] {
+        try await sb.fetch("storico_banca?select=*&order=data.desc&limit=3000")
+    }
     static func listMovimenti() async throws -> [TesMovimento] { try await sb.fetch("movimenti?select=*&order=data.desc&limit=3000") }
     @discardableResult
     static func createTesMovimento(_ f: [String: Any?]) async throws -> TesMovimento { try await sb.insertReturning("movimenti", body: f) }
@@ -53,6 +75,10 @@ private let tesYmd: DateFormatter = { let f = DateFormatter(); f.dateFormat = "y
 private let tesPretty: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "it_IT"); f.dateFormat = "d MMM"; return f }()
 private func tesDate(_ s: String?) -> Date? { s.flatMap { tesYmd.date(from: String($0.prefix(10))) } }
 private func tesPrettyStr(_ s: String?) -> String { tesDate(s).map { tesPretty.string(from: $0) } ?? "—" }
+/// Come `tesPrettyStr` ma con l'anno: l'estratto della banca copre più anni e
+/// «11 apr» senza anno, con dentro 2024 e 2026, non si legge.
+private let tesPrettyY: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "it_IT"); f.dateFormat = "d MMM yy"; return f }()
+private func tesPrettyAnno(_ s: String?) -> String { tesDate(s).map { tesPrettyY.string(from: $0) } ?? "—" }
 
 // Tariffe dei servizi: le righe vere stanno nelle tabelle public.pulizie e
 // public.colazioni (sezione Servizi), queste restano come riferimento del calcolo.
@@ -76,6 +102,9 @@ let BREAKFAST_COST = 350   // 3,50 € per persona/notte (solo Booking)
     /// Quanti allegati ha ciascun movimento, per mostrare la graffetta in
     /// tabella: una sola query per tutti, non una per riga.
     @Published var allegatiPerMov: [String: Int] = [:]
+    /// Le righe degli estratti conto della banca, per conto. Servono alla card
+    /// «Estratto della banca» dentro la scheda di ogni conto.
+    @Published var estratto: [RigaEstratto] = []
     @Published var loading = true
     /// - Parameter silenzioso: ricarico automatico dopo una modifica altrove —
     ///   niente rotella, la pagina non deve sparire mentre la si guarda.
@@ -89,6 +118,11 @@ let BREAKFAST_COST = 350   // 3,50 € per persona/notte (solo Booking)
         educampRighe = (try? await HubAPI.listEducampRighe()) ?? []
         bollette = (try? await HubAPI.listBollette()) ?? []
         allegatiPerMov = (try? await HubAPI.contaAllegati(.movimento)) ?? [:]
+        estratto = (try? await HubAPI.listStoricoBanca()) ?? []
+    }
+    /// Le righe di estratto di un conto, dalla più recente.
+    func estrattoDi(_ contoId: String) -> [RigaEstratto] {
+        estratto.filter { $0.conto_id == contoId }.sorted { $0.data > $1.data }
     }
     func ricontaAllegati() async {
         allegatiPerMov = (try? await HubAPI.contaAllegati(.movimento)) ?? [:]
@@ -453,6 +487,8 @@ struct PromemoriaSheet: View {
 // Le voci del Riepilogo che aprono una sotto-finestra al click.
 enum RiepVoce: Identifiable {
     case conto(String)                       // id conto → estratto
+    /// L'estratto conto vero della banca di quel conto, riga per riga.
+    case estrattoBanca(String)
     case totaleConti
     case nostroReale
     case potenziale
@@ -476,6 +512,7 @@ enum RiepVoce: Identifiable {
     var id: String {
         switch self {
         case .conto(let c): return "conto-\(c)"
+        case .estrattoBanca(let c): return "estratto-\(c)"
         case .totaleConti: return "tot"
         case .nostroReale: return "nostro"
         case .potenziale: return "pot"
@@ -778,6 +815,31 @@ struct TesoreriaView: View {
                       casa: m.struttura != nil ? casaLabel(m.struttura) : "",
                       importo: m.importo_cents, positivo: m.tipo == "entrata")
     }
+    /// Una riga di estratto conto come riga di dettaglio.
+    ///
+    /// La causale va davanti alla descrizione solo quando dice qualcosa in più:
+    /// su Carifermo è «RIMBORSO FINANZIAMENTO» o «PAG.UTENZE FORN.ELETTRICA» e
+    /// serve, sulle liste BPER è «BONIFICO» e la descrizione lo dice già. Il
+    /// controllo è se la descrizione la contiene già, così la ripetizione sparisce
+    /// da sola senza un elenco di causali da tenere aggiornato.
+    ///
+    /// In coda va il saldo progressivo, dove la banca lo dà: è la colonna che
+    /// rende un elenco di movimenti un estratto conto.
+    private func rigaDaEstratto(_ r: RigaEstratto) -> DettaglioRiga {
+        let desc = r.descrizione?.isEmpty == false ? r.descrizione! : ""
+        let cau = r.causale?.isEmpty == false ? r.causale! : ""
+        let testo: String
+        if desc.isEmpty { testo = cau.isEmpty ? "movimento senza descrizione" : cau }
+        else if cau.isEmpty || desc.range(of: cau, options: .caseInsensitive) != nil { testo = desc }
+        else { testo = "\(cau) · \(desc)" }
+        return DettaglioRiga(id: r.id,
+                             data: tesPrettyAnno(r.data),
+                             ymd: String(r.data.prefix(10)),
+                             descrizione: testo,
+                             extra: r.saldo_cents.map { "saldo \(eurc($0))" } ?? "",
+                             importo: abs(r.importo_cents),
+                             positivo: r.importo_cents > 0)
+    }
     private func rigaDaPren(_ b: Prenotazione) -> DettaglioRiga {
         let res = residuoIncassare(b)
         return DettaglioRiga(id: b.id, data: "\(tesPrettyStr(b.checkin))",
@@ -799,6 +861,26 @@ struct TesoreriaView: View {
                 : "")
             return ("\(c?.nome.uppercased() ?? "CONTO") — ESTRATTO", nota,
                     mov.map { rigaDaMov($0) }, "SALDO", model.saldo(id))
+        case .estrattoBanca(let id):
+            // Qui dentro c'è solo l'estratto: le righe come le ha scritte la
+            // banca e il saldo che dà lei. Niente saldi, totali o confronti
+            // presi dalla tesoreria delle camere — questa è la scheda dove si
+            // guarda il documento della banca, e un numero nostro in mezzo si
+            // leggerebbe come se venisse da lì.
+            let c = model.conti.first { $0.id == id }
+            let righe = model.estrattoDi(id)
+            // Il totale in fondo è il saldo della banca, quando la banca lo dà.
+            // Se non lo dà non lo calcoliamo: entrate meno uscite darebbe il
+            // movimentato di quanto è stato scaricato, non il saldo del conto.
+            let ultimoSaldo = righe.first(where: { $0.saldo_cents != nil })?.saldo_cents
+            let nota = righe.isEmpty ? "" :
+                "Dal \(tesPrettyAnno(righe.last?.data)) al \(tesPrettyAnno(righe.first?.data)), \(righe.count) movimenti."
+                + (ultimoSaldo == nil ? " La banca non esporta il saldo progressivo in questa lista." : "")
+            return ("\(c?.nome.uppercased() ?? "CONTO") — ESTRATTO DELLA BANCA",
+                    nota,
+                    righe.map { rigaDaEstratto($0) },
+                    "SALDO IN BANCA",
+                    ultimoSaldo)
         case .totaleConti:
             let mov = model.movimenti.sorted { $0.data > $1.data }
             return ("TOTALE CONTI — TUTTI I MOVIMENTI",
@@ -1070,6 +1152,8 @@ struct TesoreriaView: View {
                     "Quei 955,14 € sono l'unico punto aperto: nel libro sono segnati «Cassa contanti» sulla parola di Giorgio del 28/07/2026, senza un documento. È l'unica finestra in cui può aver pagato Giacomo di suo. Si chiude con l'estratto Agos della pratica 75965699, che dice chi ha pagato e quanto manca.",
                     "Il conto che paga non è di nessuno dei due da solo: dal 11/04/2024 al 03/07/2026 ci sono entrati 256.545,89 € — 108.750 dal mutuo, 50.735 di prestiti della famiglia Anastasi (Carbonari Donatella, Anastasi Massimo), 27.000 di bonifici di Giorgio, 24.000 da Agos, 21.871 di assegni circolari, 15.005 di contanti versati allo sportello con la Carta 469 e 7.846 di bonifici di Giacomo.",
                     "Da settembre 2025 — da quando corre la rata — il conto vive quasi solo di quei versamenti contanti: 7.195 € nel 2025 e 7.810 € nel 2026, cioè gli incassi delle camere portati in banca. Sono quelli che pagano mutuo e Agos. Per questo il prestito è classificato «finanziamento esterno, non un apporto dei soci»: se lo rimborsa la cassa comune, non può valere anche come apporto di Giacomo.",
+                    "Che quei versamenti bancomat siano gli incassi delle camere non è scritto sull'estratto — dice solo «Vers. Bancomat da Sportello 0147 con Carta N. 469» — ed è l'unico passaggio dedotto di tutta la ricostruzione. Verificato il 05/08/2026 incrociandolo col libro: da luglio 2025 a giugno 2026 sul conto sono stati versati 13.705 € di contante a fronte di 20.316,50 € incassati in contanti dalle camere (canali Diretto e Mixto), e il cumulato dei versamenti non supera mai quello degli incassi in nessuno dei dodici mesi. I 6.611,50 € di differenza sono la cassa che paga pulizie, colazioni e materiali. La capienza c'è, i tempi combaciano.",
+                    "E i versamenti cadono subito prima degli addebiti, che è il meccanismo visto da vicino: il 02/02/2026 vengono versati 570 €, il 04/02 escono mutuo (690,61) e Agos (318,38) lasciando il conto a −402,75 €, il 12/02 si versano altri 440 € per riportarlo a +17,35 €. Stessa scena il 30/09/25 (730 € versati, Agos il 02/10) e il 02–03/04/26 (110 + 420 € versati, mutuo il 03/04 e Agos il 07/04). Non entra nient'altro in quei giorni.",
                     "Il confronto che chiude il discorso è il mutuo BPER di Via Romagna, dove il libro dice l'opposto: 81.000 € di capitale, 72.000 erogati direttamente ai soci (44.000 a Giacomo, 28.000 a Giorgio), rate dal conto BPER Giacomo·Giorgio. Lì i soldi sono andati alle persone ed è scritto. Per l'Agos no.",
                     "Le rate di luglio e agosto 2026 sono in archivio come PRESUNTE, non come fatti: gli estratti si fermano al 03/07/2026 e nessuno le ha riscontrate. Valgono 636,76 € che il libro sta contando e la banca non conferma — vanno confermate o cancellate quando arriva l'estratto. Occhio che al 03/07 il conto era a 4,52 €, quindi come a marzo, maggio e giugno l'SDD potrebbe non aver avuto capienza.",
                     "E senza piano di ammortamento non sappiamo quante rate mancano: il residuo oggi non è calcolabile. Serve il contratto Agos o l'area clienti della pratica.",
@@ -1397,6 +1481,27 @@ struct TesoreriaView: View {
             }.buttonStyle(.plain)
             Divider().overlay(PSE.line).padding(.leading, 16)
         }
+    }
+
+    /// La casella dell'estratto della banca: dice quante righe ci sono e che
+    /// periodo coprono, non un importo. Un totale qui sarebbe frainteso — non è
+    /// il saldo del conto, è il movimentato di quello che è stato scaricato.
+    private func estrattoCard(_ righe: [RigaEstratto]) -> some View {
+        let dal = tesPrettyAnno(righe.last?.data), al = tesPrettyAnno(righe.first?.data)
+        return HStack(spacing: 12) {
+            Image(systemName: "building.columns.fill").font(.system(size: 15)).foregroundStyle(PSE.accent)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("ESTRATTO CONTO DELLA BANCA").font(.system(size: 9.5, weight: .heavy)).tracking(0.8)
+                    .foregroundStyle(PSE.faint)
+                Text("\(righe.count) movimenti · dal \(dal) al \(al)")
+                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(PSE.ink).monospacedDigit()
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14).padding(.vertical, 12).padding(.trailing, 16)
+        .background(RoundedRectangle(cornerRadius: 12).fill(PSE.surface))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(PSE.line, lineWidth: 1))
     }
 
     private func totCard(_ t: String, _ v: Int, _ c: Color) -> some View { testoCard(t, eurc(v), c) }
@@ -2171,6 +2276,19 @@ struct TesoreriaView: View {
                     clic(.movimenti("Uscite", uscite, totU)) { totCard("USCITE", totU, PSE.neg) }
                     testoCard(perCasa ? "GENERATO DA \(movStrut!.label.uppercased())" : "SALDO FINALE \(nome)",
                               eurc(iniz + totE - totU), (iniz + totE - totU) < 0 ? PSE.neg : PSE.ink)
+                }
+            }
+            // L'estratto vero della banca, per il conto che si sta guardando.
+            // Sta qui sotto e non tra le card di sopra perché non è un numero
+            // del nostro libro: è il documento della banca, e va aperto sapendo
+            // che i due elenchi non coincidono. Col filtro casa non compare —
+            // un estratto conto non si divide per casa.
+            if !tuttiIConti && !perCasa {
+                let righeEstratto = model.estrattoDi(contoSel)
+                if !righeEstratto.isEmpty {
+                    clic(.estrattoBanca(contoSel)) {
+                        estrattoCard(righeEstratto)
+                    }
                 }
             }
             if perCasa {
