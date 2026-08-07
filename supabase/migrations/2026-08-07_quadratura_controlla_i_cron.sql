@@ -1,18 +1,29 @@
 -- ============================================================================
--- Ottavo controllo: gli automatismi che dicono di essere andati bene e non è vero.
+-- Due cose in questa migrazione.
 --
--- I cron che chiamano una edge function con net.http_post risultano SEMPRE
--- 'succeeded' in cron.job_run_details: la http_post è asincrona e ritorna
--- subito un id, molto prima che arrivi la risposta. Un job può quindi fallire
--- ogni notte per una settimana senza che nulla lo dica.
+-- 1) OTTAVO CONTROLLO: gli automatismi che dicono di essere andati bene e non è vero.
 --
--- Trovato così: `nc-social-suggestions` rispondeva
---   HTTP 500 {"error":"ANTHROPIC_API_KEY secret is not set"}
--- con sette 'succeeded' consecutivi nei log del cron.
+--    I cron che chiamano una edge function con net.http_post risultano SEMPRE
+--    'succeeded' in cron.job_run_details: la http_post è asincrona e ritorna
+--    subito un id, molto prima che arrivi la risposta. Un job può quindi
+--    fallire ogni notte per una settimana senza che nulla lo dica.
 --
--- L'esito vero sta in net._http_response, ed è lì che va guardato.
--- La finestra è 25 ore: la quadratura gira alle 03:40, il cron social alle
--- 05:30, quindi ogni esecuzione deve arrivare a coprire quella del giorno prima.
+--    Trovato così: `nc-social-suggestions` rispondeva
+--      HTTP 500 {"error":"ANTHROPIC_API_KEY secret is not set"}
+--    con sette 'succeeded' consecutivi nei log del cron.
+--
+--    L'esito vero sta in net._http_response, ed è lì che va guardato.
+--    Finestra 25 ore: la quadratura gira alle 03:40, il cron social alle 05:30,
+--    quindi ogni esecuzione deve arrivare a coprire quella del giorno prima.
+--
+-- 2) L'ESTRATTO SI RAGGRUPPA PER `conto_id`, non per l'etichetta.
+--
+--    `storico_banca.conto` è il testo dell'import. Da
+--    2026-08-05_estratto_conto_agganciato_al_conto esiste `conto_id`, stabile.
+--    Se il prossimo import scrivesse «Carifermo 0120064/A» l'etichetta
+--    cambierebbe, la catena dei saldi si spezzerebbe in due tronconi e il
+--    controllo sparerebbe decine di falsi «catena interrotta».
+--    Fallback sull'etichetta per eventuali righe non ancora agganciate.
 -- ============================================================================
 
 create or replace function public.quadratura_notturna()
@@ -22,6 +33,9 @@ as $$
 declare n integer; ora timestamptz := now();
 begin
   -- 1. ESTRATTO CONTO: catena dei saldi spezzata.
+  -- Non si usa l'ordine delle righe: `id` è uuid casuale e `created_at` è
+  -- identico su tutto l'import, quindi dentro la giornata un ordine non esiste.
+  -- Ogni riga deve avere un'altra riga il cui saldo sia (saldo - importo).
   insert into public.quadrature (eseguita_il, controllo, gravita, oggetto, dettaglio, importo_cents, data_riferimento)
   select ora, 'estratto conto: catena interrotta', 'errore',
          b.conto,
@@ -32,15 +46,27 @@ begin
    where b.saldo_cents is not null
      and b.saldo_cents - b.importo_cents <> 0
      and not exists (select 1 from public.storico_banca p
-                      where p.conto = b.conto and p.id <> b.id
+                      where coalesce(p.conto_id, p.conto) = coalesce(b.conto_id, b.conto)
+                        and p.id <> b.id
                         and p.saldo_cents = b.saldo_cents - b.importo_cents);
 
   -- 2. ESTRATTO CONTO: righe senza saldo, quindi non verificabili.
+  -- Oggi riguarda Massimo e Giacomo: le liste movimenti BPER non esportano
+  -- il saldo progressivo. I totali si contano prima del join, altrimenti la
+  -- sottoquery correlata leggerebbe una colonna fuori dal GROUP BY (42803).
+  with per_conto as (
+    select coalesce(conto_id, conto) as chiave,
+           max(conto) as etichetta,
+           count(*) as totale,
+           count(*) filter (where saldo_cents is null) as senza_saldo
+      from public.storico_banca
+     group by coalesce(conto_id, conto)
+  )
   insert into public.quadrature (eseguita_il, controllo, gravita, oggetto, dettaglio, importo_cents)
-  select ora, 'estratto conto: saldo assente', 'attenzione', conto,
-         count(*) || ' righe su ' || (select count(*) from public.storico_banca s where s.conto = b.conto) ||
+  select ora, 'estratto conto: saldo assente', 'attenzione', etichetta,
+         senza_saldo || ' righe su ' || totale ||
          ' non hanno il saldo progressivo: su queste la quadratura non è calcolabile.', null
-    from public.storico_banca b where saldo_cents is null group by conto;
+    from per_conto where senza_saldo > 0;
 
   -- 3. Righe di libro maestro con importo a zero: segnaposto da completare.
   insert into public.quadrature (eseguita_il, controllo, gravita, oggetto, dettaglio, data_riferimento)
@@ -71,7 +97,10 @@ begin
     from public.prenotazioni
    where checkout < current_date and status <> 'cancellata' and cassa_registrata is not true;
 
-  -- 6. Doppioni, tenendo conto della partita doppia.
+  -- 6. Doppioni, tenendo conto della partita doppia: in questo libro una spesa
+  -- cash si scrive due volte, uscita + entrata di contropartita. Due righe
+  -- identiche ma di tipo opposto sono la norma; il doppione vero è la stessa
+  -- riga con stesso tipo E stessa contropartita.
   insert into public.quadrature (eseguita_il, controllo, gravita, oggetto, dettaglio, importo_cents, data_riferimento)
   select ora, 'possibile doppione', 'attenzione', coalesce(struttura,'-'),
          count(*) || ' righe identiche (' || tipo || ', contropartita=' || coalesce(contropartita::text,'null') || '): ' ||
