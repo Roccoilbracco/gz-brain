@@ -271,22 +271,40 @@ Aim for 400-600 words. The title should read like a report heading, e.g. "July 2
 // passa a una chiave `sb_secret_...` va spento, e allora l'autorizzazione deve
 // stare qui. Questo controllo vale in entrambi i mondi, quindi si può
 // aggiungere prima della rotazione senza rompere niente.
-function autorizzata(req: Request): boolean {
+//
+// NON si confronta la chiave con una variabile d'ambiente. Ci abbiamo provato
+// (2026-08-06) e la funzione ha risposto 401 a tutti per due giorni: dentro
+// questo runtime né `SUPABASE_SECRET_KEYS` né `SUPABASE_SERVICE_ROLE_KEY`
+// risultano popolate, quindi la lista delle chiavi accettate era vuota e il
+// confronto falliva sempre. Legare l'autorizzazione a una variabile che la
+// piattaforma *potrebbe* iniettare è fragile: quando non c'è, si chiude tutto.
+//
+// Si verifica invece la chiave **usandola**: una lettura su una tabella che
+// solo una chiave di servizio può leggere (`movimenti` ha RLS senza policy,
+// quindi anon e authenticated non la vedono nemmeno in lettura). Se il
+// database la accetta, chi chiama ha davvero i privilegi; altrimenti no.
+// Costa una richiesta in più su una funzione che gira una volta al giorno,
+// e funziona con la chiave legacy, con `sb_secret_...` e durante la rotazione.
+async function autorizzata(req: Request): Promise<boolean> {
   const presentata = req.headers.get("apikey") ??
     req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
-  if (!presentata || !SERVICE_KEY) return false;
-  // confronto a lunghezza costante: non deve far trapelare quanti caratteri tornano
-  if (presentata.length !== SERVICE_KEY.length) return false;
-  let diff = 0;
-  for (let i = 0; i < presentata.length; i++) {
-    diff |= presentata.charCodeAt(i) ^ SERVICE_KEY.charCodeAt(i);
+  if (!presentata) return false;
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/movimenti?select=id&limit=1`, {
+      headers: {
+        apikey: presentata,
+        ...(presentata.startsWith("eyJ") ? { Authorization: `Bearer ${presentata}` } : {}),
+      },
+    });
+    return r.ok;
+  } catch {
+    return false;   // il database non risponde: non è il momento di fidarsi
   }
-  return diff === 0;
 }
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") return new Response("POST only", { status: 405 });
-  if (!autorizzata(req)) return new Response("non autorizzata", { status: 401 });
+  if (!await autorizzata(req)) return new Response("non autorizzata", { status: 401 });
   if (!ANTHROPIC_API_KEY) {
     return Response.json({ error: "ANTHROPIC_API_KEY secret is not set" }, { status: 500 });
   }
