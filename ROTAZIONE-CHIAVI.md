@@ -31,9 +31,22 @@ volta. Le legacy funzionano fino a fine 2026.
   - `public.chiama_edge()` (in database)
 - Le due edge function attive leggono `SUPABASE_SECRET_KEYS['default']` se
   esiste, altrimenti ricadono su `SUPABASE_SERVICE_ROLE_KEY`.
-- `social-insights` ora autorizza le chiamate **nel proprio codice**
-  (confronto a lunghezza costante sull'header `apikey`), perché il controllo
-  `verify_jwt` della piattaforma capisce solo le chiavi legacy e va spento.
+- `social-insights` ora autorizza le chiamate **nel proprio codice**, perché il
+  controllo `verify_jwt` della piattaforma capisce solo le chiavi legacy e va
+  spento. **Non** confronta la chiave con una variabile d'ambiente: la verifica
+  **usandola**, con una lettura su `movimenti` (RLS senza policy → solo una
+  chiave di servizio la legge). Se il database accetta la chiave, chi chiama ha
+  davvero i privilegi.
+
+  > Perché così e non con un confronto: il primo tentativo (2026-08-06)
+  > confrontava con `SUPABASE_SECRET_KEYS` / `SUPABASE_SERVICE_ROLE_KEY`. In
+  > questo runtime **nessuna delle due risulta popolata**, quindi la lista delle
+  > chiavi valide era vuota e la funzione ha risposto **401 a tutti per due
+  > giorni** — cron compreso. Legare l'autorizzazione a una variabile che la
+  > piattaforma *potrebbe* iniettare è fragile. La sonda funziona con la chiave
+  > legacy, con `sb_secret_…` e durante la rotazione, senza modifiche.
+  > Verificato: chiave di servizio → passa; publishable, chiave inventata o
+  > nessuna chiave → 401.
 
 ## Le due trappole che hanno reso necessario tutto questo
 
@@ -68,14 +81,18 @@ volta. Le legacy funzionano fino a fine 2026.
 
 5. **Spegni `verify_jwt` su `social-insights`**
    Dashboard → Edge Functions → social-insights → `verify_jwt = false`.
-   Fallo **dopo** aver ridistribuito la funzione col controllo di
-   autorizzazione già dentro (punto 6), mai prima.
+   Il controllo di autorizzazione è già dentro la funzione (v4, distribuita il
+   2026-08-07), quindi si può fare in qualunque momento.
 
-6. **Ridistribuisci le due edge function**
-   ```
-   supabase functions deploy booking
-   supabase functions deploy social-insights
-   ```
+   I due cron di NCREATIVE (`nc-social-suggestions`, `nc-social-audit`) sono
+   **in pausa** dal 2026-08-07: il modulo social è vuoto e manca
+   `ANTHROPIC_API_KEY`. Si riaccendono con
+   `select cron.alter_job((select jobid from cron.job where jobname='nc-social-suggestions'), active => true);`
+
+6. **Ridistribuisci `booking`**
+   `social-insights` è già alla v4 con la sonda. Per `booking` serve la CLI
+   (`supabase functions deploy booking`) oppure il deploy da dashboard —
+   sulla macchina la CLI **non è installata**.
 
 7. **Ricompila e reinstalla l'app**
    `scripts/bundle.sh`
